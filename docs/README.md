@@ -142,6 +142,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`decisions/2026-09-arm64-hardware-start-condition.md`](decisions/2026-09-arm64-hardware-start-condition.md) | 決定記録 | [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M27、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §8 |
 | [`decisions/2026-09-pch-unity-build-measurement.md`](decisions/2026-09-pch-unity-build-measurement.md) | 測定記録・決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md)（転送表。結論の節は `build-ci-spec.md` §2.7・§11.8） |
 | [`decisions/2026-10-25-kanakanji-edge-r2-conversion.md`](decisions/2026-10-25-kanakanji-edge-r2-conversion.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.3 |
+| [`decisions/2026-11-20-onnx-runtime-for-reranker.md`](decisions/2026-11-20-onnx-runtime-for-reranker.md) | 決定記録 | [`neural-reranker-spec.md`](neural-reranker-spec.md) §7.3、[`modernbert-ja-scoring-spec.md`](modernbert-ja-scoring-spec.md) §6.3、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M57 |
 
 ## Phase 一覧
 

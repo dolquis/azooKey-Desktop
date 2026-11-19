@@ -2683,7 +2683,10 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 
 - **目的**: 同音異義語など難しい候補のみ ModernBERT-Ja で文脈自然度を
   評価し、品質を底上げする。**生成には使わない**。
-- **前提**: M56（Tiny Reranker）、M24（DirectML / NPU バックエンド）。
+- **前提**: M56（Tiny Reranker と ONNX Runtime の取り込み。`docs/neural-reranker-spec.md` §7.3）、
+  M24（R2 の GPU / NPU の EP）。CPU EP が `docs/modernbert-ja-scoring-spec.md` §6.3 の計測ゲートに
+  合格した場合は、M24 を待たずに CPU EP で成り立つ。根拠は
+  [`docs/decisions/2026-11-20-onnx-runtime-for-reranker.md`](../docs/decisions/2026-11-20-onnx-runtime-for-reranker.md)。
 - **変更対象**: `reranker/ModernBertScorer.h`、
   `reranker/ModernBertScorerOnnx.cpp`、
   `models/modernbert-ja-70m.onnx`（新規アセット）、

@@ -21,8 +21,8 @@ canonical_for: ["ModernBERT-Ja 候補スコアリング"]
 |---|---|
 | §1〜§3 | M57 |
 | §4 | M57（起動条件。M46・M55・M56 に依存する） |
-| §5 | M57（M24 の backend 上で実行する） |
-| §6 | M57（ロードゲートと RSS 上限。M24 の backend が前提） |
+| §5 | M57（§6.3 の実行 EP 上で実行する） |
+| §6 | M57（ロードゲートと RSS 上限、推論ランタイムと実行 EP。R2 の EP は M24 が前提） |
 | §7 | M57（M56 で予約した `reranker.modernbert*` キーの正典） |
 | §8 | M57（M56 の `final_score` との統合） |
 | §9 | M57（M46 secure 中の完全 OFF） |
@@ -51,9 +51,9 @@ M52 ベンチで homophone top1 を baseline 比 +5% 以上 / 通常入力 p95 �
 - **PLL 近似**: 候補位置のみ mask、文全体 mask しない
 - **キャッシュ**: 同一 context を再利用
 - **timeout 必須**: 30〜50ms で打ち切り、failure 時は scoreなしで続行
-- **アクセラレータ優先**: M24 の R2（Windows ML EP: NPU/GPU）または
-  R1 GPU（CUDA / ggml-vulkan）で実行（CPU は実用上時間に合わない）。
-  旧 `directml` / `npu` 値は deprecated で `winml`（EP 自動選択）に集約される
+- **許可した実行 EP だけで動かす**: ONNX Runtime（`docs/neural-reranker-spec.md` §7.3）の EP のうち、
+  §6.3 で許可したものだけでロードする。CPU EP は §6.3 の計測ゲートに合格するまで許さず、
+  M24 の R2（Windows ML EP: NPU/GPU）は R2 の再開後に許す
 
 ## 4. 起動条件
 
@@ -61,8 +61,7 @@ M52 ベンチで homophone top1 を baseline 比 +5% 以上 / 通常入力 p95 �
 if candidate_count >= 2
 and ambiguity_score >= threshold
 and timeout_budget_remaining >= 30ms
-and backend in {winml, cuda, vulkan}    # R2(WinML EP: NPU/GPU) / R1 GPU。CPU は除外
-                                        # 旧 directml/npu は deprecated → winml に集約
+and execution_ep in allowed_eps         # §6.3。CPU EP は計測ゲートの合格後だけ入る
 then ModernBERTScorer ON
 else skip
 ```
@@ -79,7 +78,7 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 |---:|---|---|---|
 | 1 | `modernbertEnabled != off` | `disabled` | `off` は明示無効。`auto` / `always` は通過 |
 | 2 | secure モードでない（M46） | `secure_mode` | §9。最優先で OFF（順序上は 1 の直後） |
-| 3 | `backend in {winml, cuda, vulkan}` | `cpu_backend` | CPU は実用不可。R2 EP / R1 GPU のみ。CPU backend ではそもそもモデルをロードしない（§6.1）ため、loaded ゲートより**前**に判定して `cpu_backend` を握り潰さない |
+| 3 | 実行 EP が §6.3 の許可集合に入る | `cpu_backend` | 許可集合に入る EP が無いとき（CPU EP が計測ゲートに未合格で、R2 も使えないとき）はモデルをロードしない（§6.1）ため、loaded ゲートより**前**に判定して `cpu_backend` を握り潰さない |
 | 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 ロード時に上限超過で抑止）/ `rss_runtime`（§6.1 runtime ガードでアンロード済み）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止 / runtime アンロード理由を保持して引き継ぐ。ロード時上限超過は `rss_cap`、ロード後 runtime 超過は `rss_runtime` を立て、roadmap M57 の RSS fallback 検証に使う（`not_loaded` に潰さない） |
 | 5 | circuit breaker が開いていない | `circuit_open` | §5.4 の連続失敗で開く **runtime 状態**（ユーザー設定 `modernbertEnabled` とは独立）。次回モデル再ロードまで閉じない。`off` のようなユーザー設定値ではない |
 | 6 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
@@ -175,10 +174,10 @@ batched forward にまとめるため、**実 forward 呼び出し回数は K �
 | 候補部分のみ mask | 文全体ではなく候補トークンのみ |
 | キャッシュ | 同一 `(left_context, candidate)` ペアの結果を 5 分保持（§5.2.1） |
 | timeout | 30〜50ms で打ち切り（予算管理は §5.4） |
-| backend アクセラレータ | M24 の R2（Windows ML EP: NPU/GPU）/ R1（CUDA・Vulkan）で実行 |
+| 実行 EP | §6.3 で許可した ONNX Runtime の EP で実行 |
 | masked 文を batch（**候補単位**） | **1 候補分**の N 個の masked 文を 1 batch（最大 `N_k`、上限 `max_token_len`）にまとめ、その候補を 1 forward で評価する。K 候補なら **K 回**の forward（naive な Σ N_k 回ではなく候補数 K 回）。候補をまたいで 1 batch にはせず、候補単位で区切ることで §5.4 の候補単位 timeout チェック・部分適用を可能にする |
-| FP16 | ONNX Runtime FP16 推論 |
-| 量子化 | INT8 量子化を検討（精度劣化を M52 で確認）。低メモリ時の降格段でも使用（§6.1） |
+| FP16 | GPU / NPU の EP（R2）でだけ使う（§6.3） |
+| 量子化 | INT8。CPU EP では INT8 だけをロードする（§6.3）。精度劣化を M52 で確認する。GPU / NPU の EP では低メモリ時の降格段で使う（§6.1） |
 
 #### 5.2.1 キャッシュ整合
 
@@ -233,13 +232,12 @@ timeout に当たりやすくなるため既定 5 を上限の目安とする。
 | 形式 | ONNX FP16 / INT8 量子化 |
 | サイズ | 140MB（FP16） / 80MB（INT8） |
 | 配置 | `%LOCALAPPDATA%\azooKey\models\modernbert-ja-70m.onnx` |
-| backend | R2 `winml`（Windows ML EP: NPU/GPU）/ R1 `cuda` / `vulkan`（CPU は実用不可。旧 `directml` / `npu` は deprecated → `winml`） |
+| 実行 EP | §6.3 で許可した ONNX Runtime の EP |
 
-bundle するかユーザーダウンロードかは Phase 7 で決定する。M57 v1 では
-ロードマップ前提（M56 / M24）のみで成立させる必要があるため、初期は
-**bundled（MSIX 同梱 or 既定パスへの後段配置）+ ベンチ用 manual download
-スクリプト** で配布する。M45（モデル管理 UI）は前提ではなく、完了後の
-follow-up として GUI 経由のインストール / 切替を統合する位置づけ。
+モデルは MSI に同梱せず、既定パスへダウンロードして配置する（`docs/neural-reranker-spec.md` §7.3）。
+ダウンロードの経路と catalog の artifact の定義は、モデル資産の Issue（DEV-2156）で決める。
+ベンチ用の manual download スクリプトも同じ Issue で用意する。M45（モデル管理 UI）は前提ではなく、
+完了後の follow-up として GUI 経由のインストール / 切替を統合する位置づけ。
 
 ### 6.1 RSS 許容上限（ロードゲート）
 
@@ -248,18 +246,16 @@ ModernBERT-Ja 70M をロードした場合の Host プロセス RSS 増分（**�
 
 | backend / 量子化 | model RSS | activations | RSS 増分 | VRAM 増分 | 本 scorer での扱い |
 |---|---:|---:|---:|---:|---|
-| CPU FP32 | 280 MB | 50 MB | 330 MB | — | 参照のみ（§4.0 順 3 で CPU 除外） |
-| CPU FP16 | 140 MB | 30 MB | 170 MB | — | 参照のみ（CPU 除外） |
-| winml/cuda/vulkan FP16 | 50 MB (RSS) | host 30 MB | **80 MB** | 240 MB | 既定。`modernbertQuantization=fp16` |
-| winml/cuda/vulkan INT8 | 30 MB (RSS) | host 20 MB | **50 MB** | 130 MB | 低メモリ降格段 / 明示選択 |
+| CPU FP32 | 280 MB | 50 MB | 330 MB | — | 参照のみ（ロードしない） |
+| CPU FP16 | 140 MB | 30 MB | 170 MB | — | 参照のみ（CPU EP では FP16 をロードしない。§6.3） |
+| CPU INT8 | — | — | §6.3 の計測で決める | — | CPU EP が計測ゲートに合格した後のロード対象 |
+| GPU / NPU の EP（R2）FP16 | 50 MB (RSS) | host 30 MB | **80 MB** | 240 MB | R2 の再開後の既定。`modernbertQuantization=fp16` |
+| GPU / NPU の EP（R2）INT8 | 30 MB (RSS) | host 20 MB | **50 MB** | 130 MB | 低メモリ降格段 / 明示選択 |
 
-> CPU 行は参照情報。§4.0 順 3 で backend は `{winml, cuda, vulkan}` に限定され、
-> CPU FP32/FP16 はこの scorer ではロード対象にならない。GPU/NPU EP では
-> モデル重みは VRAM 側に載るため、プロセス RSS 増分は host 側 activation +
-> ランタイム分が支配的になる。`vulkan`（R1 GPU）は cuda と同じ GPU クラスとして
-> 同等推定を用いる（`RSS_INCREMENT[vulkan][*]` = cuda 行と同値を初期既定とし、
-> §6.2 の実測で backend 別に確定する）。これにより `backend=vulkan` でも
-> ロードゲートの `RSS_INCREMENT[backend][load_target]` が定義済みになる。
+> CPU FP32 / FP16 の行は参照情報で、この scorer ではロード対象にならない。CPU INT8 の行は、§6.3 の
+> 計測ゲートで実測した値を入れるまで定義せず、その間 CPU EP は許可集合に入らない（§4.0 順 3）。
+> GPU/NPU EP ではモデル重みは VRAM 側に載るため、プロセス RSS 増分は host 側 activation +
+> ランタイム分が支配的になる。
 
 **ハード上限（enforce する）**
 
@@ -323,9 +319,9 @@ loop:
 
 実測手順（M52 ベンチ基盤を流用）:
 
-1. backend = `winml`（R2 EP）/ `cuda`（R1）/ `vulkan`（R1）それぞれで、量子化 =
-   `fp16` / `int8` をロードし、idle RSS と homophone ベンチ実行中ピーク RSS / VRAM を
-   採取する（`vulkan` は §6.1 で cuda 同値を初期既定としているため実測で確定する）。
+1. §6.3 の許可集合に入る実行 EP それぞれで、その EP がロードする量子化
+   （CPU EP は `int8`、GPU / NPU の EP は `fp16` / `int8`）をロードし、idle RSS と homophone ベンチ
+   実行中ピーク RSS / VRAM を採取する。
 2. ベースライン（ModernBERT 未ロード）との差分を「RSS 増分」「VRAM 増分」とする。
 3. §6.1 の表と乖離がある場合は表値を実測へ更新し、ハード上限（+200 MB /
    合計 2 GB）に対する降格ラダーの分岐点が妥当か確認する。
@@ -334,6 +330,39 @@ loop:
 
 実測タスクは Linear に `gate:human-required`（実機検証）として別 issue 化し、
 本設計 issue（DEV-113）からリンクする。本 spec の数値は実測確定までは推定として扱う。
+
+### 6.3 推論ランタイムと実行 EP（決定）
+
+ModernBERT は M56 と同じ ONNX Runtime で動かす（ランタイム、依存の取り込み、配布、読み込み、fallback、
+ライセンス、opset の正典は `docs/neural-reranker-spec.md` §7.3）。比べた候補と根拠は
+[decisions/2026-11-20-onnx-runtime-for-reranker.md](decisions/2026-11-20-onnx-runtime-for-reranker.md) にある。
+本節は M57 に固有の実行 EP の条件を持つ。§4.0 順 3 の「許可集合」は次の EP からなる。
+
+| 実行 EP | 許可集合に入る条件 | ロードする量子化 |
+|---|---|---|
+| CPU EP | 下記の計測ゲートに合格したとき | INT8 だけ。`modernbertQuantization` が `fp16` でも INT8 をロードし、§6.1 の降格ラダーは INT8 → ロードせず、になる |
+| GPU / NPU の EP（Windows ML、R2） | M24 の R2 が再開したとき（`docs/copilot-pc-backend-spec.md` §4.3）。reranker の ORT は §7.3 のとおり R2 と同じ Windows ML の ORT へ移す | `modernbertQuantization` に従う（FP16 → INT8 → ロードせず） |
+
+- R1（llama.cpp）の CUDA / Vulkan は許可集合に入れない。ONNX Runtime に Vulkan の EP は無く、
+  CUDA の実リンクは中止している（`docs/decisions/2026-08-04-cuda-real-link-cancellation.md`）。
+- DirectML の EP は使わない（`docs/neural-reranker-spec.md` §7.3）。
+- 許可集合に入る EP が無いあいだは、M57 はロードせず `reason=cpu_backend` で fallback する（§4.0 順 3）。
+
+**CPU EP の計測ゲート**
+
+CPU EP を許すかは、推定ではなく実測で決める。本 spec は CPU の latency の推定値を持たない。
+
+1. 計測の対象: ONNX Runtime の CPU EP、INT8 の `modernbert-ja-70m`、§5.2 の batch（K=5 の候補単位）、
+   §5.0 の context window。量子化と ONNX への変換の手順はモデル資産の Issue（DEV-2156）で固定したものを使う。
+2. 計測の項目: 候補単位の forward の latency（p50 / p95）、K=5 を評価し終えるまでの時間、§6.1 の RSS 増分、
+   M52 の homophone top1 と通常入力の p95 の悪化。
+3. 合格の条件: 次をすべて満たす。
+   - K=5 を評価し終えるまでの p95 が `modernbertTimeoutMs` の既定（40ms、§5.4）に収まる。
+   - 通常入力の p95 の悪化が +20ms 以内（§1、roadmap M57）。
+   - RSS 増分が `modernbertRssCapMb` の既定（200 MB、§6.1）以下。
+4. 合格したら、CPU EP を許可集合に入れ、§6.1 の CPU INT8 の行に実測値を入れる。
+5. 不合格なら、CPU EP は許可集合に入れず、M57 は R2 の再開を待つ。
+6. 計測の機材・OS build・CPU と結果は、`docs/decisions/` に測定記録として残す。
 
 ## 7. 設定スキーマ
 

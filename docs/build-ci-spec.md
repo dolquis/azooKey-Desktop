@@ -208,6 +208,7 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
 |---|---|---|---|
 | GoogleTest | テスト | `find_package` →（オプトイン時）`FetchContent` | 採用（本トラックで変更しない） |
 | llama.cpp | 推論 | `FetchContent` / submodule、`AZOOKEY_BACKEND` で制御 | 採用（M8 の範囲。本トラック対象外） |
+| ONNX Runtime | 推論（prebuilt バイナリ） | 公式 prebuilt を URL + SHA256 で固定して取得（オプトイン `AZOOKEY_FETCH_ONNXRUNTIME`）。取得しない build は mock | 採用（M56 / M57 の reranker。`neural-reranker-spec.md` §7.3） |
 | WIL | header-only | submodule または `FetchContent`（オプトイン） | 採用（M43 の範囲。§9） |
 | nlohmann-json | header-only | 任意・保留 | `ipc-persistence-hardening-spec.md` §6、`build-ci-spec.md` §11 参照（即時導入しない） |
 | spdlog | 要ビルド | 任意・保留 | `observability-spec.md` §7、`build-ci-spec.md` §11 参照（自前ロガーを優先評価） |

@@ -29,6 +29,24 @@ namespace azookey::learning {
 
 namespace {
 
+// Section 6.8, step 2: the decoded plaintext is erased on every way out, as
+// SecureErase erases the bytes read.
+template <typename Text>
+class ErasedOnExit {
+ public:
+  explicit ErasedOnExit(Text& text) : text_(text) {}
+  ErasedOnExit(const ErasedOnExit&) = delete;
+  ErasedOnExit& operator=(const ErasedOnExit&) = delete;
+  ~ErasedOnExit() {
+    volatile auto* p = text_.data();
+    for (size_t i = 0; i < text_.size(); ++i) p[i] = 0;
+    text_.clear();
+  }
+
+ private:
+  Text& text_;
+};
+
 // ---- UTF-8 and UTF-16 (section 6.2) ----
 
 void AppendUtf8(std::string& out, char32_t cp) {
@@ -120,10 +138,12 @@ bool DecodeCp932(std::string_view bytes, std::u32string* out) {
       ::MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, bytes.data(), size, nullptr, 0);
   if (wide_size <= 0) return false;
   std::wstring wide(static_cast<size_t>(wide_size), L'\0');
+  const ErasedOnExit erase_wide(wide);
   if (::MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, bytes.data(), size, wide.data(),
                             wide_size) != wide_size)
     return false;
   std::string utf16;
+  const ErasedOnExit erase_utf16(utf16);
   utf16.reserve(wide.size() * 2);
   for (const wchar_t ch : wide) {
     utf16.push_back(static_cast<char>(ch & 0xFF));
@@ -538,6 +558,7 @@ TextImportParseResult ParseUserDictionaryText(std::string_view bytes, TextImport
 
   // Section 6.2.
   std::u32string text;
+  const ErasedOnExit erase_text(text);
   bool decoded = false;
   if (bytes.starts_with("\xEF\xBB\xBF")) {
     result.encoding = TextImportEncoding::Utf8;
@@ -633,8 +654,11 @@ TextImportError ReadUserDictionaryTextFile(const std::filesystem::path& path, st
   out.clear();
   std::error_code ec;
   const auto status = std::filesystem::status(path, ec);
-  if (ec || !std::filesystem::exists(status)) return TextImportError::SourceMissing;
-  if (!std::filesystem::is_regular_file(status)) return TextImportError::ReadFailed;
+  if (status.type() == std::filesystem::file_type::not_found)
+    return TextImportError::SourceMissing;
+  // A file that cannot be looked at, such as one access is denied to, is no
+  // missing file.
+  if (ec || !std::filesystem::is_regular_file(status)) return TextImportError::ReadFailed;
   std::ifstream input(path, std::ios::binary);
   if (!input) return TextImportError::ReadFailed;
   // At most one byte past the limit is read (section 6.7).

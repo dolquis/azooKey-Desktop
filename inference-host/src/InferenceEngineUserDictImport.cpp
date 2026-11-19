@@ -31,7 +31,8 @@ bool InferenceEngine::ImportUserDictionaryText(const std::vector<learning::UserW
           refused = UserDictionaryEditResult::StoreUnavailable;
           return false;
         }
-        const auto result = learning::MergeUserDictionaryText(dictionary, words, policy);
+        const auto result = learning::MergeUserDictionaryText(dictionary, words, policy,
+                                                              user_dict_import_word_limit_);
         if (!result) {
           refused = UserDictionaryEditResult::TooManyWords;
           return false;
@@ -61,7 +62,7 @@ UserDictionaryEditResult InferenceEngine::DryRunUserDictionaryText(
     for (const auto& word : user_dict_->All()) keys.emplace(word.ruby, word.word);
   }
   const auto result = learning::CountUserDictionaryTextMerge(keys, words, policy);
-  if (keys.size() + result.added > learning::kTextImportMaxWords)
+  if (keys.size() + result.added > user_dict_import_word_limit_)
     return UserDictionaryEditResult::TooManyWords;
   if (counts) *counts = result;
   return UserDictionaryEditResult::Ok;

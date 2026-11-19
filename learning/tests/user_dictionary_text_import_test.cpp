@@ -200,6 +200,18 @@ TEST(UserDictionaryTextImportTest, EncodingFailures) {
                                         TextImportFormat::Auto)
                 .error,
             TextImportError::BadEncoding);
+  // Behind a UTF-8 BOM, an overlong form and an encoded surrogate are not UTF-8.
+  EXPECT_EQ(
+      al::ParseUserDictionaryText("\xEF\xBB\xBF\xC0\xAF\tA\n", TextImportFormat::Auto).error,
+      TextImportError::BadEncoding);
+  EXPECT_EQ(
+      al::ParseUserDictionaryText("\xEF\xBB\xBF\xED\xA0\x80\tA\n", TextImportFormat::Auto).error,
+      TextImportError::BadEncoding);
+  // A low surrogate without its high one.
+  EXPECT_EQ(al::ParseUserDictionaryText(std::string("\xFF\xFE\x00\xDC\x41\x00", 6),
+                                        TextImportFormat::Auto)
+                .error,
+            TextImportError::BadEncoding);
   // U+0000 in the content.
   EXPECT_EQ(al::ParseUserDictionaryText(std::string("a\tA\0", 4), TextImportFormat::Auto).error,
             TextImportError::BadEncoding);

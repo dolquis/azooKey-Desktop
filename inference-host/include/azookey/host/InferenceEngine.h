@@ -420,6 +420,11 @@ class InferenceEngine {
   // and is about to wait for the user dictionary file lock. Set it before
   // any edit starts.
   void SetBeforeUserDictionaryFileLockForTests(std::function<void()> hook);
+  // Test-only: the dictionary size limit of a text import in place of
+  // learning::kTextImportMaxWords (user-dictionary-pos-spec section 6.7).
+  void SetUserDictionaryTextImportWordLimitForTests(size_t limit) {
+    user_dict_import_word_limit_ = limit;
+  }
   // Test-only: runs under state_mutex_ just before each learning store save,
   // with the transient-conflict retry budget that save is given. Set it before
   // any observation is committed.
@@ -779,6 +784,7 @@ class InferenceEngine {
   // up within its wait budget instead of queueing without bound.
   std::timed_mutex user_dict_writer_mutex_;
   std::function<void()> before_user_dictionary_file_lock_for_tests_;
+  size_t user_dict_import_word_limit_{learning::kTextImportMaxWords};
   std::function<void(std::chrono::milliseconds)> before_learning_save_for_tests_;
   std::function<void(const core::ConversionContext&)> nll_context_observer_for_tests_;
   // Nanoseconds, set by the constructor; read by every query that falls back from the model.

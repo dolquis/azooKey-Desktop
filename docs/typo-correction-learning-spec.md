@@ -668,7 +668,7 @@ Host は起動時にストアを読み、次の順に判定する。
    v1 の `.enc` にも及ぼす。
 
 `integrity_check` は起動時に毎回、DB 全体に対して行う。`.corrupt-*` の複写は忘却と全削除の対象に入れない
-（`docs/user-learning-enhancement-spec.md` §3.1 の学習ストアと同じ扱い）。
+（`docs/user-learning-enhancement-spec.md` §3.1 の学習ストアと同じ扱い）。全ストア共通の見直しは DEV-2173 で行う。
 
 #### 同時書き込み
 

@@ -156,6 +156,8 @@ struct DoubleArrayTrie::Impl {
   size_t pos_count{};
   Section trie, key_section, refs, records, strings, meta, surface_index;
   bool has_surface_index{};
+  // Every section by type, so optional ones (CONN, CMAT) can be handed to their own readers.
+  std::map<std::string, Section> sections;
 
   ~Impl() {
     if (mapped) {
@@ -232,7 +234,6 @@ struct DoubleArrayTrie::Impl {
     // Bound extension tables so startup work cannot scale with vocabulary size.
     if (count < 6 || count > 64 || !Range(64, count * 24, size))
       return Fail("invalid section table");
-    std::map<std::string, Section> sections;
     std::vector<Section> ranges;
     for (size_t i = 0; i < count; ++i) {
       const size_t at = 64 + i * 24;
@@ -334,6 +335,30 @@ struct DoubleArrayTrie::Impl {
     out.frequency = static_cast<double>(Read(data + at + 22, 2)) / 65535.0;
     out.source = data[at + 24];
     if (out.pos_id >= pos_count || out.source != layer || (out.category_mask & ~1023U))
+      return Fail("invalid entry metadata");
+    for (size_t i = 26; i < 32; ++i)
+      if (data[at + i]) return Fail("reserved entry bytes");
+    return true;
+  }
+  // Record's checks without copying or UTF-8-checking the strings (lattice spec 4.2).
+  bool RecordRef(uint32_t index, StaticEntryRef& out) const {
+    if (index >= entries) return Fail("invalid entry index");
+    const auto at = records.offset + size_t{index} * 32;
+    auto string_at = [&](size_t field, std::string_view& value) {
+      const auto offset = U32(at + field), length = U32(at + field + 4);
+      if (!length || !Range(offset, length, strings.size)) return Fail("invalid string range");
+      value =
+          std::string_view(reinterpret_cast<const char*>(data + strings.offset + offset), length);
+      return true;
+    };
+    std::string_view reading;
+    if (!string_at(0, out.surface) || !string_at(8, reading)) return false;
+    out.index = index;
+    out.pos_id = static_cast<uint16_t>(Read(data + at + 16, 2));
+    const auto category_mask = static_cast<uint16_t>(Read(data + at + 18, 2));
+    const auto cost = static_cast<int32_t>(Read(data + at + 20, 2));
+    out.cost = static_cast<int16_t>(cost >= 32768 ? cost - 65536 : cost);
+    if (out.pos_id >= pos_count || data[at + 24] != layer || (category_mask & ~1023U))
       return Fail("invalid entry metadata");
     for (size_t i = 26; i < 32; ++i)
       if (data[at + i]) return Fail("reserved entry bytes");
@@ -573,6 +598,46 @@ void DoubleArrayTrie::LookupSurface(std::string_view surface,
   } catch (...) {
     impl_->Fail("dictionary surface lookup failed");
     out.clear();
+  }
+}
+std::string_view DoubleArrayTrie::Section(std::string_view type) const noexcept {
+  if (!IsAvailable() || type.size() != 4) return {};
+  try {
+    const auto found = impl_->sections.find(std::string(type));
+    if (found == impl_->sections.end()) return {};
+    return {reinterpret_cast<const char*>(impl_->data + found->second.offset), found->second.size};
+  } catch (...) {
+    return {};
+  }
+}
+uint32_t DoubleArrayTrie::EntryCount() const noexcept { return IsAvailable() ? impl_->entries : 0; }
+bool DoubleArrayTrie::ReadEntryRefs(const PrefixMatch& match,
+                                    std::vector<StaticEntryRef>& out) const noexcept {
+  out.clear();
+  if (!IsAvailable()) return false;
+  try {
+    if (match.key_id >= impl_->keys ||
+        !Range(match.entry_ref_off, match.entry_count, impl_->refs.size / 8))
+      return impl_->Fail("invalid match range");
+    const auto key_at = impl_->key_section.offset + size_t{match.key_id} * 8;
+    if (impl_->U32(key_at) != match.entry_ref_off || impl_->U32(key_at + 4) != match.entry_count)
+      return impl_->Fail("mismatched key references");
+    for (uint32_t i = 0; i < match.entry_count; ++i) {
+      const auto at = impl_->refs.offset + (size_t{match.entry_ref_off} + i) * 8;
+      StaticEntryRef entry;
+      if (impl_->data[at + 4] > 1 || impl_->data[at + 5] || impl_->data[at + 6] ||
+          impl_->data[at + 7] || !impl_->RecordRef(impl_->U32(at), entry)) {
+        impl_->Fail("invalid entry reference");
+        out.clear();
+        return false;
+      }
+      entry.kind = static_cast<MatchKind>(impl_->data[at + 4]);
+      out.push_back(entry);
+    }
+    return true;
+  } catch (...) {
+    out.clear();
+    return impl_->Fail("dictionary entry read failed");
   }
 }
 bool DoubleArrayTrie::Verify() const noexcept {

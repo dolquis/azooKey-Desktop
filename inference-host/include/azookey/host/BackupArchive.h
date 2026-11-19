@@ -62,6 +62,12 @@ enum class BackupError {
 // snake_case identifier for IPC responses and logs ("invalid_path", ...).
 std::string_view BackupErrorCode(BackupError error);
 
+// The path rules of a file the settings app names for an import
+// (learning-data-management-spec section 5), without the extension: absolute,
+// no "." or ".." component, no UNC or device namespace, no ':' in the file
+// name, no reserved device name. user-dictionary-pos-spec section 6.8 uses it.
+bool IsAcceptableUserDataSourcePath(const std::filesystem::path& path);
+
 // destination must be an absolute, lexically normal path ending in ".zip"
 // whose parent directory exists and which does not exist yet. Item names and
 // files must match [a-z0-9_.]+, be unique, and file must not be

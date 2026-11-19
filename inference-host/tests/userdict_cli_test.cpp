@@ -1138,3 +1138,119 @@ TEST(UserDictCliTest, PosIsSentOnlyToAHostWithTheCapability) {
   server.Stop();
   std::filesystem::remove_all(path.parent_path());
 }
+
+// user-dictionary-pos-spec 7.5 (DEV-2136): --input-format auto / msime /
+// google parse as sections 6.2 to 6.7 say and report the counts of 7.2.
+TEST(UserDictCliTest, ImportOfAnotherImeDictionaryReportsTheCounts) {
+  const auto path = TestPath("azookey_userdict_cli_text_import");
+  const auto root = path.parent_path();
+  const auto import_path = root / "google.txt";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  {
+    std::ofstream file(import_path, std::ios::binary);
+    file << "ぐぐる\tググる\t動詞ラ行五段\t\n";
+    file << "えもい\tエモい\t形容詞\t\n";
+    file << "x\ty\n";
+    file << "さじぇ\tサジェ\tサジェストのみ\t\n";
+  }
+  {
+    azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
+    azookey::learning::UserWord existing;
+    existing.word = "ググる";
+    existing.ruby = "ぐぐる";
+    existing.value = -2.0;
+    dict.Add(existing);
+    ASSERT_TRUE(dict.Save());
+  }
+
+  std::vector<std::string> args = {"import", import_path.string(), "--input-format",
+                                   "auto",   "--conflict",         "merge"};
+  std::string error;
+  auto options = azookey::host::ParseUserDictCliArgs(args, &error);
+  ASSERT_TRUE(options.has_value()) << error;
+  const auto result = azookey::host::RunUserDictCli(*options, DirectRunOptions(path));
+  EXPECT_EQ(result.exit_code, 0) << result.error;
+  ASSERT_EQ(result.output_lines.size(), 1u);
+  const auto json = azookey::ipc::json::Parse(result.output_lines.front());
+  ASSERT_TRUE(json.has_value());
+  EXPECT_EQ(json->GetUInt("imported"), 1u);
+  EXPECT_EQ(json->GetUInt("skipped"), 2u);
+  EXPECT_EQ(json->GetString("format"), "google");
+  EXPECT_EQ(json->GetString("encoding"), "utf-8");
+  const auto* counts = json->FindObject("counts");
+  ASSERT_NE(counts, nullptr);
+  const azookey::ipc::json::Value counts_value(*counts);
+  EXPECT_EQ(counts_value.GetUInt("added"), 1u);
+  EXPECT_EQ(counts_value.GetUInt("kept"), 1u);
+  EXPECT_EQ(counts_value.GetUInt("replaced"), 0u);
+
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  EXPECT_EQ(dict.Size(), 2u);
+  EXPECT_EQ(dict.Lookup("ぐぐる").front().value, std::optional<double>(-2.0));
+  EXPECT_EQ(dict.Lookup("えもい").front().pos, std::optional<std::string>("adjective"));
+
+  // A format this version does not read fails and changes nothing.
+  {
+    std::ofstream file(import_path, std::ios::binary | std::ios::trunc);
+    file << "# Gboard Dictionary version:1\nあ\tA\tja-JP\n";
+  }
+  const auto failed = azookey::host::RunUserDictCli(*options, DirectRunOptions(path));
+  EXPECT_EQ(failed.exit_code, 1);
+  ASSERT_EQ(failed.output_lines.size(), 1u);
+  const auto failed_json = azookey::ipc::json::Parse(failed.output_lines.front());
+  ASSERT_TRUE(failed_json.has_value());
+  EXPECT_EQ(failed_json->GetString("reason"), "unknown_format");
+  azookey::learning::UserDictionary after(path.string(), &azookey::learning::test::Crypto());
+  ASSERT_TRUE(after.Load());
+  EXPECT_EQ(after.Size(), 2u);
+  std::filesystem::remove_all(root);
+}
+
+// The default azookey_tsv reads as before; --conflict merge keeps a word the
+// dictionary had.
+TEST(UserDictCliTest, ImportTsvWithConflictMergeKeepsTheExistingWord) {
+  const auto path = TestPath("azookey_userdict_cli_tsv_merge");
+  const auto root = path.parent_path();
+  const auto import_path = root / "import.tsv";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  {
+    std::ofstream tsv(import_path, std::ios::binary);
+    tsv << "nihongo\tNihongo\t\t\t-5\n";
+    tsv << "azookey\tazooKey\n";
+  }
+  {
+    azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
+    dict.Add({"Nihongo", "nihongo", std::nullopt, std::nullopt, -2.0});
+    ASSERT_TRUE(dict.Save());
+  }
+  std::vector<std::string> args = {"import", import_path.string(), "--conflict", "merge"};
+  std::string error;
+  auto options = azookey::host::ParseUserDictCliArgs(args, &error);
+  ASSERT_TRUE(options.has_value()) << error;
+  const auto result = azookey::host::RunUserDictCli(*options, DirectRunOptions(path));
+  EXPECT_EQ(result.exit_code, 0) << result.error;
+  ASSERT_EQ(result.output_lines.size(), 1u);
+  const auto json = azookey::ipc::json::Parse(result.output_lines.front());
+  ASSERT_TRUE(json.has_value());
+  // imported counts the words added or replaced: the kept one is not.
+  EXPECT_EQ(json->GetUInt("imported"), 1u);
+  EXPECT_EQ(json->GetUInt("skipped"), 0u);
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  EXPECT_EQ(dict.Size(), 2u);
+  EXPECT_EQ(dict.Lookup("nihongo").front().value, std::optional<double>(-2.0));
+  std::filesystem::remove_all(root);
+}
+
+TEST(UserDictCliTest, RejectsInvalidImportOptions) {
+  std::string error;
+  EXPECT_FALSE(Parse({"import", "a.txt", "--input-format", "atok"}, &error));
+  EXPECT_EQ(error, "invalid --input-format value: atok");
+  EXPECT_FALSE(Parse({"import", "a.txt", "--conflict", "newest"}, &error));
+  EXPECT_EQ(error, "invalid --conflict value: newest");
+  EXPECT_FALSE(Parse({"add", "--reading", "a", "--surface", "A", "--conflict", "merge"}, &error));
+  EXPECT_EQ(error, "unknown userdict option: --conflict");
+}

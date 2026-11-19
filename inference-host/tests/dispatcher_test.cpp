@@ -548,8 +548,8 @@ TEST_F(DispatcherTest, Handshake) {
   for (const char* capability :
        {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates",
         "learning_data_management", "commit_correction", "learning_reset", "persona",
-        "detect_anomalies", "mixed_english", "raw_keys", "transform_selected_text",
-        "user_dict_pos"}) {
+        "detect_anomalies", "mixed_english", "raw_keys", "transform_selected_text", "user_dict_pos",
+        "user_dict_text_import"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -8063,6 +8063,302 @@ TEST_F(DispatcherTest, ImportOfAVersion3UserDictionaryItemChangesNothing) {
   std::filesystem::remove_all(dir);
 }
 
+// user-dictionary-pos-spec 6.8 and 7.2 (DEV-2136). Every file is written
+// here; no real dictionary of a user is read.
+namespace {
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  out.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+std::optional<ipc::ImportUserDictionaryTextResponse> ImportText(
+    azookey::host::Dispatcher& target, uint64_t id, const std::filesystem::path& path,
+    const char* conflict = "merge", bool dry_run = false, const char* format = "auto") {
+  ipc::ImportUserDictionaryTextRequest request;
+  request.source_path = azookey::core::PathToUtf8(path);
+  request.format = format;
+  request.conflict_resolution = conflict;
+  request.dry_run = dry_run;
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = id;
+  env.trace_id = "trace-" + std::to_string(id);
+  env.type = ipc::MessageType::ImportUserDictionaryText;
+  env.payload_json = ipc::BuildImportUserDictionaryTextRequest(request);
+  const auto response = target.Dispatch(env);
+  if (!response) return std::nullopt;
+  return ipc::ParseImportUserDictionaryTextResponse(response->payload_json);
+}
+
+constexpr std::string_view kGoogleDictionary =
+    "ぐぐる\tググる\t動詞ラ行五段\t\n"
+    "えもい\tエモい\t形容詞\t\n"
+    "x\ty\n"
+    "さじぇ\tサジェ\tサジェストのみ\t\n";
+}  // namespace
+
+TEST_F(DispatcherTest, ImportUserDictionaryTextPreviewsThenMergesOrReplaces) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_text_import"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto file = dir / "google.txt";
+  WriteTextFile(file, kGoogleDictionary);
+  ipc::AddUserWordRequest add;
+  add.word = "ググる";
+  add.ruby = "ぐぐる";
+  add.value = -2.0;
+  ASSERT_TRUE(dispatcher.Dispatch(
+      MakeReq(790, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add))));
+  const auto encrypted = azookey::learning::EncryptedPathFor(user_dict_path);
+  const auto before = ReadAllBytes(encrypted);
+
+  const auto expect_counts = [](const ipc::ImportUserDictionaryTextResponse& r, uint64_t added,
+                                uint64_t replaced, uint64_t kept) {
+    EXPECT_TRUE(r.ok) << r.error.value_or("");
+    EXPECT_EQ(r.format, std::optional<std::string>("google"));
+    EXPECT_EQ(r.encoding, std::optional<std::string>("utf-8"));
+    ASSERT_TRUE(r.counts.has_value());
+    EXPECT_EQ(r.counts->added, added);
+    EXPECT_EQ(r.counts->replaced, replaced);
+    EXPECT_EQ(r.counts->kept, kept);
+    EXPECT_EQ(r.counts->malformed, 1u);
+    EXPECT_EQ(r.counts->unsupported_pos, 1u);
+  };
+
+  // The preview changes nothing.
+  auto preview = ImportText(dispatcher, 791, file, "merge", true);
+  ASSERT_TRUE(preview);
+  expect_counts(*preview, 1, 0, 1);
+  EXPECT_EQ(ReadAllBytes(encrypted), before);
+  EXPECT_TRUE(user_dict.Lookup("えもい").empty());
+
+  // merge keeps the existing word with its weight.
+  auto merged = ImportText(dispatcher, 792, file, "merge");
+  ASSERT_TRUE(merged);
+  expect_counts(*merged, 1, 0, 1);
+  ASSERT_EQ(user_dict.Lookup("えもい").size(), 1u);
+  EXPECT_EQ(user_dict.Lookup("えもい").front().pos, std::optional<std::string>("adjective"));
+  ASSERT_EQ(user_dict.Lookup("ぐぐる").size(), 1u);
+  EXPECT_EQ(user_dict.Lookup("ぐぐる").front().value, std::optional<double>(-2.0));
+  EXPECT_FALSE(user_dict.Lookup("ぐぐる").front().pos.has_value());
+  // Saved to disk, as the next load shows.
+  azookey::learning::UserDictionary reloaded(user_dict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.Size(), 2u);
+
+  // overwrite replaces both, which now clash.
+  auto replaced = ImportText(dispatcher, 793, file, "overwrite");
+  ASSERT_TRUE(replaced);
+  expect_counts(*replaced, 0, 2, 0);
+  EXPECT_FALSE(user_dict.Lookup("ぐぐる").front().value.has_value());
+  EXPECT_EQ(user_dict.Lookup("ぐぐる").front().pos, std::optional<std::string>("verb_godan_ra"));
+  std::filesystem::remove_all(dir);
+}
+
+TEST_F(DispatcherTest, ImportUserDictionaryTextRefusesWithoutChangingTheDictionary) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_text_refuse"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto good = dir / "google.txt";
+  WriteTextFile(good, kGoogleDictionary);
+  const auto gboard = dir / "gboard.txt";
+  WriteTextFile(gboard, "# Gboard Dictionary version:1\nあ\tA\tja-JP\n");
+  const auto comments = dir / "comments.txt";
+  WriteTextFile(comments, "# only a comment\n");
+  ipc::AddUserWordRequest add;
+  add.word = "日本語";
+  add.ruby = "にほんご";
+  ASSERT_TRUE(dispatcher.Dispatch(
+      MakeReq(800, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add))));
+  const auto encrypted = azookey::learning::EncryptedPathFor(user_dict_path);
+  const auto before = ReadAllBytes(encrypted);
+
+  const auto expect_error = [&](const std::optional<ipc::ImportUserDictionaryTextResponse>& r,
+                                const char* error) {
+    ASSERT_TRUE(r.has_value());
+    EXPECT_FALSE(r->ok);
+    EXPECT_EQ(r->error, std::optional<std::string>(error));
+    EXPECT_EQ(ReadAllBytes(encrypted), before);
+    EXPECT_EQ(user_dict.Size(), 1u);
+  };
+  expect_error(ImportText(dispatcher, 801, "google.txt"), "invalid_path");
+  expect_error(ImportText(dispatcher, 802, dir / "missing.txt"), "source_missing");
+  expect_error(ImportText(dispatcher, 803, dir), "invalid_path");
+  const auto foreign = ImportText(dispatcher, 804, gboard);
+  expect_error(foreign, "unknown_format");
+  EXPECT_EQ(foreign->encoding, std::optional<std::string>("utf-8"));
+  expect_error(ImportText(dispatcher, 805, comments, "merge", false, "google"), "no_entries");
+  expect_error(ImportText(dispatcher, 806, good, "merge", false, "atok"), "invalid_request");
+
+  // A dictionary another version rewrote as version 3.
+  ASSERT_TRUE(azookey::learning::WriteProtectedText(
+      user_dict_path, R"({"version":3,"entries":[{"word":"日本語","ruby":"にほんご"}]})",
+      azookey::learning::test::Crypto()));
+  const auto newer = ReadAllBytes(encrypted);
+  for (const bool dry_run : {false, true}) {
+    SCOPED_TRACE(dry_run);
+    const auto refused = ImportText(dispatcher, 807, good, "merge", dry_run);
+    ASSERT_TRUE(refused);
+    EXPECT_FALSE(refused->ok);
+    EXPECT_EQ(refused->error, std::optional<std::string>("dictionary_too_new"));
+    EXPECT_EQ(ReadAllBytes(encrypted), newer);
+  }
+
+  // SafeMode blocks the import before the file is read.
+  engine.RestoreHealthState(azookey::host::HealthState::SafeMode);
+  ASSERT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
+  const auto blocked = ImportText(dispatcher, 808, good);
+  ASSERT_TRUE(blocked);
+  EXPECT_EQ(blocked->error, std::optional<std::string>("blocked"));
+  EXPECT_FALSE(blocked->format.has_value());
+  (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::SafeModeCleared);
+  std::filesystem::remove_all(dir);
+}
+
+// Section 6.8: the privacy policy of the Host blocks the import.
+TEST_F(DispatcherTest, ImportUserDictionaryTextIsBlockedBySecureAndNoLearning) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_text_blocked"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto good = dir / "google.txt";
+  WriteTextFile(good, kGoogleDictionary);
+  const auto settings_path = temp_directory.File("azookey_text_import_blocked.json");
+  const auto write_settings = [&](const char* json) {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << json;
+  };
+  write_settings(R"({"privacy":{"mode":"secure"}})");
+  azookey::host::SettingsStore settings(settings_path);
+  ASSERT_EQ(settings.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings);
+  for (const char* json : {R"({"privacy":{"mode":"secure"}})",
+                           R"({"privacy":{"mode":"custom","custom":{"learning":false}}})"}) {
+    SCOPED_TRACE(json);
+    write_settings(json);
+    ASSERT_EQ(settings.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+    const auto blocked = ImportText(target, 810, good);
+    ASSERT_TRUE(blocked);
+    EXPECT_EQ(blocked->error, std::optional<std::string>("blocked"));
+    EXPECT_TRUE(user_dict.Lookup("えもい").empty());
+  }
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  ASSERT_EQ(settings.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto allowed = ImportText(target, 811, good);
+  ASSERT_TRUE(allowed);
+  EXPECT_TRUE(allowed->ok) << allowed->error.value_or("");
+  std::filesystem::remove_all(dir);
+  std::remove(settings_path.c_str());
+}
+
+TEST_F(DispatcherTest, ImportUserDictionaryTextBeforeTheHandshakeIsNotAuthenticated) {
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  config.handshake_token = "expected-token";
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto refused =
+      ImportText(token_dispatcher, 815, std::filesystem::temp_directory_path() / "none.txt");
+  ASSERT_TRUE(refused);
+  EXPECT_FALSE(refused->ok);
+  EXPECT_EQ(refused->error, std::optional<std::string>("not_authenticated"));
+}
+
+TEST_F(DispatcherTest, ImportUserDictionaryTextSaveFailureChangesNothing) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_text_save"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto good = dir / "google.txt";
+  WriteTextFile(good, kGoogleDictionary);
+  const auto blocking_parent = dir / "blocker";
+  WriteTextFile(blocking_parent, "not a directory");
+  azookey::learning::UserDictionary bad_dict((blocking_parent / "user.json").string(),
+                                             &azookey::learning::test::Crypto());
+  engine.SetUserDictionary(&bad_dict);
+  // The engine gets the fixture's dictionary back however the test ends.
+  struct RestoreUserDictionary {
+    azookey::host::InferenceEngine& engine;
+    azookey::learning::UserDictionary& dictionary;
+    ~RestoreUserDictionary() { engine.SetUserDictionary(&dictionary); }
+  } restore{engine, user_dict};
+  azookey::host::Dispatcher bad_dispatcher(&engine, &scheduler, &bad_dict,
+                                           DefaultDispatcherConfig());
+  const auto refused = ImportText(bad_dispatcher, 820, good);
+  ASSERT_TRUE(refused);
+  EXPECT_FALSE(refused->ok);
+  EXPECT_EQ(refused->error, std::optional<std::string>("save_failed"));
+  EXPECT_EQ(bad_dict.Size(), 0u);
+  std::filesystem::remove_all(dir);
+}
+
+// Section 6.8, step 4: the wait budget runs from the receipt the caller passes
+// (the Dispatcher passes the end of the parse); past it, nothing is saved.
+TEST_F(DispatcherTest, ImportUserDictionaryTextWaitBudgetRunsFromTheGivenReceipt) {
+  std::vector<azookey::learning::UserWord> words(1);
+  words.front().word = "エモい";
+  words.front().ruby = "えもい";
+  words.front().pos = "adjective";
+  azookey::host::UserDictionaryEditReport report;
+  azookey::host::UserDictionaryEditOptions late;
+  late.received = std::chrono::steady_clock::now() - late.wait_budget - std::chrono::seconds(1);
+  late.report = &report;
+  azookey::learning::TextImportMergeCounts counts;
+  EXPECT_FALSE(engine.ImportUserDictionaryText(
+      words, azookey::learning::ImportConflictPolicy::Merge, late, &counts));
+  EXPECT_EQ(report.result, azookey::host::UserDictionaryEditResult::Busy);
+  EXPECT_TRUE(user_dict.Lookup("えもい").empty());
+
+  azookey::host::UserDictionaryEditOptions on_time;
+  on_time.report = &report;
+  EXPECT_TRUE(engine.ImportUserDictionaryText(words, azookey::learning::ImportConflictPolicy::Merge,
+                                              on_time, &counts));
+  EXPECT_EQ(counts.added, 1u);
+  EXPECT_EQ(user_dict.Lookup("えもい").size(), 1u);
+}
+
+// Section 6.8: one persistent_edit record with the counts, and never a word,
+// a reading or the path.
+TEST_F(DispatcherTest, ImportUserDictionaryTextIsLoggedWithCountsOnly) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_text_log"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto good = dir / "secretname.txt";
+  WriteTextFile(good, kGoogleDictionary);
+  const auto log_dir = dir / "logs";
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = log_dir;
+  azookey::logging::RuntimeLogger logger(options);
+  azookey::host::Dispatcher logging_dispatcher(
+      &engine, &scheduler, &user_dict, DefaultDispatcherConfig(), nullptr, nullptr, &logger);
+  const auto imported = ImportText(logging_dispatcher, 830, good);
+  ASSERT_TRUE(imported && imported->ok);
+
+  size_t records = 0;
+  ASSERT_TRUE(std::filesystem::exists(log_dir));
+  for (const auto& entry : std::filesystem::directory_iterator(log_dir)) {
+    if (entry.path().extension() != ".jsonl") continue;
+    std::ifstream stream(entry.path());
+    for (std::string line; std::getline(stream, line);) {
+      for (const char* secret : {"ググる", "ぐぐる", "エモい", "えもい", "secretname"}) {
+        EXPECT_EQ(line.find(secret), std::string::npos) << secret;
+      }
+      const auto record = ipc::json::Parse(line);
+      ASSERT_TRUE(record);
+      if (record->GetString("event") != "persistent_edit") continue;
+      EXPECT_EQ(record->GetString("op"), "user_dict_import");
+      EXPECT_EQ(record->GetString("result"), "ok");
+      EXPECT_EQ(record->GetUInt("added"), 2u);
+      EXPECT_EQ(record->GetUInt("skipped"), 2u);
+      ASSERT_TRUE(record->GetNumber("total_ms"));
+      ++records;
+    }
+  }
+  EXPECT_EQ(records, 1u);
+  std::filesystem::remove_all(dir);
+}
+
 // user-dictionary-pos-spec 3.2 (DEV-2135): an export that comes first after
 // another version rewrote the dictionary as version 3 reads it again, refuses
 // it and publishes what it read.
@@ -8145,5 +8441,105 @@ TEST_F(DispatcherTest, ImportReadsTheUserDictionaryAgainAndPublishesVersion3) {
   EXPECT_TRUE(user_dict.too_new());
   EXPECT_EQ(user_dict.Lookup("ぐぐる").size(), 1u);
   EXPECT_EQ(ReadAllBytes(encrypted), before);
+  std::filesystem::remove_all(dir);
+}
+
+// Section 6.8, step 4 at the Dispatcher: the wait budget runs from the end of
+// the parse, not from the receipt, and past it nothing is saved.
+TEST_F(DispatcherTest, ImportUserDictionaryTextBudgetStartsAfterTheParse) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_text_budget"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto good = dir / "google.txt";
+  WriteTextFile(good, kGoogleDictionary);
+  ipc::AddUserWordRequest add;
+  add.word = "日本語";
+  add.ruby = "にほんご";
+  ASSERT_TRUE(dispatcher.Dispatch(
+      MakeReq(840, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add))));
+  const auto encrypted = azookey::learning::EncryptedPathFor(user_dict_path);
+
+  // A parse that takes longer than the whole budget still saves.
+  dispatcher.SetTextImportWaitBudgetForTests(std::chrono::milliseconds(3000));
+  dispatcher.SetAfterTextImportParseForTests(
+      [] { std::this_thread::sleep_for(std::chrono::milliseconds(4000)); });
+  const auto slow_parse = ImportText(dispatcher, 841, good);
+  ASSERT_TRUE(slow_parse);
+  EXPECT_TRUE(slow_parse->ok) << slow_parse->error.value_or("");
+  EXPECT_EQ(user_dict.Lookup("えもい").size(), 1u);
+
+  // The file lock held by another writer past the budget: busy, nothing saved.
+  dispatcher.SetAfterTextImportParseForTests({});
+  dispatcher.SetTextImportWaitBudgetForTests(std::chrono::milliseconds(200));
+  const auto before = ReadAllBytes(encrypted);
+  const auto size_before = user_dict.Size();
+  // Another thread holds the lock, as another writer would.
+  std::promise<bool> locked;
+  std::promise<void> release;
+  std::thread holder([&] {
+    azookey::learning::FileLockFailure failure;
+    auto lock = azookey::learning::AcquireExclusiveFileLockForPath(user_dict_path, failure);
+    locked.set_value(lock.has_value());
+    release.get_future().wait();
+  });
+  const bool held = locked.get_future().get();
+  const auto busy = held ? ImportText(dispatcher, 842, good, "overwrite") : std::nullopt;
+  release.set_value();
+  holder.join();
+  ASSERT_TRUE(held);
+  ASSERT_TRUE(busy);
+  EXPECT_FALSE(busy->ok);
+  EXPECT_EQ(busy->error, std::optional<std::string>("busy"));
+  EXPECT_EQ(ReadAllBytes(encrypted), before);
+  EXPECT_EQ(user_dict.Size(), size_before);
+  std::filesystem::remove_all(dir);
+}
+
+// Section 6.8, steps 3 and 5: a dictionary that cannot be read again, one that
+// blocks saving after a failed load, and one that would grow past the limit
+// are refused without a change.
+TEST_F(DispatcherTest, ImportUserDictionaryTextRefusesUnreadableBlockedAndOversizedDictionaries) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_text_states"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto good = dir / "google.txt";
+  WriteTextFile(good, kGoogleDictionary);
+  ipc::AddUserWordRequest add;
+  add.word = "日本語";
+  add.ruby = "にほんご";
+  ASSERT_TRUE(dispatcher.Dispatch(
+      MakeReq(850, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add))));
+  const auto encrypted = azookey::learning::EncryptedPathFor(user_dict_path);
+
+  // Past the word limit, in the preview and in the import.
+  engine.SetUserDictionaryTextImportWordLimitForTests(2);
+  const auto unchanged = ReadAllBytes(encrypted);
+  for (const bool dry_run : {true, false}) {
+    SCOPED_TRACE(dry_run);
+    const auto refused = ImportText(dispatcher, 851, good, "merge", dry_run);
+    ASSERT_TRUE(refused);
+    EXPECT_FALSE(refused->ok);
+    EXPECT_EQ(refused->error, std::optional<std::string>("too_many_words"));
+    EXPECT_EQ(ReadAllBytes(encrypted), unchanged);
+    EXPECT_EQ(user_dict.Size(), 1u);
+  }
+  engine.SetUserDictionaryTextImportWordLimitForTests(azookey::learning::kTextImportMaxWords);
+
+  // The file on disk cannot be read again.
+  WriteAllBytes(encrypted, "not a dictionary of this test");
+  const auto corrupt = ReadAllBytes(encrypted);
+  const auto load_failed = ImportText(dispatcher, 852, good);
+  ASSERT_TRUE(load_failed);
+  EXPECT_EQ(load_failed->error, std::optional<std::string>("load_failed"));
+  EXPECT_EQ(ReadAllBytes(encrypted), corrupt);
+  EXPECT_EQ(user_dict.Size(), 1u);
+
+  // The served dictionary blocks saving after that failed load.
+  EXPECT_FALSE(user_dict.Load());
+  ASSERT_TRUE(user_dict.save_blocked());
+  const auto blocked = ImportText(dispatcher, 853, good, "merge", true);
+  ASSERT_TRUE(blocked);
+  EXPECT_EQ(blocked->error, std::optional<std::string>("store_unavailable"));
+  EXPECT_EQ(ReadAllBytes(encrypted), corrupt);
   std::filesystem::remove_all(dir);
 }

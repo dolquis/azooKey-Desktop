@@ -241,6 +241,8 @@ def matrix_section(lines: Iterator[str], left_ids: Iterable[int], right_ids: Ite
     matrix.def lists `right id of the previous word, left id of the next word, cost`, after a
     header with the sizes of those two id spaces in the same order (the MeCab and Sudachi layout).
     Id 0 (sentence start and end) always gets an index. Every needed cell must be listed once.
+    Ids whose rows (columns) hold the same costs share one index, in order of first use
+    (lattice-conversion-spec section 9, step 1).
     """
     header = next(lines, "").split()
     if len(header) != 2:
@@ -280,14 +282,41 @@ def matrix_section(lines: Iterator[str], left_ids: Iterable[int], right_ids: Ite
         cost[cell] = value
     if seen.count(0):
         raise ValueError("matrix.def: missing cells")
+    cost, width, row_of, column_of = merge_matrix(cost, width, len(rights))
+    for i, value in enumerate(lefts):
+        left_index[value] = column_of[i]
+    for i, value in enumerate(rights):
+        right_index[value] = row_of[i]
     if sys.byteorder != "little":
         for values in (left_index, right_index, cost):
             values.byteswap()
-    data = bytearray(struct.pack("<6I", raw_left, raw_right, width, len(rights), 0, 0))
+    data = bytearray(struct.pack("<6I", raw_left, raw_right, width, len(cost) // width, 0, 0))
     data.extend(left_index.tobytes() + right_index.tobytes())
     data.extend(b"\0" * (-len(data) % 8))
     data.extend(cost.tobytes())
     return bytes(data)
+
+
+def merge_matrix(cost: array, width: int, height: int) -> tuple[array, int, list[int], list[int]]:
+    """Merges the rows, then the columns, of a `height` x `width` cost matrix that hold the same
+    costs. Returns the merged matrix, its width, and the new index of each old row and column.
+    Merging columns keeps distinct rows distinct, so one pass over each axis is enough."""
+    rows: dict[bytes, int] = {}
+    row_of = [rows.setdefault(cost[r * width:(r + 1) * width].tobytes(), len(rows))
+              for r in range(height)]
+    kept = array("h")
+    for row in rows:
+        kept.frombytes(row)
+    columns: dict[bytes, int] = {}
+    column_of = [columns.setdefault(kept[c::width].tobytes(), len(columns)) for c in range(width)]
+    first = {}
+    for c, index in enumerate(column_of):
+        first.setdefault(index, c)
+    merged = array("h")
+    for r in range(len(rows)):
+        row = kept[r * width:(r + 1) * width]
+        merged.extend(row[c] for c in first.values())
+    return merged, len(columns), row_of, column_of
 
 
 def representative(pairs: Counter) -> list[int]:

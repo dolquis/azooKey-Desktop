@@ -474,7 +474,8 @@ class InferenceEngine {
   //   kana's.
   // - Otherwise (no model) kana's candidates come back, followed by the
   //   alternative's dictionary candidates whose surfaces kana's lack. The
-  //   alternative's lattice paths are not among them.
+  //   alternative is converted without the lattice (DEV-2101), so these are
+  //   the words of its dictionaries only.
   CandidatesResult QueryAmbiguousCandidatesEx(const std::string& kana,
                                               const std::vector<std::string>& alternatives,
                                               const std::string& context, uint64_t now_epoch_sec,
@@ -605,14 +606,25 @@ class InferenceEngine {
                                          uint32_t max_candidates, bool live,
                                          const InferenceTelemetry* telemetry,
                                          const TagBoosts* tag_boosts = nullptr,
-                                         const MixedConversionOptions* mixed = nullptr);
-  // The lattice N-best of `kana` as candidates (docs/lattice-conversion-spec.md section 3.4).
-  // `failed` reports a vocabulary failure or an invalid surface (section 3.6).
+                                         const MixedConversionOptions* mixed = nullptr,
+                                         bool lattice_allowed = true);
+  // QueryCandidatesEx; `lattice_allowed` false converts without the lattice.
+  CandidatesResult QueryFilteredCandidates(const std::string& kana, const std::string& context,
+                                           uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
+                                           uint32_t max_candidates, bool live,
+                                           const InferenceTelemetry* telemetry,
+                                           const TagBoosts* tag_boosts,
+                                           const MixedConversionOptions* mixed,
+                                           bool lattice_allowed);
+  // The lattice N-best of `kana` as candidates (docs/lattice-conversion-spec.md section 3.4),
+  // with the search's status for the logs of section 3.6.
   std::vector<core::Candidate> LatticeCandidatesLocked(
       const std::string& kana, size_t max_paths, const std::atomic<bool>* cancel,
-      std::optional<std::chrono::steady_clock::time_point> deadline, bool& failed) const;
-  // Logs the static layers whose CONN the lattice does not use (section 3.6).
-  void LogLatticeConnectionsLocked() const;
+      std::optional<std::chrono::steady_clock::time_point> deadline,
+      core::LatticeStatus& status) const;
+  // Logs the static layers whose CONN the lattice does not use (section 3.6): `layer` only,
+  // or every layer.
+  void LogLatticeConnectionsLocked(std::optional<learning::LayerId> layer = std::nullopt) const;
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide
   // whether a committed (reading, surface) pair is an unknown word worth mining.

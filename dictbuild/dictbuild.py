@@ -300,7 +300,7 @@ def matrix_section(lines: Iterator[str], left_ids: Iterable[int], right_ids: Ite
 def merge_matrix(cost: array, width: int, height: int) -> tuple[array, int, list[int], list[int]]:
     """Merges the rows, then the columns, of a `height` x `width` cost matrix that hold the same
     costs. Returns the merged matrix, its width, and the new index of each old row and column.
-    Equal rows stay equal after the columns merge, so one pass over each axis is enough."""
+    Merging columns keeps distinct rows distinct, so one pass over each axis is enough."""
     rows: dict[bytes, int] = {}
     row_of = [rows.setdefault(cost[r * width:(r + 1) * width].tobytes(), len(rows))
               for r in range(height)]

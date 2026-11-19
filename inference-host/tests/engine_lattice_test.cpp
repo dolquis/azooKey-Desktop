@@ -129,7 +129,9 @@ TEST(EngineLattice, ModelNotLoadedAddsTheNBestInItsScoreBand) {
 }
 
 TEST(EngineLattice, OffOrWithoutAUsableLatticeCoreTheCandidatesStayAsBefore) {
-  const auto off = MakeEngine(NoLimitConfig(false), Fixture("lattice"));
+  // The same layers on both sides: only lattice_core differs.
+  const LatticeDirectory good("sudachi_lexicon", "lattice_core");
+  const auto off = MakeEngine(NoLimitConfig(false), good.Path());
   const auto before = off->QueryCandidates(kSentence, "", kNow);
   EXPECT_TRUE(LatticeCandidates(before).empty());
 
@@ -174,18 +176,54 @@ TEST(EngineLattice, ALayerWhoseConnectionsFailKeepsItsLookupsAndEntersWithDefaul
                           [](const Candidate& c) { return c.surface == "今日はいい天気です"; }));
 }
 
-TEST(EngineLattice, AnotherReadingsLatticePathsAreNotAppendedAsItsDictionaryWords) {
+TEST(EngineLattice, AnotherReadingIsConvertedWithoutTheLattice) {
   const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
-  // DEV-1773 without a model: the other reading's dictionary words follow the typed ones.
-  const auto result = engine->QueryAmbiguousCandidatesEx(kSentence, {"てんき"}, "", kNow, nullptr);
-  bool found_word = false;
-  for (const auto& c : result.candidates) {
-    if (c.reading != "てんき") continue;
-    found_word = found_word || c.surface == "転機";
-    if (c.debug_info.starts_with(kLatticePrefix))
-      EXPECT_NE(c.debug_info.find(";dup:dictionary"), std::string::npos) << c.debug_info;
+  // Precondition: alone, the lattice splits いいてんき into a path no dictionary holds.
+  const auto alone = LatticeCandidates(engine->QueryCandidates("いいてんき", "", kNow));
+  ASSERT_TRUE(std::any_of(alone.begin(), alone.end(),
+                          [](const Candidate& c) { return c.surface == "いい天気"; }));
+  // DEV-1773 without a model: the other reading's dictionary words follow the typed ones; its
+  // lattice paths do not.
+  const auto split =
+      engine->QueryAmbiguousCandidatesEx(kSentence, {"いいてんき"}, "", kNow, nullptr);
+  for (const auto& c : split.candidates) {
+    if (c.reading != "いいてんき") continue;
+    EXPECT_FALSE(c.debug_info.starts_with(kLatticePrefix)) << c.surface << " " << c.debug_info;
+    EXPECT_NE(c.surface, "いい天気");
   }
-  EXPECT_TRUE(found_word);
+  const auto words = engine->QueryAmbiguousCandidatesEx(kSentence, {"てんき"}, "", kNow, nullptr);
+  EXPECT_TRUE(std::any_of(words.candidates.begin(), words.candidates.end(), [](const Candidate& c) {
+    return c.reading == "てんき" && c.surface == "転機" && c.debug_info.starts_with("dictionary");
+  }));
+}
+
+TEST(EngineLattice, TheRequestsOwnDeadlineBoundsTheLattice) {
+  const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
+  // Section 3.2: no time left (the M63-B extra conversion's deadline, for one) means no lattice.
+  azookey::host::MixedConversionOptions past;
+  past.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+  past.typo_correction = false;
+  const auto late =
+      engine->QueryCandidatesEx(kSentence, "", kNow, nullptr, 0, false, nullptr, nullptr, &past);
+  EXPECT_TRUE(LatticeCandidates(late.candidates).empty());
+  azookey::host::MixedConversionOptions future = past;
+  future.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  const auto in_time =
+      engine->QueryCandidatesEx(kSentence, "", kNow, nullptr, 0, false, nullptr, nullptr, &future);
+  EXPECT_FALSE(LatticeCandidates(in_time.candidates).empty());
+}
+
+TEST(EngineLattice, SafeModeConvertsWithoutTheModelAndGetsTheLattice) {
+  const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
+  engine->RestoreHealthState(azookey::host::HealthState::SafeMode);
+  azookey::host::ModelLoadOptions options;
+  options.path =
+      (std::filesystem::temp_directory_path() / "azookey_engine_lattice_safe.gguf").string();
+  // SafeMode refuses the load before reading the file, so the fallback converter stays active.
+  ASSERT_FALSE(engine->LoadModelWithResult(options).ok);
+  const auto lattice = LatticeCandidates(engine->QueryCandidates(kSentence, "", kNow));
+  ASSERT_FALSE(lattice.empty());
+  EXPECT_EQ(lattice.front().surface, "今日はいい天気です");
 }
 
 #if !AZOOKEY_WITH_LLAMA_CPP

@@ -163,8 +163,10 @@ live 変換（`ConversionContext::live`）では N = 1 とする。それ以外�
 
 どの縮退も、理由をログに残し、Host を止めない。ログには読みと表層を入れない（`docs/observability-spec.md` §7.6）。
 lattice_core の読み込みの結果は同梱辞書の読み込みと同じ `static_dictionary_load`（`layer` が `lattice_core.azdic`）に、
-層の `CONN` を使わないことは `lattice_connections`（`layer` と `result=unused`）に、要求にラティスの候補を足さなかった
-ことは `lattice_conversion`（`result=failed`）に出す。
+層の `CONN` を使わないことは `lattice_connections`（`layer` と `result=unused`）に出す。要求ごとの縮退は
+`lattice_conversion` の `result` に出す。値は、語彙の失敗と不正な表層が `failed`、64 code point を超える読みと不正な読みが `rejected`、
+前向き Viterbi の前の打ち切りが `aborted`、1 位だけを足した打ち切りが `truncated` である。要求そのものが cancel された
+ときは、その要求は候補を返さないので出さない。
 
 ## 4. ラティスの構築
 

@@ -904,7 +904,7 @@ bool InferenceEngine::LoadDictionaryLayer(learning::LayerId layer,
                                           const std::filesystem::path& path, bool verify) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   const bool loaded = dictionaries_.LoadStatic(layer, path, verify);
-  LogLatticeConnectionsLocked();
+  LogLatticeConnectionsLocked(layer);
   return loaded;
 }
 
@@ -929,7 +929,7 @@ std::vector<InferenceEngine::DictionaryLoadResult> InferenceEngine::LoadBundledD
   return results;
 }
 
-void InferenceEngine::LogLatticeConnectionsLocked() const {
+void InferenceEngine::LogLatticeConnectionsLocked(std::optional<learning::LayerId> only) const {
   if (!runtime_logger_ || !dictionaries_.IsLatticeAvailable()) return;
   for (const auto& [layer, name] :
        {std::pair{learning::LayerId::Base, "base_lexicon"},
@@ -937,6 +937,7 @@ void InferenceEngine::LogLatticeConnectionsLocked() const {
         std::pair{learning::LayerId::Neologd, "neologd_lexicon"},
         std::pair{learning::LayerId::NamedEntity, "named_entity_lexicon"},
         std::pair{learning::LayerId::TechnicalTerms, "technical_terms_lexicon"}}) {
+    if (only && layer != *only) continue;
     // The layer's words take the default ids instead (spec sections 3.6 and 8.3).
     if (!dictionaries_.LatticeConnectionError(layer).empty())
       runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "lattice_connections",
@@ -947,14 +948,14 @@ void InferenceEngine::LogLatticeConnectionsLocked() const {
 
 std::vector<core::Candidate> InferenceEngine::LatticeCandidatesLocked(
     const std::string& kana, size_t max_paths, const std::atomic<bool>* cancel,
-    std::optional<std::chrono::steady_clock::time_point> deadline, bool& failed) const {
-  failed = false;
+    std::optional<std::chrono::steady_clock::time_point> deadline,
+    core::LatticeStatus& status) const {
   core::LatticeQuery query;
   query.max_paths = max_paths;
   query.limits.cancel = cancel;
   query.limits.deadline = deadline;
   const auto result = dictionaries_.ConvertLattice(kana, query);
-  failed = result.status == core::LatticeStatus::Failed;
+  status = result.status;
   std::vector<core::Candidate> candidates;
   const double scale = dictionaries_.LatticeScoreScale();
   if (result.paths.empty() || !(scale > 0)) return candidates;
@@ -1794,8 +1795,18 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
     const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
     const MixedConversionOptions* mixed) {
-  auto result = QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel,
-                                      max_candidates, live, telemetry, tag_boosts, mixed);
+  return QueryFilteredCandidates(requested_kana, context, now_epoch_sec, cancel, max_candidates,
+                                 live, telemetry, tag_boosts, mixed, true);
+}
+
+InferenceEngine::CandidatesResult InferenceEngine::QueryFilteredCandidates(
+    const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
+    const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
+    const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
+    const MixedConversionOptions* mixed, bool lattice_allowed) {
+  auto result =
+      QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel, max_candidates, live,
+                            telemetry, tag_boosts, mixed, lattice_allowed);
   DropPrivateUseCandidates(result.candidates);
   DropMixedKanaAsciiModelCandidates(result.candidates, requested_kana,
                                     mixed ? mixed->english_ranges : kNoEnglishRanges);
@@ -1837,8 +1848,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
   if (alternative == alternatives.end() || !typed.corrected_reading.empty() ||
       typed.model_deadline_exceeded || (cancel && cancel->load(std::memory_order_relaxed)))
     return typed;
-  auto other = QueryCandidatesEx(*alternative, context, now_epoch_sec, cancel, max_candidates,
-                                 false, telemetry, tag_boosts);
+  // DEV-2101: without the lattice, so the other reading's dictionary candidates appended below
+  // are its words, not the lattice's paths of it (the DEV-1773 behavior).
+  auto other = QueryFilteredCandidates(*alternative, context, now_epoch_sec, cancel, max_candidates,
+                                       false, telemetry, tag_boosts, nullptr, false);
   const auto best_model_score = [](const CandidatesResult& result) -> std::optional<double> {
     std::optional<double> best;
     for (const auto& candidate : result.candidates)
@@ -1856,11 +1869,6 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
       if (appended == limit) break;
       if (dictionary_only && candidate.source != core::CandidateSource::SystemDictionary &&
           candidate.source != core::CandidateSource::UserDictionary)
-        continue;
-      // A lattice path of the other reading is a guess, not one of its dictionary words, unless
-      // it took the place of the same surface's dictionary candidate (DedupMergedCandidates).
-      if (dictionary_only && candidate.debug_info.starts_with(kLatticeDebugPrefix) &&
-          candidate.debug_info.find(";dup:dictionary") == std::string::npos)
         continue;
       const bool shown =
           std::any_of(into.candidates.begin(), into.candidates.end(),
@@ -1941,7 +1949,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
     const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
-    const MixedConversionOptions* mixed) {
+    const MixedConversionOptions* mixed, bool lattice_allowed) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -1989,7 +1997,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   std::vector<core::Candidate> merged;
   // lattice-conversion-spec section 3.2; appended after the converter's candidates.
   std::vector<core::Candidate> lattice;
-  bool lattice_failed = false;
+  std::optional<core::LatticeStatus> lattice_status;
   // The request's own deadline (section 3.2): a lattice never runs past it.
   const std::optional<std::chrono::steady_clock::time_point> request_deadline =
       mixed ? mixed->deadline : std::nullopt;
@@ -2024,11 +2032,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     }
     // Without the model (not loaded, failed to load, SafeMode) the lattice is built in this
     // section, under the request's cancel and deadline only.
-    if (!using_model_converter && LatticeApplies(config.lattice, false) && request_time_left()) {
+    if (lattice_allowed && !using_model_converter && LatticeApplies(config.lattice, false) &&
+        request_time_left()) {
       lattice = LatticeCandidatesLocked(
           kana,
           LatticePathCount(EffectiveMaxCandidates(config.max_candidates, max_candidates), live),
-          cancel, request_deadline, lattice_failed);
+          cancel, request_deadline, lattice_status.emplace());
     }
   }
   if (auto_word_store && config.dictionary.auto_words_enabled) {
@@ -2167,20 +2176,43 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   const bool nll = config.nll.enabled && !live && (!mixed || mixed->nll);
   if (!nll) converter_lock.unlock();
   model_fell_back = using_model_converter && (model_fell_back || convert_failed);
-  if (using_model_converter && LatticeApplies(config.lattice, !model_fell_back) &&
-      request_time_left()) {
+  if (lattice_allowed && using_model_converter &&
+      LatticeApplies(config.lattice, !model_fell_back) && request_time_left()) {
     // Section 3.2: not the converter's spent budget but 15 ms from here, within the request's
     // own deadline and under its cancel.
     auto deadline = std::chrono::steady_clock::now() + kLatticeFallbackBudget;
     if (request_deadline) deadline = (std::min)(deadline, *request_deadline);
     std::lock_guard<std::mutex> lock(state_mutex_);
     lattice = LatticeCandidatesLocked(kana, LatticePathCount(effective_max_candidates, live),
-                                      cancel, deadline, lattice_failed);
+                                      cancel, deadline, lattice_status.emplace());
   }
-  if (lattice_failed && runtime_logger_) {
-    // Section 3.6: no lattice candidates for this request; never the reading or a surface.
-    runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "lattice_conversion",
-                         {{"result", logging::RuntimeLogSafeText("failed")}});
+  // Section 3.6: each degradation of the request, by its result only (never the reading or a
+  // surface). A canceled request returns nothing, so its cut-off is not one.
+  const char* lattice_result = nullptr;
+  if (lattice_status) {
+    switch (*lattice_status) {
+      case core::LatticeStatus::Failed:
+        lattice_result = "failed";
+        break;
+      case core::LatticeStatus::Rejected:
+        lattice_result = "rejected";
+        break;
+      case core::LatticeStatus::Aborted:
+        lattice_result = canceled() ? nullptr : "aborted";
+        break;
+      case core::LatticeStatus::Truncated:
+        lattice_result = canceled() ? nullptr : "truncated";
+        break;
+      case core::LatticeStatus::Complete:
+      case core::LatticeStatus::Unavailable:  // Logged when lattice_core loaded.
+        break;
+    }
+  }
+  if (lattice_result && runtime_logger_) {
+    runtime_logger_->Log(
+        *lattice_status == core::LatticeStatus::Failed ? logging::RuntimeLogLevel::Warn
+                                                       : logging::RuntimeLogLevel::Info,
+        "lattice_conversion", {{"result", logging::RuntimeLogSafeText(lattice_result)}});
   }
   merged.insert(merged.end(), std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));

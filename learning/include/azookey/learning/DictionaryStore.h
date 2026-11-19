@@ -96,8 +96,8 @@ class DictionaryStore {
   void ResetLatticeLayer(size_t index);
   void BuildLatticeLayer(size_t index);
   std::array<std::unique_ptr<core::DoubleArrayTrie>, 5> static_;
-  // Declared after static_ and lattice_: destroyed first, as they refer to both.
   std::unique_ptr<core::LatticeDictionary> lattice_;
+  // Declared after static_ and lattice_: destroyed first, as they refer to both.
   std::array<std::unique_ptr<core::StaticLatticeVocabulary>, 5> lattice_layers_;
   std::array<Index, 3> mutable_;
   std::array<bool, 3> mutable_available_{};

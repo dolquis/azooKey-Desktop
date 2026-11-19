@@ -74,7 +74,7 @@ struct LatticeRange {
 };
 
 // [offset, offset + size) of section `name`, read from the .azdic section table
-// (docs/azdic-physical-layer-spec.md section 3); nullopt without that section.
+// (docs/azdic-physical-layer-spec.md section 15.5); nullopt without that section.
 std::optional<LatticeRange> SectionRange(const std::filesystem::path& file, const char (&name)[5]) {
   std::ifstream input(file, std::ios::binary);
   unsigned char header[64];

@@ -10,6 +10,7 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -446,18 +447,26 @@ double PeakMemoryMb() {
 #endif
 }
 
-j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& config,
-                       const j::Object& summary, const j::Object& categories) {
-  j::Object diff;
-  if (path.empty()) return diff;
-  const auto parsed = j::Parse(ReadFile(path));
+j::Value ReadBaseline(const std::filesystem::path& path) {
+  auto parsed = j::Parse(ReadFile(path));
   if (!parsed || !parsed->IsObject()) throw std::runtime_error("invalid baseline JSON");
-  const auto* baseline_version = parsed->Find("version");
+  return std::move(*parsed);
+}
+
+// The compatibility keys (spec section 14.1) on which `baseline` differs from `config`, in the
+// order below. "version" and "config" stand for a baseline without a usable value for them.
+std::vector<std::string> IncompatibleBaselineKeys(const j::Value& baseline,
+                                                  const j::Object& config) {
+  std::vector<std::string> incompatible;
+  const auto* baseline_version = baseline.Find("version");
   if (!baseline_version || !baseline_version->IsNumber() || baseline_version->AsNumber() != 1.0) {
-    throw std::runtime_error("baseline is incompatible: version");
+    incompatible.emplace_back("version");
   }
-  const auto* baseline_config = parsed->FindObject("config");
-  if (!baseline_config) throw std::runtime_error("baseline is incompatible: config");
+  const auto* baseline_config = baseline.FindObject("config");
+  if (!baseline_config) {
+    incompatible.emplace_back("config");
+    return incompatible;
+  }
   const auto compatible_value = [](const j::Value& current, const j::Value& baseline) {
     if (current.IsNull() && baseline.IsNull()) return true;
     if (current.IsBool() && baseline.IsBool()) return current.AsBool() == baseline.AsBool();
@@ -484,6 +493,8 @@ j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& confi
       "dictionary_bundle_sha256",
       "lattice",
       "nll",
+      "eval_source",
+      "profile_sha256",
       "category_filter",
       "eval_dataset_sha256",
   };
@@ -495,16 +506,24 @@ j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& confi
       return found->second;
     }
     if (key == "nll") return j::Value("off");
+    if (key == "eval_source") return j::Value("bundled");
+    if (key == "profile_sha256") return j::Value("none");
     return std::nullopt;
   };
   for (const auto* key : compatible_keys) {
     const auto current = value_or_default(config, key);
-    const auto baseline = value_or_default(*baseline_config, key);
-    if (!current || !baseline || !compatible_value(*current, *baseline)) {
-      throw std::runtime_error(std::string("baseline is incompatible: ") + key);
+    const auto previous = value_or_default(*baseline_config, key);
+    if (!current || !previous || !compatible_value(*current, *previous)) {
+      incompatible.emplace_back(key);
     }
   }
-  const auto* baseline_summary = parsed->FindObject("summary");
+  return incompatible;
+}
+
+j::Object BaselineMetricsDiff(const j::Value& baseline, const j::Object& summary,
+                              const j::Object& categories) {
+  j::Object diff;
+  const auto* baseline_summary = baseline.FindObject("summary");
   if (!baseline_summary) throw std::runtime_error("baseline is missing summary");
   const auto add_diff = [&](const std::string& key, const j::Object& current,
                             const j::Object& baseline, const std::string& prefix,
@@ -520,19 +539,30 @@ j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& confi
   constexpr std::array keys = {"top1_accuracy",         "top5_accuracy", "exact_match_rate",
                                "nfkc_exact_match_rate", "cer",           "nfkc_cer"};
   for (const auto* key : keys) add_diff(key, summary, *baseline_summary, "", &diff);
-  const auto* baseline_categories = parsed->FindObject("by_category");
+  const auto* baseline_categories = baseline.FindObject("by_category");
   if (!baseline_categories) return diff;
   for (const auto& [category, current] : categories) {
-    const auto baseline = baseline_categories->find(category);
-    if (!current.IsObject() || baseline == baseline_categories->end() ||
-        !baseline->second.IsObject()) {
+    const auto previous = baseline_categories->find(category);
+    if (!current.IsObject() || previous == baseline_categories->end() ||
+        !previous->second.IsObject()) {
       continue;
     }
     for (const auto* key : keys) {
-      add_diff(key, current.AsObject(), baseline->second.AsObject(), category + ".", &diff);
+      add_diff(key, current.AsObject(), previous->second.AsObject(), category + ".", &diff);
     }
   }
   return diff;
+}
+
+j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& config,
+                       const j::Object& summary, const j::Object& categories) {
+  if (path.empty()) return {};
+  const auto baseline = ReadBaseline(path);
+  const auto incompatible = IncompatibleBaselineKeys(baseline, config);
+  if (!incompatible.empty()) {
+    throw std::runtime_error("baseline is incompatible: " + incompatible.front());
+  }
+  return BaselineMetricsDiff(baseline, summary, categories);
 }
 
 size_t AcceptedRank(const std::vector<core::Candidate>& candidates, const EvaluationCase& item) {
@@ -544,6 +574,98 @@ size_t AcceptedRank(const std::vector<core::Candidate>& candidates, const Evalua
     }
   }
   return 0;
+}
+
+void ValidateRunOptions(const ConversionQualityOptions& options) {
+  if (options.iterations == 0) throw std::invalid_argument("--iterations must be greater than 0");
+  if (options.n_best == 0 || options.n_best > kConversionQualityCandidateLimit) {
+    throw std::invalid_argument("n_best must be between 1 and 5");
+  }
+  if (options.typo_mode != "off") {
+    throw std::invalid_argument("--typo-mode supports only off until M55");
+  }
+}
+
+// Queries the case options.iterations times, keeping the last candidates and the median latency.
+EvaluatedCase EvaluateCase(EvaluationCase item, const ConversionQualityOptions& options,
+                           const CandidateQuery& query) {
+  const std::string& reading = item.typo ? item.observed_reading : item.input;
+  std::vector<double> latencies;
+  std::vector<core::Candidate> candidates;
+  latencies.reserve(options.iterations);
+  for (size_t iteration = 0; iteration < options.iterations; ++iteration) {
+    const auto start = std::chrono::steady_clock::now();
+    auto current = query(reading, item.left_context);
+    const auto end = std::chrono::steady_clock::now();
+    latencies.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+    if (iteration + 1 == options.iterations) candidates = std::move(current);
+  }
+  if (candidates.size() > options.n_best) candidates.resize(options.n_best);
+  std::sort(latencies.begin(), latencies.end());
+  EvaluatedCase result;
+  result.source = std::move(item);
+  result.candidates = std::move(candidates);
+  result.rank = AcceptedRank(result.candidates, result.source);
+  const std::string top1 = result.candidates.empty() ? "" : result.candidates.front().surface;
+  result.match = EvaluateCandidateMatch(top1, result.source.expected, result.source.acceptable);
+  result.reading_fidelity =
+      !result.candidates.empty() && result.candidates.front().reading == result.source.input;
+  result.typo_corrected = false;
+  result.latency_ms = latencies[latencies.size() / 2];
+  return result;
+}
+
+j::Object SerializeCategories(const std::map<std::string, Aggregate>& by_category) {
+  j::Object categories_json;
+  for (const auto& [name, aggregate] : by_category) {
+    auto metrics = SerializeMetrics(aggregate, false);
+    metrics.emplace("n", j::Value(static_cast<uint64_t>(aggregate.count)));
+    categories_json.emplace(name, j::Value(std::move(metrics)));
+  }
+  return categories_json;
+}
+
+j::Object SerializeSubsets(const Aggregate& katakana) {
+  auto katakana_json = SerializeMetrics(katakana, false);
+  katakana_json.emplace("n", j::Value(static_cast<uint64_t>(katakana.count)));
+  j::Object subsets_json;
+  subsets_json.emplace("katakana", j::Value(std::move(katakana_json)));
+  return subsets_json;
+}
+
+j::Object BuildConfig(const ConversionQualityOptions& options, std::string_view eval_source,
+                      std::string eval_dataset_sha256) {
+  j::Object config;
+  config.emplace("backend", j::Value(options.backend));
+  config.emplace("batch_size", j::Value(options.batch_size));
+  config.emplace("beam_width", j::Value(options.beam_width));
+  config.emplace("build_id", j::Value(options.build_id));
+  config.emplace("category_filter", j::Value(options.category));
+  config.emplace("decode", j::Value(options.decode));
+  config.emplace("dictionary_bundle_sha256", j::Value(options.dictionary_bundle_sha256));
+  config.emplace("eval_dataset_sha256", j::Value(std::move(eval_dataset_sha256)));
+  config.emplace("eval_source", j::Value(std::string(eval_source)));
+  config.emplace("host_version", j::Value(options.host_version));
+  config.emplace("lattice", j::Value(options.lattice));
+  config.emplace("learning_state", j::Value(options.learning_state));
+  config.emplace("max_new_tokens", j::Value(options.max_new_tokens));
+  config.emplace("model", j::Value(options.model.empty()
+                                       ? "fallback"
+                                       : std::filesystem::path(options.model).filename().string()));
+  config.emplace("model_sha256", j::Value(options.model.empty() ? "" : Sha256File(options.model)));
+  config.emplace("n_best", j::Value(options.n_best));
+  config.emplace("nll", j::Value(options.nll));
+  config.emplace("profile_sha256", j::Value(options.profile_sha256));
+  config.emplace("prompt_template_version", j::Value(options.prompt_template_version));
+  config.emplace("thread_count", j::Value(options.thread_count));
+  config.emplace("typo_correction_mode", j::Value(options.typo_mode));
+  return config;
+}
+
+std::string PersonalCaseId(size_t ordinal) {
+  std::ostringstream id;
+  id << "personal_" << std::setw(6) << std::setfill('0') << ordinal;
+  return id.str();
 }
 
 }  // namespace
@@ -725,13 +847,7 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
     if (options.eval_path.empty()) throw std::invalid_argument("--eval is required");
     if (options.output_path.empty())
       throw std::invalid_argument("--output is required with --eval");
-    if (options.iterations == 0) throw std::invalid_argument("--iterations must be greater than 0");
-    if (options.n_best == 0 || options.n_best > kConversionQualityCandidateLimit) {
-      throw std::invalid_argument("n_best must be between 1 and 5");
-    }
-    if (options.typo_mode != "off") {
-      throw std::invalid_argument("--typo-mode supports only off until M55");
-    }
+    ValidateRunOptions(options);
     auto cases = LoadCases(options.eval_path, options.category);
     std::vector<EvaluatedCase> evaluated;
     evaluated.reserve(cases.size());
@@ -740,29 +856,7 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
     // Cases whose expected surface holds katakana (lattice-conversion-spec section 10.2).
     Aggregate katakana;
     for (auto& item : cases) {
-      const std::string& reading = item.typo ? item.observed_reading : item.input;
-      std::vector<double> latencies;
-      std::vector<core::Candidate> candidates;
-      latencies.reserve(options.iterations);
-      for (size_t iteration = 0; iteration < options.iterations; ++iteration) {
-        const auto start = std::chrono::steady_clock::now();
-        auto current = query(reading, item.left_context);
-        const auto end = std::chrono::steady_clock::now();
-        latencies.push_back(std::chrono::duration<double, std::milli>(end - start).count());
-        if (iteration + 1 == options.iterations) candidates = std::move(current);
-      }
-      if (candidates.size() > options.n_best) candidates.resize(options.n_best);
-      std::sort(latencies.begin(), latencies.end());
-      EvaluatedCase result;
-      result.source = std::move(item);
-      result.candidates = std::move(candidates);
-      result.rank = AcceptedRank(result.candidates, result.source);
-      const std::string top1 = result.candidates.empty() ? "" : result.candidates.front().surface;
-      result.match = EvaluateCandidateMatch(top1, result.source.expected, result.source.acceptable);
-      result.reading_fidelity =
-          !result.candidates.empty() && result.candidates.front().reading == result.source.input;
-      result.typo_corrected = false;
-      result.latency_ms = latencies[latencies.size() / 2];
+      auto result = EvaluateCase(std::move(item), options, query);
       const bool typo_clean = result.source.typo && !result.source.typo_type.has_value();
       Add(&summary, result, !typo_clean, options.typo_mode);
       if (!typo_clean) {
@@ -776,44 +870,12 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
 
     auto summary_json = SerializeMetrics(summary, true);
     summary_json.emplace("memory_peak_mb", j::Value(PeakMemoryMb()));
-    j::Object categories_json;
-    for (const auto& [name, aggregate] : by_category) {
-      auto metrics = SerializeMetrics(aggregate, false);
-      metrics.emplace("n", j::Value(static_cast<uint64_t>(aggregate.count)));
-      categories_json.emplace(name, j::Value(std::move(metrics)));
-    }
-    auto katakana_json = SerializeMetrics(katakana, false);
-    katakana_json.emplace("n", j::Value(static_cast<uint64_t>(katakana.count)));
-    j::Object subsets_json;
-    subsets_json.emplace("katakana", j::Value(std::move(katakana_json)));
-    j::Object config;
-    config.emplace("backend", j::Value(options.backend));
-    config.emplace("batch_size", j::Value(options.batch_size));
-    config.emplace("beam_width", j::Value(options.beam_width));
-    config.emplace("build_id", j::Value(options.build_id));
-    config.emplace("category_filter", j::Value(options.category));
-    config.emplace("decode", j::Value(options.decode));
-    config.emplace("dictionary_bundle_sha256", j::Value(options.dictionary_bundle_sha256));
-    config.emplace("eval_dataset_sha256", j::Value(EvaluationDatasetSha256(options.eval_path)));
-    config.emplace("host_version", j::Value(options.host_version));
-    config.emplace("lattice", j::Value(options.lattice));
-    config.emplace("learning_state", j::Value(options.learning_state));
-    config.emplace("max_new_tokens", j::Value(options.max_new_tokens));
-    config.emplace(
-        "model",
-        j::Value(options.model.empty() ? "fallback"
-                                       : std::filesystem::path(options.model).filename().string()));
-    config.emplace("model_sha256",
-                   j::Value(options.model.empty() ? "" : Sha256File(options.model)));
-    config.emplace("n_best", j::Value(options.n_best));
-    config.emplace("nll", j::Value(options.nll));
-    config.emplace("prompt_template_version", j::Value(options.prompt_template_version));
-    config.emplace("thread_count", j::Value(options.thread_count));
-    config.emplace("typo_correction_mode", j::Value(options.typo_mode));
+    auto categories_json = SerializeCategories(by_category);
+    auto config = BuildConfig(options, "bundled", EvaluationDatasetSha256(options.eval_path));
 
     j::Object root;
     root.emplace("by_category", j::Value(categories_json));
-    root.emplace("by_subset", j::Value(std::move(subsets_json)));
+    root.emplace("by_subset", j::Value(SerializeSubsets(katakana)));
     root.emplace("diff_vs_baseline", j::Value(BaselineDiff(options.baseline_path, config,
                                                            summary_json, categories_json)));
     root.emplace("config", j::Value(std::move(config)));
@@ -828,6 +890,131 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
         jsonl << j::Stringify(j::Value(SerializePerCase(result))) << '\n';
       }
       WriteFile(options.per_case_path, jsonl.str());
+    }
+    return true;
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+}
+
+bool RunPersonalEvaluation(const ConversionQualityOptions& options,
+                           const PersonalEvaluationInput& input, const CandidateQuery& query,
+                           std::ostream& diagnostics, std::string* error) {
+  try {
+    if (options.output_path.empty()) {
+      throw std::invalid_argument("--output is required with --personal-eval");
+    }
+    if (!options.per_case_path.empty() && !options.include_personal_text) {
+      throw std::invalid_argument(
+          "--per-case requires --include-personal-text with --personal-eval");
+    }
+    ValidateRunOptions(options);
+    // Spec section 15.5: no category filter, whatever the caller left in the options.
+    auto personal_options = options;
+    personal_options.category = "all";
+    diagnostics << "personal-eval: " << kUnsaltedHashWarning << std::endl;
+
+    std::vector<EvaluatedCase> evaluated;
+    Aggregate summary;
+    std::map<std::string, Aggregate> by_category;
+    Aggregate katakana;
+    // Spec section 15.6.
+    uint64_t net_commits = 0;
+    uint64_t net_commits_top1 = 0;
+    uint64_t net_commits_top5 = 0;
+    size_t rejected_cases = 0;
+    size_t rejected_top1 = 0;
+    size_t ordinal = 0;
+    for (const auto& item : input.cases) {
+      EvaluationCase source;
+      source.id = PersonalCaseId(++ordinal);
+      source.input = item.reading;
+      source.expected = item.expected;
+      source.acceptable = item.acceptable;
+      source.categories = {item.category};
+      auto result = EvaluateCase(std::move(source), personal_options, query);
+      const auto shown = [&result](const std::string& surface, size_t limit) {
+        const size_t end = (std::min)(limit, result.candidates.size());
+        for (size_t index = 0; index < end; ++index) {
+          if (result.candidates[index].surface == surface) return true;
+        }
+        return false;
+      };
+      bool has_rejected = false;
+      bool top1_rejected = false;
+      for (const auto& surface : item.surfaces) {
+        if (surface.commit_count > surface.reject_count) {
+          const uint64_t net = surface.commit_count - surface.reject_count;
+          net_commits += net;
+          if (shown(surface.surface, 1)) net_commits_top1 += net;
+          if (shown(surface.surface, kConversionQualityCandidateLimit)) net_commits_top5 += net;
+        } else if (surface.commit_count < surface.reject_count) {
+          has_rejected = true;
+          top1_rejected = top1_rejected || shown(surface.surface, 1);
+        }
+      }
+      if (has_rejected) {
+        ++rejected_cases;
+        if (top1_rejected) ++rejected_top1;
+      }
+      Add(&summary, result, true, personal_options.typo_mode);
+      Add(&by_category[item.category], result, true, personal_options.typo_mode);
+      if (ContainsKatakana(item.expected)) Add(&katakana, result, true, personal_options.typo_mode);
+      if (!personal_options.per_case_path.empty()) evaluated.push_back(std::move(result));
+    }
+
+    // The section 6.2 typo metrics do not apply to the user's commits.
+    auto summary_json = SerializeMetrics(summary, false);
+    summary_json.emplace("memory_peak_mb", j::Value(PeakMemoryMb()));
+    summary_json.emplace("commit_coverage_top1", j::Value(Ratio(net_commits_top1, net_commits)));
+    summary_json.emplace("commit_coverage_top5", j::Value(Ratio(net_commits_top5, net_commits)));
+    summary_json.emplace("rejected_top1_rate", j::Value(Ratio(rejected_top1, rejected_cases)));
+    summary_json.emplace("n_cases", j::Value(static_cast<uint64_t>(input.cases.size())));
+    summary_json.emplace("n_rejected_cases", j::Value(static_cast<uint64_t>(rejected_cases)));
+    summary_json.emplace("n_rows_read", j::Value(input.rows_read));
+    j::Object skipped;
+    skipped.emplace("app_learning_disabled", j::Value(input.skipped.app_learning_disabled));
+    skipped.emplace("app_privacy_mode", j::Value(input.skipped.app_privacy_mode));
+    skipped.emplace("malformed_row", j::Value(input.skipped.malformed_row));
+    skipped.emplace("no_net_commit", j::Value(input.skipped.no_net_commit));
+    skipped.emplace("over_max_cases", j::Value(input.skipped.over_max_cases));
+    skipped.emplace("secure_app", j::Value(input.skipped.secure_app));
+    summary_json.emplace("skipped", j::Value(std::move(skipped)));
+    auto categories_json = SerializeCategories(by_category);
+    auto config = BuildConfig(personal_options, "personal", input.dataset_sha256);
+
+    // Spec section 15.7: an incompatible baseline gives no diff and only the key names.
+    j::Object diff;
+    if (!personal_options.baseline_path.empty()) {
+      const auto baseline = ReadBaseline(personal_options.baseline_path);
+      const auto incompatible = IncompatibleBaselineKeys(baseline, config);
+      if (incompatible.empty()) {
+        diff = BaselineMetricsDiff(baseline, summary_json, categories_json);
+      } else {
+        diagnostics << "personal-eval: baseline is incompatible, so diff_vs_baseline is empty:";
+        for (const auto& key : incompatible) diagnostics << ' ' << key;
+        diagnostics << std::endl;
+      }
+    }
+
+    j::Object root;
+    root.emplace("by_category", j::Value(categories_json));
+    root.emplace("by_subset", j::Value(SerializeSubsets(katakana)));
+    root.emplace("diff_vs_baseline", j::Value(std::move(diff)));
+    root.emplace("config", j::Value(std::move(config)));
+    root.emplace("summary", j::Value(std::move(summary_json)));
+    root.emplace("timestamp", j::Value(Iso8601Now()));
+    root.emplace("version", j::Value(1));
+    WriteFile(personal_options.output_path, j::Stringify(j::Value(std::move(root))) + "\n");
+
+    if (!personal_options.per_case_path.empty()) {
+      diagnostics << "personal-eval: " << kPersonalTextWarning << std::endl;
+      std::ostringstream jsonl;
+      for (const auto& result : evaluated) {
+        jsonl << j::Stringify(j::Value(SerializePerCase(result))) << '\n';
+      }
+      WriteFile(personal_options.per_case_path, jsonl.str());
     }
     return true;
   } catch (const std::exception& ex) {

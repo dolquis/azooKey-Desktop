@@ -935,7 +935,8 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - 移行をしない読み込み（`LearningStore::LoadReadOnly`）で読み、保存しない。平文の移行、`.corrupt-*` の複写、
   M7 ファイルの削除は起こさない。読み込みに失敗したら、部分結果を出さずに入力エラーとして終える。学習ストアの
   ファイルが無いときも読み込みの失敗として扱う。解析できない行は Host と同じく読み飛ばし
-  （`docs/user-learning-enhancement-spec.md` §3.1）、その件数を除外の理由 `malformed_row`（§15.6）に数える。
+  （`docs/user-learning-enhancement-spec.md` §3.1）、その件数を除外の理由 `malformed_row`（§15.6）に数える。読みか表層が
+  空の行と UTF-8 として不正な行も、評価できないので同じ理由に数える。
 - 学習ストアの位置は Host と同じ既定の位置とし、`--learning <path>` で変えられる。privacy の判定（§15.4）に
   使う設定ファイルも Host と同じ既定の位置とし、`--settings <path>` で変えられる。
 - 設定ファイルは、隔離（`.invalid*` への rename）をしない読み取り専用の parse で読む。Host の `SettingsStore::Load` の
@@ -982,11 +983,13 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   明示したファイルが無いとき（§15.2）を含む。学習データの書き出しを secure と学習不許可の間に止める
   `docs/learning-data-management-spec.md` §8 と同じ規則である。
 - **除く行**: 実行時の設定で、行の `app_name` について次のどれかに当たる行を除く。理由ごとに件数を数える。
+  複数に当たる行は、次の並びで最初に当たった理由で 1 回だけ数える。
   - 実効の `secureApps`（`docs/privacy-and-secure-input-spec.md` §4.1 の同梱リストと `privacy.secureApps` の和。
     大文字小文字を無視して比べる）に含まれる（理由 `secure_app`）。
-  - アプリ別プロファイル（`docs/app-profile-spec.md` §5）を `profilesByApp[app_name]` と `profilesByApp["default"]` の
-    層で解決した `privacyMode` が `private` か `secure` である（理由 `app_privacy_mode`）、または `learningEnabled` が
-    `false` である（理由 `app_learning_disabled`）。行はウィンドウクラスを持たないので、`window_class` の層は使わない。
+  - アプリ別プロファイル（`docs/app-profile-spec.md` §5）を Host・TIP と同じ解決（大域の値に `profilesByApp["default"]` と
+    `profilesByApp[app_name]` を重ねる）で求めた `privacyMode` が `private` か `secure` である（理由 `app_privacy_mode`）、
+    または `learningEnabled` が `false` である（理由 `app_learning_disabled`）。行はウィンドウクラスを持たないので、
+    `window_class` の層は使わない。
 - **含める行**: `app_name` が空の行は含め、記録した時点の判定で学習が許された行として扱う。確定観測と訂正が `app` を
   運ばないとき（`docs/user-learning-enhancement-spec.md` §4.1）に Host が記録する大域行と、M7 ファイルから移行した行が
   これに当たる。
@@ -1007,7 +1010,7 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 | `--max-cases <N>` | ケースの上限（§15.3） |
 | `--include-personal-text` | `--per-case` に読みと表層を書くことを許す（§15.7） |
 | `--profile <text>` | bench 専用。engine がモデル変換に渡す文脈と NLL 再ランクに渡す文脈の両方の `instruction_profile` に文字列を入れ、Zenzai の prompt の `[PROF]` に置いて変換する。`docs/zenzai-inference-spec.md` §9.4.3 の効果の測定に使う。製品の設定（`model.profile`）は読まず、Host の挙動も変えない。§4 の評価データでも使える。空文字列、U+EE00〜U+EEFF を含む文字列、30 コードポイントを超える文字列、`[PROF]` を使わない形式のモデル（同 §2.4.2）、`--model` の無い構成では入力エラーとして終える。`config.profile_sha256` に記録する（§14.1） |
-| `--profile-file <path>` | `--profile` と同じ。文字列を UTF-8 のファイルから読み、末尾の改行 1 つを除く。シェルの履歴に文字列を残さないために使う。`--profile` と併用しない |
+| `--profile-file <path>` | `--profile` と同じ。文字列を UTF-8 のファイルから読み、末尾の改行 1 つ（LF か CRLF）を除く。先頭の BOM と不正な UTF-8 は入力エラーとする（黙って除くと prompt と `profile_sha256` がずれる）。シェルの履歴に文字列を残さないために使う。`--profile` と併用しない |
 
 個人回帰ベンチでは、上の表のオプションと、§7 と同じ意味で使う `--output`、`--baseline`、`--per-case`、`--backend`、
 `--model`、`--dict-dir`、`--lattice`、`--nll`、`--iterations` だけを受け付ける。`--dict-dir` と `--lattice` は M65 が
@@ -1040,7 +1043,8 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 | `personal_other` | 上のどれにも当たらない |
 
 `summary` には件数として、ケース数 `n_cases`、純拒否の表層を持つケース数 `n_rejected_cases`、読んだ行数
-`n_rows_read`、理由ごとの除外の件数 `skipped`（`malformed_row`、`no_net_commit`、`secure_app`、`app_privacy_mode`、
+`n_rows_read`（評価に使える形で読めた行。`malformed_row` に数えた行は含まない）、理由ごとの除外の件数 `skipped`
+（`malformed_row`、`no_net_commit`、`secure_app`、`app_privacy_mode`、
 `app_learning_disabled`、`over_max_cases`）を載せる。latency は §6.3 と同じに求める。
 
 ### 15.7 出力と baseline
@@ -1087,7 +1091,7 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 ファイルと、利用者が保存した結果ファイルだけである。
 
 学習ストアの読み手は、Host と `lookup` CLI に `azookey_bench --personal-eval` が加わる。
-`docs/learning-data-management-spec.md` §14 の表への追記は M74 の実装で行う。
+`docs/learning-data-management-spec.md` §14 の表もこの読み手を載せる。
 
 ### 15.9 テスト
 

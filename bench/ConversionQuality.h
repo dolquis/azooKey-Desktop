@@ -1,9 +1,12 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <iosfwd>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "azookey/core/Candidate.h"
@@ -43,6 +46,10 @@ struct ConversionQualityOptions {
   std::string lattice{"off"};
   // Whether NLL rerank was on (spec section 14.1). A result without the key counts as off.
   std::string nll{"off"};
+  // SHA-256 of the bench-only Zenzai profile (spec section 15.5), "none" without one.
+  std::string profile_sha256{"none"};
+  // The personal bench writes --per-case only when the user allowed it (spec section 15.7).
+  bool include_personal_text{false};
   size_t beam_width{1};
   size_t n_best{kConversionQualityCandidateLimit};
   size_t max_new_tokens{0};
@@ -55,6 +62,52 @@ struct ConversionQualityOptions {
 
 using CandidateQuery =
     std::function<std::vector<core::Candidate>(const std::string&, const std::string&)>;
+
+// Printed on every personal run and on every run with a profile (spec section 15.7).
+inline constexpr std::string_view kUnsaltedHashWarning =
+    "do not share this result file: eval_dataset_sha256 and profile_sha256 are unsalted "
+    "SHA-256 values, so the learning data behind a small store or a short profile can be "
+    "guessed by hashing candidate strings";
+inline constexpr std::string_view kPersonalTextWarning =
+    "--per-case writes the readings and surfaces of your learning data in plain text; the file "
+    "is not encrypted and deleting all learning data does not remove it, so delete it yourself";
+
+// Rows, readings and lines left out of the personal bench, by reason (spec section 15.6).
+struct PersonalSkipCounts {
+  uint64_t malformed_row{};
+  uint64_t no_net_commit{};
+  uint64_t secure_app{};
+  uint64_t app_privacy_mode{};
+  uint64_t app_learning_disabled{};
+  uint64_t over_max_cases{};
+};
+
+// One surface of a reading, summed over its app rows (spec section 15.3).
+struct PersonalSurfaceCounts {
+  std::string surface;
+  uint64_t commit_count{};
+  uint64_t reject_count{};
+};
+
+struct PersonalEvaluationCase {
+  std::string reading;
+  std::string expected;
+  std::vector<std::string> acceptable;
+  std::string category;
+  // Every surface left after the exclusions (net committed, offset and net rejected), ordered
+  // by surface bytes.
+  std::vector<PersonalSurfaceCounts> surfaces;
+};
+
+struct PersonalEvaluationInput {
+  // In the section 15.3 order.
+  std::vector<PersonalEvaluationCase> cases;
+  PersonalSkipCounts skipped;
+  // Rows read in a form the bench can evaluate; skipped.malformed_row counts the others.
+  uint64_t rows_read{};
+  // The section 15.7 eval_dataset_sha256.
+  std::string dataset_sha256;
+};
 
 std::vector<char32_t> DecodeUtf8CodePoints(const std::string& text);
 std::string NormalizeNfkc(const std::string& text);
@@ -73,5 +126,12 @@ double LatencyPercentile(std::vector<double> values, double fraction);
 
 bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
                                     const CandidateQuery& query, std::string* error);
+
+// The personal regression bench (spec section 15): writes the aggregates to options.output_path
+// and the warnings and the names of incompatible baseline keys to `diagnostics`, never a reading,
+// a surface or a profile. options.eval_path and options.category are not used.
+bool RunPersonalEvaluation(const ConversionQualityOptions& options,
+                           const PersonalEvaluationInput& input, const CandidateQuery& query,
+                           std::ostream& diagnostics, std::string* error);
 
 }  // namespace azookey::bench

@@ -2618,7 +2618,62 @@ class ScriptedConverter final : public azookey::core::IConverter {
  private:
   std::vector<azookey::core::Candidate> candidates_;
 };
+
+// Records the instruction profile of every context it converts.
+class ProfileRecordingConverter final : public azookey::core::IConverter {
+ public:
+  explicit ProfileRecordingConverter(std::vector<std::string>* profiles) : profiles_(profiles) {}
+  std::vector<azookey::core::Candidate> Convert(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    profiles_->push_back(context.instruction_profile);
+    return {{"日本", kana, 1.0, azookey::core::CandidateSource::SystemDictionary, "dict"}};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string&, const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+ private:
+  std::vector<std::string>* profiles_;
+};
 }  // namespace
+
+// conversion-quality-benchmark-spec section 15.5: the bench-only profile reaches the contexts of
+// the conversion and of NLL rerank, and requests carry no profile unless the bench sets one.
+TEST(InferenceEngineTest, BenchInstructionProfileReachesConversionAndNllContexts) {
+  std::vector<std::string> converted;
+  std::vector<std::string> scored;
+  azookey::host::EngineConfig config;
+  config.nll.enabled = true;
+  azookey::host::InferenceEngine engine(std::make_unique<ProfileRecordingConverter>(&converted),
+                                        nullptr, config);
+  engine.SetNllContextObserverForTests([&scored](const azookey::core::ConversionContext& context) {
+    scored.push_back(context.instruction_profile);
+  });
+  const auto all_equal = [](const std::vector<std::string>& values, const std::string& expected) {
+    return !values.empty() && std::all_of(values.begin(), values.end(),
+                                          [&](const std::string& v) { return v == expected; });
+  };
+
+  (void)engine.QueryCandidates("にほん", "", kNowBase);
+  EXPECT_TRUE(all_equal(converted, ""));
+  EXPECT_TRUE(all_equal(scored, ""));
+
+  const std::string profile = "日本語の文章";
+  engine.SetBenchInstructionProfile(profile);
+  converted.clear();
+  scored.clear();
+  (void)engine.QueryCandidates("にほん", "", kNowBase);
+  EXPECT_TRUE(all_equal(converted, profile));
+  EXPECT_TRUE(all_equal(scored, profile));
+}
 
 // DEV-1648: live conversion takes the candidate window's final filters, and a
 // dropped top candidate leaves the next one rather than the kana.

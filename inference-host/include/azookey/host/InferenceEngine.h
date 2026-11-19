@@ -218,6 +218,9 @@ enum class UserDictionaryEditResult {
   LockFailed,
   LoadFailed,
   SaveFailed,
+  // The dictionary on disk has version 3 or later; nothing was written
+  // (user-dictionary-pos-spec section 3.2).
+  DictionaryTooNew,
 };
 
 constexpr const char* UserDictionaryEditResultName(UserDictionaryEditResult result) {
@@ -236,6 +239,8 @@ constexpr const char* UserDictionaryEditResultName(UserDictionaryEditResult resu
       return "load_failed";
     case UserDictionaryEditResult::SaveFailed:
       return "save_failed";
+    case UserDictionaryEditResult::DictionaryTooNew:
+      return "dictionary_too_new";
   }
   return "unavailable";
 }
@@ -515,7 +520,9 @@ class InferenceEngine {
   // M49 learning data management (DEV-1190, learning-data-management-spec
   // section 4). Each call takes every store lock it needs at once and
   // persists the stores it changed before it returns.
-  enum class ForgetOutcome { NotFound, Forgotten, SaveFailed };
+  // StoreUnavailable: a user dictionary of version 3 or later, left as it is
+  // (user-dictionary-pos-spec section 3.2).
+  enum class ForgetOutcome { NotFound, Forgotten, SaveFailed, StoreUnavailable };
   LearningDataPage ListLearningEntries(LearningDataStore store, const std::string& query,
                                        size_t offset, size_t limit);
   ForgetOutcome ForgetLearningEntry(LearningDataStore store, const std::string& id);

@@ -120,6 +120,15 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
   if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->ReloadIfChanged()) {
     return ForgetOutcome::SaveFailed;
   }
+  // user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is left as
+  // it is, and what was read is published.
+  if (snapshot->too_new()) {
+    std::scoped_lock lock(state_mutex_);
+    *user_dict_ = std::move(*snapshot);
+    indexed_user_dict_ = nullptr;
+    RefreshDictionaryLocked();
+    return ForgetOutcome::StoreUnavailable;
+  }
   const auto before = *snapshot;
   if (!snapshot->Remove(entry->surface, entry->reading)) return ForgetOutcome::NotFound;
   const bool saved = snapshot->Save();
@@ -332,8 +341,15 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
   if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->ReloadIfChanged()) {
     return ResetOutcome::SaveFailed;
   }
-  // user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is left as it is.
-  if (snapshot->too_new()) return ResetOutcome::Unavailable;
+  // user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is left as
+  // it is, and what was read is published.
+  if (snapshot->too_new()) {
+    std::scoped_lock lock(state_mutex_);
+    *user_dict_ = std::move(*snapshot);
+    indexed_user_dict_ = nullptr;
+    RefreshDictionaryLocked();
+    return ResetOutcome::Unavailable;
+  }
   const auto before = *snapshot;
   snapshot->Clear();
   const bool saved = snapshot->Save();

@@ -162,6 +162,11 @@ live 変換（`ConversionContext::live`）では N = 1 とする。それ以外�
 無効になったのが lattice_core 自身なら、表の 1 行目によりラティスを作らない。
 
 どの縮退も、理由をログに残し、Host を止めない。ログには読みと表層を入れない（`docs/observability-spec.md` §7.6）。
+lattice_core の読み込みの結果は同梱辞書の読み込みと同じ `static_dictionary_load`（`layer` が `lattice_core.azdic`）に、
+層の `CONN` を使わないことは `lattice_connections`（`layer` と `result=unused`）に出す。要求ごとの縮退は
+`lattice_conversion` の `result` に出す。値は、語彙の失敗と不正な表層が `failed`、64 code point を超える読みと不正な読みが `rejected`、
+前向き Viterbi の前の打ち切りが `aborted`、1 位だけを足した打ち切りが `truncated` である。要求そのものが cancel された
+ときは、その要求は候補を返さないので出さない。
 
 ## 4. ラティスの構築
 
@@ -178,6 +183,9 @@ live 変換（`ConversionContext::live`）では N = 1 とする。それ以外�
 - lattice_core
 - 可変層（`user_dictionary`、`auto_words`、`app_specific_dictionary`）
 - ユーザー辞書の展開形の索引（`docs/user-dictionary-pos-spec.md` §4.6）
+
+M65 の版は、可変層の語として `DictionaryStore` の可変層（ユーザー辞書の語）だけを引く。確定した auto-word の語は
+`AutoWordStore` が持ち、前方一致を持たないので、ノードにする対応は DEV-2167 が受け持つ。
 
 `max_results` は 0（無制限）で呼ぶ。上限に達した `CommonPrefixSearch` は短いキーから埋めて打ち切り、打ち切りを
 知らせない（`docs/azdic-physical-layer-spec.md` §15.4）。ラティスでは長い語ほど落ちるためである。alias キー

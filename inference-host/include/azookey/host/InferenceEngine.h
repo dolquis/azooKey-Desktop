@@ -114,6 +114,17 @@ struct DictionaryLayerConfig {
   bool app_specific_dictionary_enabled{true};
 };
 
+// M65 lattice conversion (docs/lattice-conversion-spec.md section 3). Internal switches, not
+// settings.json keys.
+struct LatticeConfig {
+  // Stage 1 (section 3.2): the N-best on requests that do not go through the model. Off also
+  // keeps LoadBundledDictionaryLayers from loading lattice_core (bench --lattice off).
+  bool enabled{true};
+  // Stage 2 (section 3.3, DEV-2102): also on requests the model answered. Its score band is not
+  // decided, so no candidates are added while it is on.
+  bool with_model{false};
+};
+
 // M25 power-saving lanes (docs/copilot-pc-backend-spec.md section 6.2). Fast: one Zenzai pass with
 // a single beam. Heavy: the full beam and the extra passes on top of it (the NLL rerank).
 enum class InferenceLane { Fast, Heavy };
@@ -128,6 +139,7 @@ struct EngineConfig {
   // M60 inline English candidates (settings inlineEnglish*).
   EnglishCandidateConfig english;
   NllConfig nll;
+  LatticeConfig lattice;
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
   std::optional<int32_t> n_gpu_layers;
@@ -373,6 +385,8 @@ class InferenceEngine {
     bool loaded;
     std::string error;
   };
+  // The static layers, then, while EngineConfig::lattice.enabled, lattice_core.azdic
+  // (docs/lattice-conversion-spec.md section 8.2) as the last result.
   std::vector<DictionaryLoadResult> LoadBundledDictionaryLayers(
       const std::filesystem::path& directory);
   bool LoadDictionaryLayer(learning::LayerId layer, const std::filesystem::path& path,
@@ -410,6 +424,10 @@ class InferenceEngine {
   // with the transient-conflict retry budget that save is given. Set it before
   // any observation is committed.
   void SetBeforeLearningSaveForTests(std::function<void(std::chrono::milliseconds)> hook);
+  // Test-only: the budget of a lattice built after the model fell back (15 ms,
+  // docs/lattice-conversion-spec.md section 3.2), so a slow build (coverage) does not cut the
+  // lattice off by time. Set it before any query.
+  void SetLatticeFallbackBudgetForTests(std::chrono::nanoseconds budget);
   // azookey_bench only (conversion-quality-benchmark-spec section 15.5): the instruction_profile
   // of the contexts QueryCandidates gives the model conversion and NLL rerank. The Host never
   // calls it, so its requests keep the empty profile (zenzai-inference-spec section 9.4.2).
@@ -487,7 +505,9 @@ class InferenceEngine {
   //   kAmbiguousReadingTypedKept candidates whose surfaces it lacks; otherwise
   //   kana's.
   // - Otherwise (no model) kana's candidates come back, followed by the
-  //   alternative's dictionary candidates whose surfaces kana's lack.
+  //   alternative's dictionary candidates whose surfaces kana's lack. The
+  //   alternative is converted without the lattice (DEV-2101), so these are
+  //   the words of its dictionaries only.
   CandidatesResult QueryAmbiguousCandidatesEx(const std::string& kana,
                                               const std::vector<std::string>& alternatives,
                                               const std::string& context, uint64_t now_epoch_sec,
@@ -620,7 +640,25 @@ class InferenceEngine {
                                          uint32_t max_candidates, bool live,
                                          const InferenceTelemetry* telemetry,
                                          const TagBoosts* tag_boosts = nullptr,
-                                         const MixedConversionOptions* mixed = nullptr);
+                                         const MixedConversionOptions* mixed = nullptr,
+                                         bool lattice_allowed = true);
+  // QueryCandidatesEx; `lattice_allowed` false converts without the lattice.
+  CandidatesResult QueryFilteredCandidates(const std::string& kana, const std::string& context,
+                                           uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
+                                           uint32_t max_candidates, bool live,
+                                           const InferenceTelemetry* telemetry,
+                                           const TagBoosts* tag_boosts,
+                                           const MixedConversionOptions* mixed,
+                                           bool lattice_allowed);
+  // The lattice N-best of `kana` as candidates (docs/lattice-conversion-spec.md section 3.4),
+  // with the search's status for the logs of section 3.6.
+  std::vector<core::Candidate> LatticeCandidatesLocked(
+      const std::string& kana, size_t max_paths, const std::atomic<bool>* cancel,
+      std::optional<std::chrono::steady_clock::time_point> deadline,
+      core::LatticeStatus& status) const;
+  // Logs the static layers whose CONN the lattice does not use (section 3.6): `layer` only,
+  // or every layer.
+  void LogLatticeConnectionsLocked(std::optional<learning::LayerId> layer = std::nullopt) const;
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide
   // whether a committed (reading, surface) pair is an unknown word worth mining.
@@ -743,6 +781,8 @@ class InferenceEngine {
   std::function<void()> before_user_dictionary_file_lock_for_tests_;
   std::function<void(std::chrono::milliseconds)> before_learning_save_for_tests_;
   std::function<void(const core::ConversionContext&)> nll_context_observer_for_tests_;
+  // Nanoseconds, set by the constructor; read by every query that falls back from the model.
+  std::atomic<int64_t> lattice_fallback_budget_ns_{0};
   // Guarded by state_mutex_.
   std::string bench_instruction_profile_;
   // Written with state_mutex_ and english_mutex_; either protects reads.

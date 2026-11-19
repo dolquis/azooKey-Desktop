@@ -123,7 +123,9 @@ Ctrl+Backspace を押した時点で、次がすべて成り立つときに取�
 2. Ctrl+Backspace を受けた context が、確定した context と同じである。
 3. IME が On で、英数モードではなく、アプリがキーボード入力を無効にした context（`docs/tsf-deep-integration-spec.md`
    §4.3）でもない。
-4. composition、候補窓（候補モードと予測モード）、確定の再試行の待ち、Space の応答待ちのどれも無い。
+4. composition、候補窓（候補モードと予測モード）、確定の再試行の待ち、Space の応答待ちのどれも無い。読み・未確定の
+   ローマ字・一括変換の入力、Unicode 入力、再変換の候補一覧、絵文字検索、カッコ補完の composition、句読点の最終応答の
+   待ちも、入力中の状態としてこれに含める。
 5. 確定の edit の後に、選択とキャレットが動いていない。`OnEndEdit` で、確定した edit の後の選択の変化を見る
    （`docs/user-learning-enhancement-spec.md` §4.1 の `undo` の窓と同じ見方）。この変化を見られるよう、TSF の text edit
    sink が見ている context の確定だけを対象として記録する（同 §4.1 と同じ）。
@@ -215,6 +217,7 @@ TIP は `OnKeyDown` の中で、同期の読み書きの edit session（`TF_ES_S
   読みが変わる Backspace、句読点を足した確定）。
 - 取り消した観測と同じ表層を確定し直したとき。
 - 部分確定したとき、Esc で取り消したとき、確定しないまま終わったとき（フォーカスの喪失など）。
+- 戻した入力の確定より前に context の push / pop があったとき。保留していた `undo` はその時点で捨てる。
 
 取り消した時点で `undo` を送らないのは、打ち足すための取り消しや選び直しで、正しい表層に減点を残さないためである。
 `correction_reject` は `reject_count` を増やし、`correction_penalty` の `net_reject` は accept でしか減らない

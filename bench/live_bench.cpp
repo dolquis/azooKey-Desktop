@@ -68,8 +68,8 @@ void PrintUsage(const char* exe) {
          "to trace.jsonl by default. --nll sets NLL rerank (default off, the shipped "
          "setting). --decode-stats writes one line per query with its latency, deadline "
          "cut-off and candidate sources. --dict-dir loads the bundled static layers of DIR "
-         "(the dict directory of dictbuild/build_bundled.py); --lattice defaults to on with it, "
-         "and this build has no lattice conversion, so pass --lattice off. --personal-eval "
+         "(the dict directory of dictbuild/build_bundled.py); --lattice defaults to on with it "
+         "and then needs DIR/lattice_core.azdic. --personal-eval "
          "evaluates your own learning store, read without changing it, and writes aggregates "
          "only; --profile places a bench-only Zenzai profile in the prompt and needs --model.\n";
 }
@@ -413,12 +413,6 @@ int main(int argc, char** argv) {
     if (*lattice_enabled && dict_dir.empty()) {
       throw std::invalid_argument("--lattice on requires --dict-dir");
     }
-    if (*lattice_enabled) {
-      // Without lattice conversion, an "on" run would report lattice-off results as on.
-      throw std::invalid_argument(
-          "--lattice on needs lattice conversion, which this build does not have; "
-          "pass --lattice off");
-    }
     if (quality_options.typo_mode != "off") {
       throw std::invalid_argument("--typo-mode supports only off until M55");
     }
@@ -562,6 +556,8 @@ int main(int argc, char** argv) {
                                                             : azookey::host::BackendKind::Cpu;
   engine_config.model_path = quality_options.model;
   if (nll_enabled) engine_config.nll.enabled = *nll_enabled;
+  // lattice-conversion-spec section 10.1: A and B differ only in the lattice's internal switch.
+  engine_config.lattice.enabled = *lattice_enabled;
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
                                         engine_config, trace_logger ? &*trace_logger : nullptr);
   if (!quality_options.model.empty() && !engine.LoadModel()) {
@@ -578,7 +574,14 @@ int main(int argc, char** argv) {
     }
     bool any_loaded = false;
     for (const auto& layer : engine.LoadBundledDictionaryLayers(dict_dir)) {
-      if (layer.loaded) {
+      if (layer.name == "lattice_core.azdic") {
+        // Section 10.1: B without lattice_core would measure A's candidates as B.
+        if (!layer.loaded) {
+          std::cerr << "--lattice on could not load lattice_core.azdic: " << layer.error
+                    << std::endl;
+          return 2;
+        }
+      } else if (layer.loaded) {
         any_loaded = true;
       } else if (std::filesystem::exists(dict_dir / layer.name)) {
         // A present but unreadable layer would silently change the measured configuration.

@@ -1,17 +1,21 @@
 add_library(azookey_core STATIC
   src/AppProfileResolver.cpp
+  src/AzikTable.cpp
   src/BodyLogGate.cpp
   src/BracketPairing.cpp
   src/BracketSettings.cpp
   src/BracketTable.cpp
+  src/CalculatorRewriter.cpp
   src/CharacterFormCycle.cpp
   src/CommandLine.cpp
   src/CrashRetention.cpp
   src/CrashReporting.cpp
   src/CustomRomajiLoader.cpp
+  src/DateTimeRewriter.cpp
   src/DoubleArrayTrie.cpp
   src/EtwLogger.cpp
   src/InputState.cpp
+  src/KanaInput.cpp
   src/KatakanaRewriter.cpp
   src/Lattice.cpp
   src/LatticeConnection.cpp

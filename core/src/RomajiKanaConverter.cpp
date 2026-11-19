@@ -3,13 +3,15 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
 namespace azookey::core {
 namespace {
 
-// Mirrors the legacy default table (AzooKeyKanaKanjiConverter defaultRomanToKanaMap).
+// Mirrors the legacy default table (AzooKeyKanaKanjiConverter defaultRomanToKanaMap, MIT;
+// see THIRD_PARTY_LICENSES).
 // Doubled consonants, "nn" and the "ny" exception are handled by Feed instead.
 const std::unordered_map<std::string, std::string> kRomajiMap = {
     {"a", "あ"},     {"xa", "ぁ"},    {"la", "ぁ"},    {"i", "い"},     {"xi", "ぃ"},
@@ -76,6 +78,41 @@ bool IsBuiltinRomajiPrefix(const std::string& pending) {
   });
 }
 
+char AsciiLower(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
+
+std::string AsciiLower(std::string_view text) {
+  std::string lower(text);
+  for (char& c : lower) c = AsciiLower(c);
+  return lower;
+}
+
+// Custom and AZIK tables keep letter case in their rules (docs/legacy-parity-spec.md section
+// 5.1). A key matches the rule with the same case first, then the rule of its lowercase form,
+// so a Shift-typed letter falls back to the lowercase rule when no capital rule exists.
+const CustomRomajiRule* FindCustomRule(const CustomRomajiTable& table, std::string_view key) {
+  if (const auto exact = table.find(key); exact != table.end()) return &exact->second;
+  const std::string lower = AsciiLower(key);
+  if (lower == key) return nullptr;
+  const auto folded = table.find(lower);
+  return folded != table.end() ? &folded->second : nullptr;
+}
+
+// Whether a rule key starts with `prefix`. `strictly_longer` ignores a key equal to the prefix.
+bool HasKeyWithPrefix(const CustomRomajiTable& table, std::string_view prefix,
+                      bool strictly_longer) {
+  const auto it = strictly_longer ? table.upper_bound(prefix) : table.lower_bound(prefix);
+  return it != table.end() && it->first.starts_with(prefix);
+}
+
+// The table can still continue `prefix`: through a rule with the same case, or through the
+// lowercase form that a Shift-typed letter falls back to.
+bool CanExtendCustomPrefix(const CustomRomajiTable& table, std::string_view prefix,
+                           bool strictly_longer) {
+  if (HasKeyWithPrefix(table, prefix, strictly_longer)) return true;
+  const std::string lower = AsciiLower(prefix);
+  return lower != prefix && HasKeyWithPrefix(table, lower, strictly_longer);
+}
+
 bool IsConsonant(char c) {
   const std::string vowels = "aeiou";
   return std::isalpha(static_cast<unsigned char>(c)) != 0 && vowels.find(c) == std::string::npos;
@@ -90,10 +127,11 @@ bool IsVowelOrY(char c) {
 
 std::string RomajiKanaConverter::Feed(char ascii) {
   if (custom_table_) {
-    pending_.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ascii))));
+    // The caller decides the letter case from Shift; the table lookup folds it as needed.
+    pending_.push_back(ascii);
     return ConvertCustomPending(false);
   }
-  const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(ascii)));
+  const char lower = AsciiLower(ascii);
   // 長音: '-' キーは長音符「ー」に変換する（MS-IME 標準のローマ字挙動）。
   // 直前の未確定ローマ字があれば先に確定してから長音符を付与する。
   if (ascii == '-') {
@@ -151,13 +189,11 @@ void RomajiKanaConverter::SetCustomTable(std::shared_ptr<const CustomRomajiTable
 bool RomajiKanaConverter::CanContinueCustomWith(char ascii) const {
   if (!custom_table_ || static_cast<unsigned char>(ascii) > 0x7f) return false;
   std::string prefix = pending_;
-  const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(ascii)));
-  prefix.push_back(lower);
+  prefix.push_back(ascii);
   const auto starts_rule = [&](std::string_view candidate) {
-    const auto match = custom_table_->lower_bound(candidate);
-    return match != custom_table_->end() && match->first.starts_with(candidate);
+    return CanExtendCustomPrefix(*custom_table_, candidate, false);
   };
-  return starts_rule(prefix) || (!pending_.empty() && starts_rule(std::string_view(&lower, 1)));
+  return starts_rule(prefix) || (!pending_.empty() && starts_rule(std::string_view(&ascii, 1)));
 }
 
 void RomajiKanaConverter::PopPendingPreview() {
@@ -172,7 +208,8 @@ std::string RomajiKanaConverter::PreviewPending() const {
   if (!custom_table_ && (pending_ == "n" || pending_ == "nn")) {
     return "ん";
   }
-  return pending_;
+  // A letter that matches no rule stays in the reading in lowercase.
+  return custom_table_ ? AsciiLower(pending_) : pending_;
 }
 
 std::string RomajiKanaConverter::Preview(const std::string& ascii) {
@@ -295,21 +332,17 @@ std::string RomajiKanaConverter::ConvertCustomPending(bool force_flush) {
   while (!pending_.empty()) {
     const CustomRomajiRule* best = nullptr;
     for (size_t length = (std::min)(pending_.size(), size_t{8}); length > 0; --length) {
-      const auto match = custom_table_->find(std::string_view(pending_.data(), length));
-      if (match != custom_table_->end()) {
-        best = &match->second;
-        break;
-      }
+      best = FindCustomRule(*custom_table_, std::string_view(pending_.data(), length));
+      if (best) break;
     }
-    const auto longer = custom_table_->upper_bound(pending_);
-    const bool longer_prefix =
-        longer != custom_table_->end() && longer->first.starts_with(pending_);
-    if (!force_flush && longer_prefix) break;
+    // A longer rule with the same case wins over the lowercase rule of a shorter match, so
+    // wait for the next key (docs/legacy-parity-spec.md section 5.1).
+    if (!force_flush && CanExtendCustomPrefix(*custom_table_, pending_, true)) break;
     if (best) {
       output += best->output;
       pending_.erase(0, best->consume);
     } else {
-      output.push_back(pending_.front());
+      output.push_back(AsciiLower(pending_.front()));
       pending_.erase(0, 1);
     }
   }

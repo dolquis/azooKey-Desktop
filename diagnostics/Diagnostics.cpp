@@ -353,19 +353,34 @@ j::Value RedactSettingsValue(const j::Value& value, const j::Value* schema,
     const auto* properties = shape ? shape->FindObject("properties") : nullptr;
     const auto* additional = shape ? shape->Find("additionalProperties") : nullptr;
     j::Object redacted;
+    std::size_t hidden_keys = 0;
     for (const auto& [child_key, child] : value.AsObject()) {
       const j::Value* child_schema = nullptr;
       std::string_view child_name = child_key;
+      bool known_key = false;
       if (properties) {
         const auto found = properties->find(child_key);
-        if (found != properties->end()) child_schema = &found->second;
+        if (found != properties->end()) {
+          child_schema = &found->second;
+          known_key = true;
+        }
       }
       if (!child_schema && additional && additional->IsObject()) {
         // Map keys such as app names and tag names are data, not field names.
         child_schema = additional;
         child_name = {};
+        known_key = true;
       }
-      redacted.emplace(child_key, RedactSettingsValue(child, child_schema, child_name, sensitive));
+      // A key the schema does not name can itself carry text, so it is replaced by a numbered
+      // placeholder. The name still steers the value's redaction through child_name.
+      std::string out_key = child_key;
+      if (!known_key) {
+        do {
+          out_key = "***redacted-key-" + std::to_string(++hidden_keys) + "***";
+        } while (value.AsObject().contains(out_key));
+      }
+      redacted.emplace(std::move(out_key),
+                       RedactSettingsValue(child, child_schema, child_name, sensitive));
     }
     return j::Value(std::move(redacted));
   }

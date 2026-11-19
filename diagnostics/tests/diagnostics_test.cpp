@@ -636,11 +636,15 @@ TEST(DiagnosticsTest, RedactedSettingsKeepTypedControlsAndHideSensitiveValues) {
   const auto* custom = privacy->Find("custom");
   ASSERT_NE(custom, nullptr);
   EXPECT_EQ(custom->GetBool("aiCandidate"), true);
-  EXPECT_EQ(value->GetString("unknownSecret"), "***redacted***");
-  EXPECT_EQ(value->GetString("unknownToken"), "***redacted***");
-  const auto* unexpected = value->Find("unexpected");
+  // Keys the schema does not name are replaced by numbered placeholders, in key order.
+  const auto* unexpected = value->Find("***redacted-key-1***");
   ASSERT_NE(unexpected, nullptr);
-  EXPECT_EQ(unexpected->GetString("maxCandidates"), "***redacted***");
+  EXPECT_EQ(unexpected->GetString("***redacted-key-1***"), "***redacted***");
+  EXPECT_EQ(value->GetString("***redacted-key-2***"), "***redacted***");
+  EXPECT_EQ(value->GetString("***redacted-key-3***"), "***redacted***");
+  for (const auto& name : {"unknownSecret", "unknownToken", "unexpected"}) {
+    EXPECT_EQ(redacted.find(name), std::string::npos) << name;
+  }
   EXPECT_EQ(redacted.find("private prompt"), std::string::npos);
   EXPECT_EQ(redacted.find("private malformed value"), std::string::npos);
 }
@@ -671,20 +675,55 @@ TEST(DiagnosticsTest, RedactedSettingsKeepSchemaTypedValuesUnderBodyFieldNames) 
   EXPECT_EQ(typo->GetNumber("maxReadingHypotheses"), 99);
   EXPECT_EQ(typo->GetNumber("minConfidenceForTopCandidate"), 0.75);
   EXPECT_EQ(typo->GetBool("disableInSecretApps"), false);
-  EXPECT_EQ(typo->GetString("futureNote"), "***redacted***");
+  EXPECT_EQ(typo->GetString("***redacted-key-1***"), "***redacted***");
   EXPECT_EQ(value->GetBool("inlineEnglishCandidates"), false);
   EXPECT_EQ(value->GetBool("fullWidthEnglishCandidate"), true);
   EXPECT_EQ(value->GetString("maxCandidates"), "***redacted***");
   EXPECT_EQ(value->GetString("contextReselection"), "***redacted***");
   EXPECT_EQ(value->GetString("openAiApiKey"), "***redacted***");
-  EXPECT_EQ(value->GetString("unknownNote"), "***redacted***");
-  EXPECT_EQ(value->GetNumber("unknownCount"), 3);
-  EXPECT_EQ(value->GetString("unknownNull"), "***redacted***");
+  // An unknown top-level key keeps a number or boolean value but loses its name, in key order
+  // (unknownCount, unknownNote, unknownNull).
+  EXPECT_EQ(value->GetNumber("***redacted-key-1***"), 3);
+  EXPECT_EQ(value->GetString("***redacted-key-2***"), "***redacted***");
+  EXPECT_EQ(value->GetString("***redacted-key-3***"), "***redacted***");
+  for (const auto& name : {"futureNote", "unknownNote", "unknownCount", "unknownNull"}) {
+    EXPECT_EQ(redacted.find(name), std::string::npos) << name;
+  }
   // A known path holding a container of another type is redacted whole, numbers included.
   EXPECT_EQ(value->GetString("profilesByApp"), "***redacted***");
   EXPECT_EQ(redacted.find("7777"), std::string::npos);
   EXPECT_EQ(redacted.find("private"), std::string::npos);
   EXPECT_EQ(redacted.find("AQID"), std::string::npos);
+}
+
+TEST(DiagnosticsTest, RedactedSettingsHideUnknownKeyNamesInMapsAndArrays) {
+  const auto redacted = diag::RedactSettingsJson(R"json({
+    "profilesByApp": {"app.exe": {"privacyMode": "private", "futureSetting": 5}},
+    "model": {"benchmarkHistory": [{"futureField": true, "extraNote": 7}]},
+    "***redacted-key-1***": 1,
+    "unknownCount": 2
+  })json");
+  const auto value = j::Parse(redacted);
+  ASSERT_TRUE(value.has_value());
+  // A map key and a known key stay readable; an unknown key inside a map value does not.
+  const auto* profile = value->Find("profilesByApp")->Find("app.exe");
+  ASSERT_NE(profile, nullptr);
+  EXPECT_EQ(profile->GetString("privacyMode"), "private");
+  EXPECT_EQ(profile->GetNumber("***redacted-key-1***"), 5);
+  // The unknown key inside an array element is hidden too.
+  const auto* history = value->Find("model")->GetArray("benchmarkHistory");
+  ASSERT_NE(history, nullptr);
+  ASSERT_EQ(history->size(), 1u);
+  // Numbered in key order: extraNote, then futureField.
+  EXPECT_EQ((*history)[0].GetNumber("***redacted-key-1***"), 7);
+  EXPECT_EQ((*history)[0].GetBool("***redacted-key-2***"), true);
+  // A placeholder name that already exists in the input is skipped, never overwritten: both
+  // unknown top-level keys survive under the next free numbers.
+  EXPECT_EQ(value->GetNumber("***redacted-key-2***"), 1);
+  EXPECT_EQ(value->GetNumber("***redacted-key-3***"), 2);
+  for (const auto& name : {"futureSetting", "futureField", "extraNote", "unknownCount"}) {
+    EXPECT_EQ(redacted.find(name), std::string::npos) << name;
+  }
 }
 
 TEST(DiagnosticsTest, RedactedSettingsHideEndpointCredentialsAndKeepTheHost) {

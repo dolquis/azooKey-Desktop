@@ -1,13 +1,17 @@
 add_executable(core_tests
   app_profile_resolver_test.cpp
+  azik_table_test.cpp
   body_log_gate_test.cpp
   bracket_pairing_test.cpp
+  calculator_rewriter_test.cpp
   character_form_cycle_test.cpp
   command_line_test.cpp
   crash_retention_test.cpp
   custom_romaji_test.cpp
+  date_time_rewriter_test.cpp
   etw_logger_test.cpp
   input_state_test.cpp
+  kana_input_test.cpp
   katakana_rewriter_test.cpp
   live_conversion_chunker_test.cpp
   m59_input_state_test.cpp

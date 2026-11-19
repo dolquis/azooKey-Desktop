@@ -201,7 +201,7 @@ bool IsWordCodepoint(char32_t c) {
 core::ConversionContext BuildContext(
     const std::string& kana, const std::string& context, const std::atomic<bool>* cancel = nullptr,
     std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt,
-    uint32_t max_candidates = 0, bool live = false) {
+    uint32_t max_candidates = 0, bool live = false, const std::string& instruction_profile = {}) {
   core::ConversionContext conversion_context;
   conversion_context.preceding_text = context;
   conversion_context.preedit_text = kana;
@@ -209,6 +209,7 @@ core::ConversionContext BuildContext(
   conversion_context.deadline = deadline;
   conversion_context.max_candidates = max_candidates;
   conversion_context.live = live;
+  conversion_context.instruction_profile = instruction_profile;
   return conversion_context;
 }
 
@@ -1285,6 +1286,16 @@ void InferenceEngine::SetBeforeLearningSaveForTests(
   before_learning_save_for_tests_ = std::move(hook);
 }
 
+void InferenceEngine::SetBenchInstructionProfile(std::string profile) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  bench_instruction_profile_ = std::move(profile);
+}
+
+void InferenceEngine::SetNllContextObserverForTests(
+    std::function<void(const core::ConversionContext&)> hook) {
+  nll_context_observer_for_tests_ = std::move(hook);
+}
+
 bool InferenceEngine::AddUserWord(const learning::UserWord& word,
                                   const UserDictionaryEditOptions& options) {
   return EditUserDictionary(
@@ -1971,6 +1982,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   std::shared_ptr<core::IConverter> converter;
   std::shared_ptr<core::IConverter> fallback_converter;
   EngineConfig config;
+  std::string instruction_profile;
   uint64_t nll_revision{};
   bool using_model_converter = false;
   learning::AutoWordStore* auto_word_store = nullptr;
@@ -1990,6 +2002,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     auto_word_store = auto_word_store_;
     fallback_converter = fallback_converter_;
     config = config_;
+    instruction_profile = bench_instruction_profile_;
     nll_revision = nll_config_revision_;
     using_model_converter = model_converter_ && converter == model_converter_;
     // Preserve M9's explicit user word score while static layers use M53 scoring.
@@ -2072,7 +2085,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     try {
       auto values = target->Convert(
           kana, BuildContext(kana, limited_context, cancel, deadline,
-                             model ? model_max_candidates : effective_max_candidates, live));
+                             model ? model_max_candidates : effective_max_candidates, live,
+                             instruction_profile));
       auto result = canceled() ? core::EtwResult::Cancelled : core::EtwResult::Success;
       // Zenzai can absorb an exception and return kana fallback candidates.
       // Preserve that backend failure independently of the successful response.
@@ -2184,15 +2198,15 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       trace_rerank ? std::optional{std::chrono::steady_clock::now()} : std::nullopt;
   if (nll) {
     NllOutcome outcome;
+    const auto nll_context = BuildContext(kana, limited_context, cancel, conversion_deadline,
+                                          effective_max_candidates, live, instruction_profile);
+    if (nll_context_observer_for_tests_) nll_context_observer_for_tests_(nll_context);
     auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
     // A cut-off before the first beam step has spent the deadline NLL would score under, so it
     // skips NLL as it did while that cut-off still counted as degraded (DEV-1700).
     if (!convert_failed && zenzai && zenzai->runtime_loaded() && !zenzai->last_error() &&
         !zenzai->last_fell_back_at_deadline()) {
-      outcome = zenzai->RerankNll(kana, merged,
-                                  BuildContext(kana, limited_context, cancel, conversion_deadline,
-                                               effective_max_candidates, live),
-                                  config.nll, nll_revision);
+      outcome = zenzai->RerankNll(kana, merged, nll_context, config.nll, nll_revision);
       std::lock_guard<std::mutex> lock(state_mutex_);
       MirrorModelRuntimeErrorLocked(converter);
     } else {

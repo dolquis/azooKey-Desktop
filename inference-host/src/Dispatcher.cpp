@@ -1029,6 +1029,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
     res.batch_auto_punctuation = settings.batch_auto_punctuation;
     res.number_rewriter = settings.number_rewriter;
     res.katakana_rewriter = settings.katakana_rewriter;
+    res.date_time_rewriter = settings.date_time_rewriter;
+    res.calculator_rewriter = settings.calculator_rewriter;
     res.symbol_rewriter = settings.symbol_rewriter;
     res.emoji_rewriter = settings.emoji_rewriter;
     res.emoji_trigger_search = settings.emoji_trigger_search;

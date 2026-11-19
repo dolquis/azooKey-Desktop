@@ -396,6 +396,13 @@ class InferenceEngine {
   // with the transient-conflict retry budget that save is given. Set it before
   // any observation is committed.
   void SetBeforeLearningSaveForTests(std::function<void(std::chrono::milliseconds)> hook);
+  // azookey_bench only (conversion-quality-benchmark-spec section 15.5): the instruction_profile
+  // of the contexts QueryCandidates gives the model conversion and NLL rerank. The Host never
+  // calls it, so its requests keep the empty profile (zenzai-inference-spec section 9.4.2).
+  void SetBenchInstructionProfile(std::string profile);
+  // Test-only: receives the context QueryCandidates gives NLL rerank, whenever NLL is enabled and
+  // the request is not live, before the model check. Set it before any query.
+  void SetNllContextObserverForTests(std::function<void(const core::ConversionContext&)> hook);
 
   bool LoadModel();
   AiTransformResult TransformLocal(const AiTransformRequest& request,
@@ -727,6 +734,9 @@ class InferenceEngine {
   std::timed_mutex user_dict_writer_mutex_;
   std::function<void()> before_user_dictionary_file_lock_for_tests_;
   std::function<void(std::chrono::milliseconds)> before_learning_save_for_tests_;
+  std::function<void(const core::ConversionContext&)> nll_context_observer_for_tests_;
+  // Guarded by state_mutex_.
+  std::string bench_instruction_profile_;
   // Written with state_mutex_ and english_mutex_; either protects reads.
   // Background/explicit flushes leave the live snapshot alone during erasure.
   bool learning_erasure_in_progress_{false};

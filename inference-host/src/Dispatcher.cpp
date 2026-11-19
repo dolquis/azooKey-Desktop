@@ -295,6 +295,8 @@ static_assert(UserDictErrorMatches(UserDictionaryEditResult::NotFound,
                                    ipc::kUserDictErrorNotFound));
 static_assert(UserDictErrorMatches(UserDictionaryEditResult::Unavailable,
                                    ipc::kUserDictErrorUnavailable));
+static_assert(UserDictErrorMatches(UserDictionaryEditResult::DictionaryTooNew,
+                                   ipc::kUserDictErrorDictionaryTooNew));
 
 // DEV-1572: one record per user dictionary or new-word edit, so a CLI failure
 // can be matched with what the Host was waiting for. Never the word itself.
@@ -1750,6 +1752,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleForgetLearningEntry(const ipc::En
   if (outcome == InferenceEngine::ForgetOutcome::SaveFailed) {
     res.ok = false;
     res.error = std::string(ipc::kLearningDataErrorSaveFailed);
+  } else if (outcome == InferenceEngine::ForgetOutcome::StoreUnavailable) {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorStoreUnavailable);
   }
   return reply();
 }

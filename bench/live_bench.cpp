@@ -83,11 +83,12 @@ const std::set<std::string, std::less<>> kPersonalEvalOptions = {
 };
 
 size_t ParseCount(const std::string& value, const char* name) {
+  // Digits only: std::stoull also takes leading spaces and a sign, so " -1" would wrap around.
+  const bool digits = !value.empty() && std::all_of(value.begin(), value.end(),
+                                                    [](char ch) { return ch >= '0' && ch <= '9'; });
   try {
-    size_t index = 0;
-    const auto parsed = std::stoull(value, &index);
-    if (index != value.size() || value.front() == '-') throw std::invalid_argument("invalid value");
-    return static_cast<size_t>(parsed);
+    if (!digits) throw std::invalid_argument("invalid value");
+    return static_cast<size_t>(std::stoull(value));
   } catch (const std::exception&) {
     throw std::invalid_argument(std::string(name) + " must be a non-negative integer");
   }
@@ -271,9 +272,10 @@ int main(int argc, char** argv) {
   // token is reported by position only (spec section 15.7).
   bool hide_arguments = false;
   for (int i = 1; i < argc; ++i) {
+    // A prefix, so that a mistyped "--profile=TEXT" hides its text as well.
     const std::string_view arg = argv[i];
     hide_arguments =
-        hide_arguments || arg == "--personal-eval" || arg == "--profile" || arg == "--profile-file";
+        hide_arguments || arg.starts_with("--personal-eval") || arg.starts_with("--profile");
   }
   try {
     for (int i = 1; i < argc; ++i) {
@@ -485,21 +487,24 @@ int main(int argc, char** argv) {
       if (learning_path.empty()) learning_path = defaults->learning_path;
       if (settings_path.empty()) settings_path = defaults->settings_path;
     }
-    const auto v2_path = azookey::learning::LearningStoreV2PathFor(learning_path);
-    for (const auto& written : {output_path, quality_options.per_case_path}) {
-      for (const auto& input :
-           {learning_path, azookey::learning::EncryptedPathFor(learning_path), v2_path,
-            azookey::learning::EncryptedPathFor(v2_path), settings_path}) {
-        if (SamePath(written, input)) {
-          std::cerr << "--output and --per-case must differ from the learning store and the "
-                       "settings"
-                    << std::endl;
-          return 2;
+    // weakly_canonical can throw; an unusable path is an input error like the others.
+    try {
+      const auto v2_path = azookey::learning::LearningStoreV2PathFor(learning_path);
+      for (const auto& written : {output_path, quality_options.per_case_path}) {
+        for (const auto& input :
+             {learning_path, azookey::learning::EncryptedPathFor(learning_path), v2_path,
+              azookey::learning::EncryptedPathFor(v2_path), settings_path}) {
+          if (SamePath(written, input)) {
+            throw std::invalid_argument(
+                "--output and --per-case must differ from the learning store and the settings");
+          }
         }
       }
-    }
-    if (SamePath(output_path, quality_options.per_case_path)) {
-      std::cerr << "--output and --per-case must differ" << std::endl;
+      if (SamePath(output_path, quality_options.per_case_path)) {
+        throw std::invalid_argument("--output and --per-case must differ");
+      }
+    } catch (const std::exception& ex) {
+      std::cerr << ex.what() << std::endl;
       return 2;
     }
     std::string error;

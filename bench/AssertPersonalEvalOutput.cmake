@@ -65,11 +65,13 @@ endfunction()
 
 set(BASE --personal-eval --learning "${LEARNING}" --settings "${SETTINGS}" --iterations 1)
 function(run_bench name)
+  # The bench writes UTF-8; decoding with the console code page would hide a leaked marker.
   execute_process(
     COMMAND "${BENCH_EXE}" ${ARGN}
     RESULT_VARIABLE result
     OUTPUT_VARIABLE stdout
     ERROR_VARIABLE stderr
+    ENCODING UTF8
   )
   expect_no_markers("${name} stdout and stderr" "${stdout}${stderr}")
   if(EXISTS "${OUTPUT}")
@@ -157,6 +159,7 @@ execute_process(
           --include-personal-text
   RESULT_VARIABLE per_case_result
   ERROR_VARIABLE per_case_stderr
+  ENCODING UTF8
 )
 if(NOT per_case_result EQUAL 0)
   message(FATAL_ERROR "--per-case --include-personal-text failed: ${per_case_stderr}")
@@ -164,8 +167,10 @@ endif()
 string(FIND "${per_case_stderr}" "writes the readings and surfaces" warned)
 file(READ "${PER_CASE}" per_case)
 string(FIND "${per_case}" "\"id\":\"personal_000001\"" first_id)
-if(warned EQUAL -1 OR first_id EQUAL -1)
-  message(FATAL_ERROR "per-case warning or id missing: ${per_case_stderr}")
+# The positive control of the marker scan: the allowed per-case file does hold the reading.
+string(FIND "${per_case}" "ぷらいべーと" marker_found)
+if(warned EQUAL -1 OR first_id EQUAL -1 OR marker_found EQUAL -1)
+  message(FATAL_ERROR "per-case warning, id or text missing: ${per_case_stderr}")
 endif()
 file(REMOVE "${PER_CASE}")
 
@@ -185,6 +190,15 @@ run_bench(split_profile ${BASE} --output "${OUTPUT}" --profile 田中 太郎)
 expect_exit(split_profile 2)
 run_bench(profile_without_model ${BASE} --output "${OUTPUT}" --profile 日本語の文章)
 expect_exit(profile_without_model 2)
+# --profile=TEXT is not an option, and the text never reaches stderr even without --personal-eval.
+run_bench(profile_equals --eval "${WORK_DIR}/bench/data/eval.jsonl" --output "${OUTPUT}"
+          --profile=田中太郎)
+expect_exit(profile_equals 2)
+# A count takes digits only: a leading space and a sign are not a way around the limit.
+foreach(count " -1" "+5" "1x" "")
+  run_bench(bad_count ${BASE} --output "${OUTPUT}" --max-cases "${count}")
+  expect_exit(bad_count 2)
+endforeach()
 run_bench(learning_without_personal --learning "${LEARNING}")
 expect_exit(learning_without_personal 2)
 

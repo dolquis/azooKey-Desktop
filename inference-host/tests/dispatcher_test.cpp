@@ -8275,6 +8275,12 @@ TEST_F(DispatcherTest, ImportUserDictionaryTextSaveFailureChangesNothing) {
   azookey::learning::UserDictionary bad_dict((blocking_parent / "user.json").string(),
                                              &azookey::learning::test::Crypto());
   engine.SetUserDictionary(&bad_dict);
+  // The engine gets the fixture's dictionary back however the test ends.
+  struct RestoreUserDictionary {
+    azookey::host::InferenceEngine& engine;
+    azookey::learning::UserDictionary& dictionary;
+    ~RestoreUserDictionary() { engine.SetUserDictionary(&dictionary); }
+  } restore{engine, user_dict};
   azookey::host::Dispatcher bad_dispatcher(&engine, &scheduler, &bad_dict,
                                            DefaultDispatcherConfig());
   const auto refused = ImportText(bad_dispatcher, 820, good);
@@ -8282,7 +8288,6 @@ TEST_F(DispatcherTest, ImportUserDictionaryTextSaveFailureChangesNothing) {
   EXPECT_FALSE(refused->ok);
   EXPECT_EQ(refused->error, std::optional<std::string>("save_failed"));
   EXPECT_EQ(bad_dict.Size(), 0u);
-  engine.SetUserDictionary(&user_dict);
   std::filesystem::remove_all(dir);
 }
 
@@ -8455,9 +8460,9 @@ TEST_F(DispatcherTest, ImportUserDictionaryTextBudgetStartsAfterTheParse) {
   const auto encrypted = azookey::learning::EncryptedPathFor(user_dict_path);
 
   // A parse that takes longer than the whole budget still saves.
-  dispatcher.SetTextImportWaitBudgetForTests(std::chrono::milliseconds(1000));
+  dispatcher.SetTextImportWaitBudgetForTests(std::chrono::milliseconds(3000));
   dispatcher.SetAfterTextImportParseForTests(
-      [] { std::this_thread::sleep_for(std::chrono::milliseconds(1500)); });
+      [] { std::this_thread::sleep_for(std::chrono::milliseconds(4000)); });
   const auto slow_parse = ImportText(dispatcher, 841, good);
   ASSERT_TRUE(slow_parse);
   EXPECT_TRUE(slow_parse->ok) << slow_parse->error.value_or("");

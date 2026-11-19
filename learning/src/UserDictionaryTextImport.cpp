@@ -69,6 +69,8 @@ void AppendUtf8(std::string& out, char32_t cp) {
 
 // Strict UTF-8: no overlong forms, surrogates or code points past U+10FFFF.
 bool DecodeUtf8(std::string_view text, std::u32string* out) {
+  // Reserved once, so no growth frees a copy of the plaintext unerased.
+  if (out) out->reserve(text.size());
   size_t i = 0;
   while (i < text.size()) {
     const auto b0 = static_cast<unsigned char>(text[i]);
@@ -108,6 +110,7 @@ bool DecodeUtf8(std::string_view text, std::u32string* out) {
 
 bool DecodeUtf16(std::string_view bytes, bool big_endian, std::u32string* out) {
   if (bytes.size() % 2 != 0) return false;
+  out->reserve(bytes.size() / 2);
   const auto unit = [&](size_t index) {
     const auto hi = static_cast<unsigned char>(bytes[index + (big_endian ? 0 : 1)]);
     const auto lo = static_cast<unsigned char>(bytes[index + (big_endian ? 1 : 0)]);
@@ -162,12 +165,15 @@ std::string EncodeUtf8(std::u32string_view text) {
 
 // ---- Lines and cells (section 6.4) ----
 
-std::vector<std::u32string_view> SplitLines(std::u32string_view text) {
+// Stops once it holds max_lines lines, so a file of line breaks alone costs at
+// most max_lines views (section 6.7); the caller refuses more than max_lines - 1.
+std::vector<std::u32string_view> SplitLines(std::u32string_view text, size_t max_lines) {
   std::vector<std::u32string_view> lines;
   size_t start = 0;
   for (size_t i = 0; i < text.size(); ++i) {
     if (text[i] != U'\r' && text[i] != U'\n') continue;
     lines.push_back(text.substr(start, i - start));
+    if (lines.size() >= max_lines) return lines;
     if (text[i] == U'\r' && i + 1 < text.size() && text[i + 1] == U'\n') ++i;
     start = i + 1;
   }
@@ -587,7 +593,7 @@ TextImportParseResult ParseUserDictionaryText(std::string_view bytes, TextImport
     return result;
   }
 
-  const auto lines = SplitLines(text);
+  const auto lines = SplitLines(text, kTextImportMaxLines + 1);
   if (lines.size() > kTextImportMaxLines) {
     result.error = TextImportError::TooLarge;
     return result;

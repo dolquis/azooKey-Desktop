@@ -20173,6 +20173,40 @@ TEST(TsfTipCommitUndoTest, ContextPushAndPopDropTheTarget) {
     EXPECT_FALSE(PressCtrlBackspace(h));
     EXPECT_EQ(h.context.document->text, L"前仮名");
   }
+  // §7: the "undo" a put-back input owes goes with a push or pop too.
+  for (const bool push : {true, false}) {
+    SCOPED_TRACE(push ? "push after the undo" : "pop after the undo");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    ASSERT_TRUE(h.service.pending_undo_correction_for_test());
+    DocumentContext other;
+    EXPECT_EQ(push ? h.service.OnPushContext(&other) : h.service.OnPopContext(&other), S_OK);
+    EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+  }
+}
+
+// §3, §4.2 item 4: while a commit waits for its retry with no reading (Unicode
+// input keeps none), Ctrl+Backspace is the app's as before M69, and does not
+// retry the commit.
+TEST(TsfTipCommitUndoTest, CtrlBackspaceWhileACommitWaitsForItsRetryGoesToTheApp) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM key : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'A'}, WPARAM{'1'}})
+    ASSERT_TRUE(h.Press(key));
+  h.context.lock_write = true;
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_TRUE(h.service.preedit_kana_.empty());
+  ASSERT_TRUE(h.service.terminated_composition_surface_.empty());
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  h.context.lock_write = false;
+  EXPECT_FALSE(PressCtrlBackspace(h));
+  // Still waiting: the key neither retried nor dropped the commit.
+  EXPECT_TRUE(h.service.committing_);
+  EXPECT_FALSE(h.service.commit_undo_target_for_test());
 }
 
 // §3, §4.2 item 4: while a candidate is being chosen, Ctrl+Backspace is the app's.
@@ -20193,20 +20227,27 @@ TEST(TsfTipCommitUndoTest, CtrlBackspaceWhileSelectingGoesToTheApp) {
 // §7: Ctrl+Backspace closes the typo window right after the commit, so the
 // Backspaces after it are no retyping of the commit.
 TEST(TsfTipCommitUndoTest, CtrlBackspaceClosesTheTypoRetypingWindow) {
-  DocumentPreeditHarness h;
-  ConfigureUndoHarness(h);
-  TypeTypoRomaji(h, "KANI");
-  ASSERT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.context.document->text, L"前かに");
-  // The undo cannot run, so the key goes to the app like a word delete.
-  h.context.lock_write = true;
-  ASSERT_FALSE(PressCtrlBackspace(h));
-  h.context.lock_write = false;
-  EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
-  EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
-  TypeTypoRomaji(h, "KAMI");
-  ASSERT_TRUE(h.Press(VK_RETURN));
-  EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+  for (const bool undo_key : {false, true}) {
+    SCOPED_TRACE(undo_key);
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    TypeTypoRomaji(h, "KANI");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.context.document->text, L"前かに");
+    ASSERT_TRUE(h.service.commit_undo_target_for_test());
+    if (undo_key) {
+      // The undo cannot run, so the key goes to the app like a word delete.
+      h.context.lock_write = true;
+      ASSERT_FALSE(PressCtrlBackspace(h));
+      h.context.lock_write = false;
+    }
+    EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+    EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+    TypeTypoRomaji(h, "KAMI");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    // Without Ctrl+Backspace the window is open and the retyping is observed.
+    EXPECT_EQ(h.service.last_queued_typo_observation_for_test().has_value(), !undo_key);
+  }
 }
 
 // §7: a reading corrected with Backspace in the put-back input is observed as

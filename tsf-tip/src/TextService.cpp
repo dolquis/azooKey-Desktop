@@ -2872,9 +2872,13 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       return S_OK;
     }
     // Ctrl chords reach the IME only when they map to an implemented action.
-    if (HasSystemModifier(modifiers) &&
-        !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
-                   candidate_ui_.IsShowing(), UnicodeInputActive()) &&
+    // Ctrl+Backspace while a commit waits for its retry stays the app's, as
+    // before M69 (commit-undo-spec §3, §4.2 item 4).
+    if (const auto chord =
+            MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
+                      candidate_ui_.IsShowing(), UnicodeInputActive());
+        HasSystemModifier(modifiers) &&
+        (!chord || (committing_ && IsActionKey(chord, core::UserAction::UndoCommit))) &&
         !(committing_ && !terminated_composition_surface_.empty()))
       return S_OK;
     if (committing_) {
@@ -3259,9 +3263,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     }
     // Ctrl chords reach the IME only when they map to an implemented action.
-    if (HasSystemModifier(modifiers) &&
-        !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
-                   candidate_ui_.IsShowing(), UnicodeInputActive()) &&
+    // Ctrl+Backspace while a commit waits for its retry stays the app's, as
+    // before M69 (commit-undo-spec §3, §4.2 item 4).
+    if (const auto chord =
+            MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
+                      candidate_ui_.IsShowing(), UnicodeInputActive());
+        HasSystemModifier(modifiers) &&
+        (!chord || (committing_ && IsActionKey(chord, core::UserAction::UndoCommit))) &&
         !(committing_ && !terminated_composition_surface_.empty()))
       return S_OK;
 

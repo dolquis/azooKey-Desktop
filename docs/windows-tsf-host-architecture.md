@@ -176,8 +176,8 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
   （`LoadModelFailureKeepsPreviouslyLoadedModel`）。
 - `AddUserWord` / `RemoveUserWord`: Host は `UserDictionary` を更新し、永続化に成功した場合だけ
   `ok=true` を返す。永続化に失敗した場合は直前の辞書状態へ戻し、`Health` の `last_error` に反映する。
-  `ok=false` のときの `error` は `Payloads.h` の `kUserDictError*` のいずれかで、`invalid_request` と
-  `not_authenticated` を除く語は `UserDictionaryEditResultName` と同じである。`error` を持たない
+  `ok=false` のときの `error` は `Payloads.h` の `kUserDictError*` のいずれかで、`invalid_request`、
+  `not_authenticated`、`invalid_pos`（`docs/user-dictionary-pos-spec.md` §7.1）を除く語は `UserDictionaryEditResultName` と同じである。`error` を持たない
   古い Host の応答も読める。
 
 ### Handshake 認証ゲート

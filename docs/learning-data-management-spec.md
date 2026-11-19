@@ -364,7 +364,7 @@ counts のキーは archive の item 名（§5.1）である。
 
 応答は `{ "ok": bool, "error": str（失敗時） }` である。`error` は §4.5 の名前を使い、
 `invalid_request`（`store` が無い、または未知）、`not_authenticated`、`store_unavailable`
-（そのストアを Host が持っていない）、`save_failed` のいずれかである。
+（そのストアを Host が持っていないか、ユーザー辞書が version 3 以上。`docs/user-dictionary-pos-spec.md` §3.2）、`save_failed` のいずれかである。
 
 ストアごとの範囲は次のとおり。
 
@@ -759,6 +759,7 @@ ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用�
   （`.corrupt.<stamp>`）も行わない。解釈できないファイルは `lookup` と同じく読み込み失敗
   として終了コード 1 を返す。`--dry-run` を付けた add / remove / import / export も
   読み取り専用で読み込み、辞書や export 先を変更せず、移行・隔離を行わない。
+  version 3 以上の辞書では `list` 以外を dry-run も含めて終了コード 1 で断る（`docs/user-dictionary-pos-spec.md` §3.2）。
   通常の直接 writer（`--offline` の add / remove、`import`）は旧平文を `.bak` に保全して
   `.enc` へ移行する。解釈できない平文は `.corrupt.<stamp>` へ隔離し、終了コード 1 を返す。
 - `userdict import` の TSV は
@@ -787,7 +788,8 @@ ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用�
 - CLI は Host の拒否を `running host rejected add: <error> (<説明>)`（`remove`）と表示する。
   `busy` の説明は、何も保存していないことと再試行を促す。`lock_failed` / `load_failed` は何も保存していないこと、`save_failed` は
   辞書を変えていないこと、`not_found` は語が辞書に無いこと、`unavailable` は Host がユーザー辞書を持たないことを示す。
-  `invalid_request` と `not_authenticated` にも説明を添える。CLI の知らないコードは表示せず、
+  `invalid_request` と `not_authenticated` にも説明を添える。`invalid_pos` は品詞と語が合わないこと、`dictionary_too_new` は
+  新しい版が書いた辞書なので変えないことを示す（`docs/user-dictionary-pos-spec.md` §7.1）。CLI の知らないコードは表示せず、
   `running host rejected add (unrecognized reason)` とする。`error` を持たない古い Host の応答では
   `running host rejected add`（`remove`）とだけ表示する。
   JSON 行の `error` はこの表示文で、`reason` に Host のコードを入れる（空白・制御文字・非 ASCII を除き 64 バイトまで。旧 Host の応答では省く）。
@@ -816,7 +818,7 @@ ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用�
   JSON は一致ごとに `op`、`ok`、`mode`、`query`、`source`、`reading`、`surface` と
   source 固有の値を 1 オブジェクトずつ出力する。
   JSON オブジェクトのキー順は規定しない。
-  `user_dict` は存在する `cid`、`mid`、`weight` を、`learning` は `weight` と
+  `user_dict` は存在する `cid`、`mid`、`weight`、`pos`（`docs/user-dictionary-pos-spec.md` §7.5。TSV の列には足さない）を、`learning` は `weight` と
   `last_updated_epoch_sec` を source 固有の値として出力する。
   該当なしの場合は `count: 0` の JSON を 1 行出力し、TSV では何も出力しない。
   TSV の列は `source`、`reading`、`surface`、`cid`、`mid`、`weight`、

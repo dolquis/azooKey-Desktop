@@ -334,8 +334,9 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
   auto* items = &items_in;
   // A row that does not parse means the item is not what this Host wrote;
   // importing the rest would lose data silently.
+  // The first failure is the one reported.
   const auto parsed_or_fail = [&](bool ok) {
-    if (!ok) result.error = BackupError::BadItem;
+    if (!ok && result.error == BackupError::None) result.error = BackupError::BadItem;
   };
 
   // Parse everything first: a store is changed only once the whole archive
@@ -360,7 +361,8 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
       parsed_or_fail(loaded);
       // user-dictionary-pos-spec 3.2: an item of version 3 or later fails the
       // whole import, as a store that blocks saving does.
-      if (loaded && parsed.user_dictionary->too_new()) result.error = BackupError::StoreUnavailable;
+      if (loaded && parsed.user_dictionary->too_new() && result.error == BackupError::None)
+        result.error = BackupError::StoreUnavailable;
     }
   }
   if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && stores.typo) {

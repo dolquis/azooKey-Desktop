@@ -208,7 +208,8 @@ HostCallStatus ProbeHostCapability(const SettingsIpcOptions& options, const char
   return session.HasCapability(capability) ? HostCallStatus::Ok : HostCallStatus::Unsupported;
 }
 
-HostCallResult<std::vector<std::string>> RequestHostCapabilities(const SettingsIpcOptions& options) {
+HostCallResult<std::vector<std::string>> RequestHostCapabilities(
+    const SettingsIpcOptions& options) {
   HostCallResult<std::vector<std::string>> result;
   HostSession session;
   if (const auto failure = session.Open(options); failure != OpenFailure::None) {
@@ -325,13 +326,17 @@ HostCallResult<azookey::ipc::ResetLearningStoreResponse> RequestResetLearningSto
 
 HostCallResult<azookey::ipc::AddUserWordResponse> RequestAddUserWord(
     const SettingsIpcOptions& options, const azookey::ipc::AddUserWordRequest& request) {
+  // user-dictionary-pos-spec 7.1: an older Host drops `pos` and answers ok, so a word with a part
+  // of speech goes only to a Host whose Handshake on this very connection advertises it.
   return Call<azookey::ipc::AddUserWordResponse>(
-      options, nullptr, MessageType::AddUserWord, azookey::ipc::BuildAddUserWordRequest(request),
-      options.long_response_timeout_ms, azookey::ipc::ParseAddUserWordResponse);
+      options, request.pos ? kCapabilityUserDictPos : nullptr, MessageType::AddUserWord,
+      azookey::ipc::BuildAddUserWordRequest(request), options.long_response_timeout_ms,
+      azookey::ipc::ParseAddUserWordResponse);
 }
 
 HostCallResult<azookey::ipc::ImportUserDictionaryTextResponse> RequestImportUserDictionaryText(
-    const SettingsIpcOptions& options, const azookey::ipc::ImportUserDictionaryTextRequest& request) {
+    const SettingsIpcOptions& options,
+    const azookey::ipc::ImportUserDictionaryTextRequest& request) {
   return Call<azookey::ipc::ImportUserDictionaryTextResponse>(
       options, kCapabilityUserDictTextImport, MessageType::ImportUserDictionaryText,
       azookey::ipc::BuildImportUserDictionaryTextRequest(request),

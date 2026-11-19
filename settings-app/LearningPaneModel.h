@@ -88,10 +88,15 @@ UserWordInput NormalizeUserWordInput(std::string_view reading, std::string_view 
 // strings for. Each has a "LearningUserDictError_<code>" string; any other falls back to
 // "LearningUserDictError_other". invalid_pos and dictionary_too_new are those of
 // user-dictionary-pos-spec section 7.1.
-inline constexpr std::array<std::string_view, 9> kUserDictErrorCodes{
-    "busy",           "lock_failed",       "load_failed",      "save_failed",
-    "unavailable",    "invalid_request",   "not_authenticated", "invalid_pos",
-    "dictionary_too_new"};
+inline constexpr std::array<std::string_view, 9> kUserDictErrorCodes{"busy",
+                                                                     "lock_failed",
+                                                                     "load_failed",
+                                                                     "save_failed",
+                                                                     "unavailable",
+                                                                     "invalid_request",
+                                                                     "not_authenticated",
+                                                                     "invalid_pos",
+                                                                     "dictionary_too_new"};
 
 std::string UserDictErrorResource(std::string_view error);
 
@@ -179,11 +184,12 @@ azookey::ipc::ImportUserDictionaryTextRequest MakeUserDictImportRequest(std::str
 // The `error` codes of ImportUserDictionaryTextResponse (section 7.2). Each has a
 // "UserDictImportError_<code>" string; any other falls back to "UserDictImportError_other".
 inline constexpr std::array<std::string_view, 18> kUserDictImportErrorCodes{
-    "invalid_request",   "not_authenticated", "blocked",        "invalid_path",
-    "source_missing",    "too_large",         "unsupported_encoding",
-    "bad_encoding",      "unknown_format",    "no_entries",     "too_many_words",
-    "busy",              "lock_failed",       "load_failed",    "store_unavailable",
-    "dictionary_too_new", "save_failed",      "unavailable"};
+    "invalid_request",      "not_authenticated", "blocked",
+    "invalid_path",         "source_missing",    "too_large",
+    "unsupported_encoding", "bad_encoding",      "unknown_format",
+    "no_entries",           "too_many_words",    "busy",
+    "lock_failed",          "load_failed",       "store_unavailable",
+    "dictionary_too_new",   "save_failed",       "unavailable"};
 
 std::string UserDictImportErrorResource(std::string_view error);
 

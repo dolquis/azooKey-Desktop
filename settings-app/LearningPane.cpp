@@ -384,8 +384,8 @@ winrt::fire_and_forget LearningPane::ProbeUserDictFeatures() {
 void LearningPane::ApplyUserDictFeatures() {
   add_pos_combo_.Visibility(user_dict_features_.pos ? xaml::Visibility::Visible
                                                     : xaml::Visibility::Collapsed);
-  user_dict_import_button_.Visibility(user_dict_features_.text_import ? xaml::Visibility::Visible
-                                                                      : xaml::Visibility::Collapsed);
+  user_dict_import_button_.Visibility(
+      user_dict_features_.text_import ? xaml::Visibility::Visible : xaml::Visibility::Collapsed);
   // The fourth column becomes the part of speech once the Host advertises it.
   if (IsUserDictTab()) RenderEntries();
 }
@@ -945,8 +945,7 @@ winrt::fire_and_forget LearningPane::ImportUserDictText() {
     // 3. The preview (dry_run), which changes nothing.
     SetBusy(true);
     status_bar_.IsOpen(false);
-    const auto preview_request =
-        MakeUserDictImportRequest(path, format_index, 0, /*dry_run=*/true);
+    const auto preview_request = MakeUserDictImportRequest(path, format_index, 0, /*dry_run=*/true);
     co_await winrt::resume_background();
     const auto preview =
         RequestImportUserDictionaryText(DefaultSettingsIpcOptions(), preview_request);
@@ -1005,9 +1004,8 @@ winrt::fire_and_forget LearningPane::ImportUserDictText() {
         /*dry_run=*/false);
 
     // 5. Confirm, then import.
-    auto message = after.GetString(L"Learning_UserDictImportConfirmMessage") + L"\n" +
-                   file.Path() + L"\n" +
-                   Str(after, "UserDictImportConflict_" + request.conflict_resolution);
+    auto message = after.GetString(L"Learning_UserDictImportConfirmMessage") + L"\n" + file.Path() +
+                   L"\n" + Str(after, "UserDictImportConflict_" + request.conflict_resolution);
     if (request.conflict_resolution == "overwrite") {
       message = message + L"\n" + after.GetString(L"Learning_UserDictImportOverwriteWarning");
     }
@@ -1041,12 +1039,11 @@ winrt::fire_and_forget LearningPane::ImportUserDictText() {
                  Str(done, UserDictImportErrorResource(result.response->error.value_or(""))));
       co_return;
     }
-    ShowStatus(controls::InfoBarSeverity::Success,
-               done.GetString(L"Learning_UserDictImportDoneTitle"),
-               winrt::hstring(CountLinesText(
-                   done, result.response->counts.value_or(
-                             azookey::ipc::UserDictionaryTextImportCounts{}),
-                   /*preview=*/false)));
+    ShowStatus(
+        controls::InfoBarSeverity::Success, done.GetString(L"Learning_UserDictImportDoneTitle"),
+        winrt::hstring(CountLinesText(
+            done, result.response->counts.value_or(azookey::ipc::UserDictionaryTextImportCounts{}),
+            /*preview=*/false)));
     // List the whole dictionary again from the first page.
     query_.clear();
     search_box_.Text(L"");

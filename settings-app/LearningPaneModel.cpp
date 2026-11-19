@@ -205,7 +205,7 @@ azookey::ipc::ImportUserDictionaryTextRequest MakeUserDictImportRequest(std::str
       kUserDictImportFormats[format_index < kUserDictImportFormats.size() ? format_index : 0]);
   request.conflict_resolution = std::string(
       kUserDictImportConflicts[conflict_index < kUserDictImportConflicts.size() ? conflict_index
-                                                                                 : 0]);
+                                                                                : 0]);
   request.dry_run = dry_run;
   return request;
 }

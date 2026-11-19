@@ -374,9 +374,8 @@ TEST(LearningPaneModelTest, AddUserWordSendsThePartOfSpeechOnlyForANonNounToAHos
   EXPECT_FALSE(MakeAddUserWordRequest(input, 24, false).pos.has_value());
   // No choice (a ComboBox's -1) or an index past the table is the noun.
   EXPECT_FALSE(MakeAddUserWordRequest(input, static_cast<size_t>(-1), true).pos.has_value());
-  EXPECT_FALSE(
-      MakeAddUserWordRequest(input, azookey::settings::kUserDictPosOptions.size(), true)
-          .pos.has_value());
+  EXPECT_FALSE(MakeAddUserWordRequest(input, azookey::settings::kUserDictPosOptions.size(), true)
+                   .pos.has_value());
 }
 
 TEST(LearningPaneModelTest, UserDictFeaturesFollowTheHandshakeCapabilities) {

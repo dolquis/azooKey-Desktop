@@ -506,7 +506,7 @@ schema 自体は superset のまま変えない。
 #### v1.0（M11）の UI アクション（設定キーではないボタン）
 
 - **ユーザー辞書の追加・削除** → 「学習」ペイン（§3.2）のユーザー辞書タブに置く。タブは一覧と検索、
-  「読み」「語」の 2 欄と「追加」ボタン、行ごとの「忘却」を持つ。追加は `AddUserWord`（roadmap M9）、
+  「読み」「語」の 2 欄（Host が品詞に対応していれば「品詞」の欄も）と「追加」ボタン、行ごとの「忘却」を持つ。追加は `AddUserWord`（roadmap M9）、
   削除は `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で Host へ送る
   （詳細は同 spec §3）。v1.0 は専用 GUI を作らず、この最小の導線だけを持つ。語の編集、辞書の単独の書き出し、
   既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json.enc` を直接開かず、Host への IPC を

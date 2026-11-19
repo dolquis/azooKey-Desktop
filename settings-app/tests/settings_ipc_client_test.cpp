@@ -513,15 +513,14 @@ TEST(SettingsIpcClientTest, UserDictCapabilityNamesMatchTheProtocol) {
 
 TEST(SettingsIpcClientTest, AddUserWordCarriesThePartOfSpeech) {
   std::optional<azookey::ipc::AddUserWordRequest> seen;
-  FakeHost host({"settings", "user_dict_pos"},
-                [&](azookey::ipc::MessageType, const std::string& payload) {
-                  seen = azookey::ipc::ParseAddUserWordRequest(payload);
-                  azookey::ipc::AddUserWordResponse response;
-                  response.ok = false;
-                  response.error = "invalid_pos";
-                  return std::optional<std::string>(
-                      azookey::ipc::BuildAddUserWordResponse(response));
-                });
+  FakeHost host(
+      {"settings", "user_dict_pos"}, [&](azookey::ipc::MessageType, const std::string& payload) {
+        seen = azookey::ipc::ParseAddUserWordRequest(payload);
+        azookey::ipc::AddUserWordResponse response;
+        response.ok = false;
+        response.error = "invalid_pos";
+        return std::optional<std::string>(azookey::ipc::BuildAddUserWordResponse(response));
+      });
   ASSERT_TRUE(host.started());
   azookey::ipc::AddUserWordRequest request;
   request.ruby = "ggru";
@@ -537,27 +536,55 @@ TEST(SettingsIpcClientTest, AddUserWordCarriesThePartOfSpeech) {
   EXPECT_EQ(seen->pos, "verb_godan_ra");
 }
 
+// user-dictionary-pos-spec 7.1: a Host whose Handshake does not advertise user_dict_pos would drop
+// the part of speech and answer ok, so such a word is not sent to it; a noun still is.
+TEST(SettingsIpcClientTest, AddUserWordWithAPartOfSpeechNeedsTheCapabilityOnTheSameConnection) {
+  int requests = 0;
+  FakeHost host({"settings"}, [&](azookey::ipc::MessageType, const std::string&) {
+    ++requests;
+    azookey::ipc::AddUserWordResponse response;
+    response.ok = true;
+    return std::optional<std::string>(azookey::ipc::BuildAddUserWordResponse(response));
+  });
+  ASSERT_TRUE(host.started());
+  azookey::ipc::AddUserWordRequest request;
+  request.ruby = "ggru";
+  request.word = "Gguru";
+  request.pos = "verb_godan_ra";
+
+  const auto refused = azookey::settings::RequestAddUserWord(host.Options(), request);
+  EXPECT_EQ(refused.status, HostCallStatus::Unsupported);
+  EXPECT_FALSE(refused.response.has_value());
+  EXPECT_EQ(requests, 0);
+
+  request.pos.reset();
+  const auto noun = azookey::settings::RequestAddUserWord(host.Options(), request);
+  ASSERT_EQ(noun.status, HostCallStatus::Ok);
+  EXPECT_TRUE(noun.response->ok);
+  EXPECT_EQ(requests, 1);
+}
+
 TEST(SettingsIpcClientTest, ImportUserDictionaryTextCarriesTheRequestAndNeedsItsCapability) {
   std::vector<azookey::ipc::ImportUserDictionaryTextRequest> seen;
-  FakeHost host({"user_dict_text_import"}, [&](azookey::ipc::MessageType type,
-                                               const std::string& payload) {
-    EXPECT_EQ(type, azookey::ipc::MessageType::ImportUserDictionaryText);
-    if (auto parsed = azookey::ipc::ParseImportUserDictionaryTextRequest(payload)) {
-      seen.push_back(*parsed);
-    }
-    azookey::ipc::ImportUserDictionaryTextResponse response;
-    response.ok = true;
-    response.format = "msime";
-    response.encoding = "utf-16le";
-    azookey::ipc::UserDictionaryTextImportCounts counts;
-    counts.added = 120;
-    counts.kept = 3;
-    counts.duplicates_in_file = 1;
-    counts.unsupported_pos = 5;
-    response.counts = counts;
-    return std::optional<std::string>(
-        azookey::ipc::BuildImportUserDictionaryTextResponse(response));
-  });
+  FakeHost host({"user_dict_text_import"},
+                [&](azookey::ipc::MessageType type, const std::string& payload) {
+                  EXPECT_EQ(type, azookey::ipc::MessageType::ImportUserDictionaryText);
+                  if (auto parsed = azookey::ipc::ParseImportUserDictionaryTextRequest(payload)) {
+                    seen.push_back(*parsed);
+                  }
+                  azookey::ipc::ImportUserDictionaryTextResponse response;
+                  response.ok = true;
+                  response.format = "msime";
+                  response.encoding = "utf-16le";
+                  azookey::ipc::UserDictionaryTextImportCounts counts;
+                  counts.added = 120;
+                  counts.kept = 3;
+                  counts.duplicates_in_file = 1;
+                  counts.unsupported_pos = 5;
+                  response.counts = counts;
+                  return std::optional<std::string>(
+                      azookey::ipc::BuildImportUserDictionaryTextResponse(response));
+                });
   ASSERT_TRUE(host.started());
   azookey::ipc::ImportUserDictionaryTextRequest preview;
   preview.source_path = "C:\\Users\\me\\Desktop\\msime-dict.txt";

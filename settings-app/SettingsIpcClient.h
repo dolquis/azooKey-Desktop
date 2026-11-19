@@ -108,7 +108,10 @@ HostCallResult<azookey::ipc::ImportLearningDataResponse> RequestImportLearningDa
     const SettingsIpcOptions& options, const azookey::ipc::ImportLearningDataRequest& request);
 HostCallResult<azookey::ipc::ResetLearningStoreResponse> RequestResetLearningStore(
     const SettingsIpcOptions& options, const azookey::ipc::ResetLearningStoreRequest& request);
-// AddUserWord has no capability of its own (every Host since M9 answers it), so a Host without a
+// A word with a part of speech needs `user_dict_pos` in the Handshake of the same connection
+// (user-dictionary-pos-spec section 7.1): an older Host would drop it silently, so the call returns
+// Unsupported without sending. A noun needs no capability (every Host since M9 answers it), so a
+// Host without a
 // user dictionary replies ok=false with kUserDictErrorUnavailable. The edit may wait for the
 // cross-process file lock, so the call waits as long as a reset.
 HostCallResult<azookey::ipc::AddUserWordResponse> RequestAddUserWord(
@@ -117,7 +120,8 @@ HostCallResult<azookey::ipc::AddUserWordResponse> RequestAddUserWord(
 // section 7.2). Waits user_dict_import_timeout_ms; a Timeout after the request was sent means the
 // Host may still finish the import later.
 HostCallResult<azookey::ipc::ImportUserDictionaryTextResponse> RequestImportUserDictionaryText(
-    const SettingsIpcOptions& options, const azookey::ipc::ImportUserDictionaryTextRequest& request);
+    const SettingsIpcOptions& options,
+    const azookey::ipc::ImportUserDictionaryTextRequest& request);
 // Persona ratios (learning-data-management-spec §15); the request payload is an empty object.
 HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(
     const SettingsIpcOptions& options);

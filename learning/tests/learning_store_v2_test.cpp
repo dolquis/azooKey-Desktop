@@ -178,6 +178,7 @@ TEST(LearningStoreV2Test, ReadOnlyLoadCountsMalformedRowsAndLeavesTheFile) {
     return found;
   };
   const auto before = names();
+  const auto written_at = std::filesystem::last_write_time(learning::EncryptedPathFor(v2_path));
   LearningStore store(path, &learning::test::Crypto());
   size_t malformed = 99;
   ASSERT_TRUE(store.LoadReadOnly(&malformed));
@@ -185,6 +186,7 @@ TEST(LearningStoreV2Test, ReadOnlyLoadCountsMalformedRowsAndLeavesTheFile) {
   EXPECT_EQ(store.size(), 1u);
   // No .corrupt-* copy and no rewrite: the next save is what would keep the file aside.
   EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(v2_path)), original);
+  EXPECT_EQ(std::filesystem::last_write_time(learning::EncryptedPathFor(v2_path)), written_at);
   EXPECT_EQ(names(), before);
 
   size_t none = 99;

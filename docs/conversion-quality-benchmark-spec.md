@@ -838,6 +838,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - `lattice`（`on` / `off`。採取でラティス変換が有効だったか。`--dict-dir` が無いときは `off`。
   `docs/lattice-conversion-spec.md` §10.1 の A / B を区別する）
 - `nll`（`on` / `off`。採取で NLL 再ランク（§7 の `--nll`）が有効だったか。NLL は候補の並びを変えるので互換キーに入れる。
+  値は engine の設定値で、各変換で実際に再ランクが走ったか（モデル未ロードや deadline で飛ばした変換を含む）ではない。
   このキーを持たない結果は、製品の既定と同じ `off` として扱う）
 - `eval_source`（`bundled` / `personal`。§4 の同梱データを評価した結果は `bundled`、§15 の個人回帰ベンチの
   結果は `personal`。このキーを持たない結果は `bundled` として扱う。同梱データと利用者の確定履歴の結果を

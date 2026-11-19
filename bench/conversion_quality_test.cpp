@@ -255,5 +255,46 @@ TEST(ConversionQualityTest, ReportsKatakanaSubsetP99AndDictionaryCompatibilityKe
 #endif
 }
 
+TEST(ConversionQualityTest, BaselineWithoutNllCountsAsNllOff) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "SHA-256 uses Windows CNG and NFKC uses the Windows Normaliz API";
+#else
+  ScopedDirectory directory("azookey-conversion-quality-nll");
+  const auto data = directory.path() / "bench" / "data" / "eval.jsonl";
+  WriteBytes(data,
+             "{\"id\":\"a\",\"input\":\"かな\",\"expected\":\"仮名\",\"category\":[\"general\"],"
+             "\"provenance\":\"authored\"}\n");
+  ConversionQualityOptions options;
+  options.eval_path = data;
+  options.output_path = directory.path() / "result.json";
+  options.iterations = 1;
+  const auto query = [](const std::string& input, const std::string&) {
+    core::Candidate candidate;
+    candidate.surface = "仮名";
+    candidate.reading = input;
+    return std::vector<core::Candidate>{candidate};
+  };
+  std::string error;
+  ASSERT_TRUE(RunConversionQualityEvaluation(options, query, &error)) << error;
+  std::string text = ReadText(options.output_path);
+  const auto report = ipc::json::Parse(text);
+  ASSERT_TRUE(report && report->IsObject());
+  EXPECT_EQ(report->FindObject("config")->at("nll").AsString(), "off");
+
+  // A baseline kept before the nll key existed was taken with NLL off (spec section 14.1).
+  const std::string key = "\"nll\":\"off\",";
+  const auto at = text.find(key);
+  ASSERT_NE(at, std::string::npos);
+  text.erase(at, key.size());
+  const auto baseline = directory.path() / "baseline.json";
+  WriteBytes(baseline, text);
+  options.baseline_path = baseline;
+  EXPECT_TRUE(RunConversionQualityEvaluation(options, query, &error)) << error;
+  options.nll = "on";
+  EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
+  EXPECT_EQ(error, "baseline is incompatible: nll");
+#endif
+}
+
 }  // namespace
 }  // namespace azookey::bench

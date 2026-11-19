@@ -1964,9 +1964,11 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   英字の大文字と小文字を区別し、Shift 付きの英字に別の規則を書けるようにする。
 - **前提**: M13（キーの写像の 2 層と `InputState`）、M17（カスタムローマ字表の表駆動の変換）、M22（開閉キーと英数モード）、
   M30（設定アプリの入力ペイン）。
-- **変更対象**: `core/include/azookey/core/RomajiKanaConverter.h`・`core/src/RomajiKanaConverter.cpp`（AZIK の内蔵表、
-  表駆動の変換での大文字と小文字）、`core/src/CustomRomajiLoader.cpp`（大文字の規則を小文字に正規化しない）、
-  かなの表と濁点・半濁点の合成を持つ core の純関数（新規）、`tsf-tip/src/TipLocalSettings.cpp`（`inputStyle` の読み込み）、
+- **変更対象**: `core/src/RomajiKanaConverter.cpp`（表駆動の変換での大文字と小文字）、
+  `core/src/CustomRomajiLoader.cpp`（大小を区別する読み込みで、規則を小文字に正規化しない）、
+  `core/include/azookey/core/AzikTable.h`・`core/src/AzikTable.cpp`（AZIK の内蔵表。新規）、
+  `core/include/azookey/core/KanaInput.h`・`core/src/KanaInput.cpp`（かなの表と濁点・半濁点の合成を持つ純関数。新規）、
+  `tsf-tip/src/TipLocalSettings.cpp`（`inputStyle` の読み込み）、
   `tsf-tip/src/TextService.cpp`（かな入力のキーの経路、各機能の除外）、`inference-host/src/SettingsStore.cpp`、
   `settings/mvp-settings.schema.json`・`settings/default-settings.sample.json`、`settings-app/SettingsFields.cpp`・
   `settings-app/SettingsDocument.cpp`・`settings-app/Strings/ja-JP/Resources.resw`、`docs/settings-app-spec.md`（設定キーの表）、

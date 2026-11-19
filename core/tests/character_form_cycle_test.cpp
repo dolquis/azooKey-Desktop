@@ -95,3 +95,20 @@ TEST(CommitFormTest, RespellsKanaRomanizeCannotSpellKanaByKana) {
   EXPECT_EQ(BuildCommitForm("あっ", CommitForm::HalfwidthRoman), "axtu");
   EXPECT_EQ(BuildCommitForm("ーあ", CommitForm::HalfwidthRoman), "-a");
 }
+
+// docs/input-style-spec.md section 6 (M70): kana input can put ゔ and a standalone ゛ ゜ in the
+// reading. F9 / F10 spell ゔ as `vu`; a standalone mark has no spelling or half-width form, so
+// every form keeps it as typed.
+TEST(CommitFormTest, SpellsVuAndKeepsStandaloneVoicingMarksInTheFunctionKeyForms) {
+  EXPECT_EQ(BuildCommitForm("ゔ", CommitForm::HalfwidthRoman), "vu");
+  EXPECT_EQ(BuildCommitForm("ゔ", CommitForm::FullwidthRoman), "ｖｕ");
+  EXPECT_EQ(BuildCommitForm("ゔぁ", CommitForm::HalfwidthRoman), "vuxa");
+  for (const char* mark : {"゛", "゜"}) {
+    for (const CommitForm form :
+         {CommitForm::HalfwidthKatakana, CommitForm::HalfwidthRoman, CommitForm::FullwidthRoman}) {
+      EXPECT_EQ(BuildCommitForm(mark, form), mark) << mark;
+      EXPECT_EQ(BuildCommitForm(std::string("あ") + mark, form), BuildCommitForm("あ", form) + mark)
+          << mark;
+    }
+  }
+}

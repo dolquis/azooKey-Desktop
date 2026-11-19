@@ -1,5 +1,5 @@
 // Micro benchmark of lattice building and N-best search (docs/lattice-conversion-spec.md
-// section 9): windows of exactly 16 and 32 code points cut from the evaluation readings.
+// section 9): windows of exactly 16, 32 and 64 code points cut from the evaluation readings.
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -271,7 +271,8 @@ int main(int argc, char** argv) {
     const auto codepoints = ReadCodepoints(eval);
     bool within_budget = true;
     for (const size_t max_paths : {size_t{16}, size_t{8}}) {
-      for (const size_t length : {size_t{16}, size_t{32}}) {
+      // 64 code points, the longest reading with a lattice, has no budget of its own (spec 3.2).
+      for (const size_t length : {size_t{16}, size_t{32}, size_t{64}}) {
         const auto windows = Windows(codepoints, length, window_count);
         core::LatticeQuery query;
         query.max_paths = max_paths;

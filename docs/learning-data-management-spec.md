@@ -42,7 +42,7 @@ canonical_for: ["学習データ可視化とバックアップ"]
 | `learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv`（M54 の v2 形式。暗号化された移行元 `learning.tsv.enc` は v2 保存・読み戻し検証後に削除する） | M54 | M34 と同じ `.enc` |
 | `user_dict.json` | `%LOCALAPPDATA%\azooKey\data\user_dict.json` | M9 | M34 で `.enc` |
 | `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv` | M35 | M34 で `.enc` |
-| `typo_learning.v2.db` | `%LOCALAPPDATA%\azooKey\data\typo_learning.v2.db`（M55 の v2 形式。SQLite の DB 全体を暗号化して保存する。移行した v1 は `typo_corrections.v1.tsv.enc.bak` として残す。`docs/typo-correction-learning-spec.md` §12.8） | M55 | M34 と同じ `.enc` |
+| `typo_learning.v2.db` | `%LOCALAPPDATA%\azooKey\data\typo_learning.v2.db`（M55 の v2 形式。SQLite の DB 全体を暗号化して保存する。移行した v1 は `typo_corrections.v1.tsv.bak.enc` として残す。`docs/typo-correction-learning-spec.md` §12.8） | M55 | M34 と同じ `.enc` |
 | `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\data\auto_words.tsv` | M36-A | M34 で `.enc` |
 | `english_learning.tsv` | `%LOCALAPPDATA%\azooKey\data\english_learning.tsv` | M60（英単語候補の確定。`docs/inline-english-candidate-spec.md` §5） | `learning.tsv` と同じ `.enc` |
 | `english_learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\english_learning.v2.tsv`（`learning.v2.tsv` と同じ v2 形式。移行と M7 形式の削除の規則も同じ） | M60 | `learning.tsv` と同じ `.enc` |
@@ -174,6 +174,8 @@ Response（host → settings-app）:
 - **id**: ストア名、チャネル、読み、表記をそれぞれ長さ付きで連結した文字列の
   SHA-256 の先頭 16 桁（小文字 16 進）。キーから決まるので、Host の再起動後も変わらず、
   採番状態を保存しない。
+- **typo の entry**: M55 の v2 ストアの読みの組とパターンの `channel`・読み・表記の写し方は
+  `docs/typo-correction-learning-spec.md` §12.8「学習の削除」に従う。
 
 ### 4.2 ForgetLearningEntry
 
@@ -861,7 +863,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `learning.v2.tsv.enc`（v2 移行前は `learning.tsv.enc` を読むだけ） | Host のみ | Host、`lookup` CLI、`azookey_bench --personal-eval`（`LoadReadOnly` でロックを取らずに読み、書き換えない。`docs/conversion-quality-benchmark-spec.md` §15.2） | Host 内で直列化（debounce flush、`docs/user-learning-enhancement-spec.md` §3.1.1）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
 | `english_learning.v2.tsv.enc`（v2 移行前は `english_learning.tsv.enc` を読むだけ） | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
 | `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/host-availability-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
-| `typo_learning.v2.db.enc`（v2 移行前は `typo_corrections.tsv.enc`。移行後の `typo_corrections.v1.tsv.enc.bak` を含む） | Host のみ（`docs/typo-correction-learning-spec.md` §12.8） | Host | Host 内で直列化し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace（v2 は `WriteProtectedText`。v1 の `.bak` は実パスを直接与えて同じ規則で書く。`docs/typo-correction-learning-spec.md` §12.8「パス」） |
+| `typo_learning.v2.db.enc`（v2 移行前は `typo_corrections.tsv.enc`。移行後の `typo_corrections.v1.tsv.bak.enc` を含む） | Host のみ（`docs/typo-correction-learning-spec.md` §12.8） | Host | Host 内で直列化し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace（`WriteProtectedText`。論理パスは `docs/typo-correction-learning-spec.md` §12.8「パス」） |
 | `auto_words.tsv.enc` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | `AcquireExclusiveFileLockForPath` + atomic replace。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
 
 拡張子 `.enc` のない旧平文ファイルは移行元であり、移行時は `.bak` を保全する。

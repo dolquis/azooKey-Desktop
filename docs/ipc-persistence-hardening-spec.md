@@ -43,7 +43,7 @@ canonical_for: ["ユーザーデータ永続化の堅牢化", "IPC/JSON 堅牢�
 %LOCALAPPDATA%\azooKey\
   config\   settings.json
   data\     learning.v2.tsv.enc / user_dict.json.enc / typo_corrections.tsv.enc（M35）/
-            typo_learning.v2.db.enc（M55）/ typo_corrections.v1.tsv.enc.bak（M55）/
+            typo_learning.v2.db.enc（M55）/ typo_corrections.v1.tsv.bak.enc（M55）/
             auto_words.tsv.enc（M36-A）/ english_learning.v2.tsv.enc（M60）/
             host_run_state.txt（M47）
   logs\     host-YYYYMMDD.jsonl / tip-YYYYMMDD.jsonl
@@ -54,7 +54,7 @@ canonical_for: ["ユーザーデータ永続化の堅牢化", "IPC/JSON 堅牢�
 `learning.v2.tsv.enc` / `user_dict.json.enc` と同じ `data\` 配下に置く（`UserDataPaths`
 の `data_dir` 規約に合わせる）。学習の 2 チャネルは、M7 形式の `learning.tsv.enc` /
 `english_learning.tsv.enc` を移行元として同じ配下に残しうる。M49 backup（`docs/learning-data-management-spec.md`
-§2）の対象範囲は本レイアウトを正典とする。M55 の `typo_learning.v2.db.enc` と `typo_corrections.v1.tsv.enc.bak` を
+§2）の対象範囲は本レイアウトを正典とする。M55 の `typo_learning.v2.db.enc` と `typo_corrections.v1.tsv.bak.enc` を
 backup にどう含めるかは `typo-correction-learning-spec.md` §12.8 に従う。ただし `host_run_state.txt`（`host-availability-spec.md` §8.5.3 の
 クラッシュ検知用の印）はユーザーデータではなく、backup の対象に含めない。
 拡張子 `.enc` のない旧ファイルは移行元で、移行時の `.bak` は保全する。

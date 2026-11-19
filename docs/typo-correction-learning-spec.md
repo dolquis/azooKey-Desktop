@@ -599,30 +599,35 @@ v2 は TSV の拡張を経ずに SQLite で始める（DEV-1955）。
 
 #### パス
 
-v2 のファイルと v1 の `.bak` は、v1 の論理パス（既定は `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv`。host CLI の `--typo-store`
-で上書きできる。§5-1）と同じディレクトリに置き、名前は次のとおり v1 の論理パスから導く。
+v2 のファイルと移行した v1 は、v1 の論理パス（既定は `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv`。
+host CLI の `--typo-store` で上書きできる。§5-1）と同じディレクトリに置き、名前は v1 の論理パスから導く。
+どれも既存の `ReadProtectedText` / `WriteProtectedText`（`learning/include/azookey/learning/DpapiCrypto.h`）に
+論理パスを渡して読み書きし、ディスク上は `<論理パス>.enc` になる。
 
-| ファイル | 名前 | ディスク上 |
+| ファイル | 論理パス | ディスク上 |
 |---|---|---|
+| v1 のストア | `typo_corrections.tsv` | `typo_corrections.tsv.enc` |
 | v2 のストア | `typo_learning.v2.db` | `typo_learning.v2.db.enc` |
-| 移行した v1 | — | `typo_corrections.v1.tsv.enc.bak`（v1 の `typo_corrections.tsv.enc` を rename したもの） |
+| 移行した v1（以下「v1 の退避」） | `typo_corrections.v1.tsv.bak` | `typo_corrections.v1.tsv.bak.enc` |
 
-`typo_corrections.tsv.bak` の名前は使わない。平文の v1 を DPAPI 形式へ移すときの退避と同名で、
-`WriteProtectedText` がこれを残った退避（orphan backup）とみなして保存を止めるためである。
-v1 の `.bak` は `<論理パス>.enc` の形を取らないので、読み書きは `.bak` の実パスを直接与えて行う。
-復号と暗号化、file lock（`.bak` の実パスに対する `AcquireExclusiveFileLockForPath`）、atomic replace は
-v2 のファイルと同じ規則に従う。
+- v1 の退避の論理パスに `typo_corrections.tsv.bak` は使わない。M34 の平文移行が残す平文の退避と同名で、
+  `WriteProtectedText` がこれを残った退避（orphan backup）とみなして保存を止めるためである。
+- M34 の平文移行が残す `typo_corrections.tsv.bak`（平文）は M34 の規則に従い、本節の移行と削除の対象に
+  入れない（全ストア共通の見直しは DEV-2173 で行う）。
 
 #### 保存の形
 
 v2 のストアはメモリ上の SQLite DB として開き、ディスクへは DB 全体のバイト列として保存する。
 
-- 保存: `sqlite3_serialize` で得たバイト列を、v1 と同じ `WriteProtectedText`（DPAPI 暗号化、
-  file lock、atomic replace。`learning/include/azookey/learning/DpapiCrypto.h`）で書く。
-- 読み込み: 復号したバイト列を `sqlite3_deserialize` でメモリ DB に載せる。
+- 保存: `sqlite3_serialize` で得たバイト列を `WriteProtectedText`（DPAPI 暗号化、file lock、atomic replace）で書く。
+- 読み込み: 復号したバイト列を `sqlite3_malloc64` で確保した領域へ写し、`sqlite3_deserialize` に
+  `SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE` を付けて渡す。
 - ディスク上に平文の DB を置かない。ジャーナル（`-journal`、`-wal`、`-shm`）も、`VACUUM` や並べ替えが使う
   一時ファイルもディスクに作らない（下記の `journal_mode` と `SQLITE_TEMP_STORE`）。`typo_events` と
   `typo_reading_pairs` は読みと表記を持つため、平文で置くと M34 の暗号化の契約を破る。
+- メモリ上の平文の消去: 復号したバイト列と `sqlite3_serialize` のバッファは、使い終えたら `SecureErase` と同じく
+  0 で上書きしてから解放する。SQLite が内部で確保する領域は、解放時に 0 で上書きする割り当て関数を
+  `sqlite3_config(SQLITE_CONFIG_MALLOC)` で与えて消す。
 - スキーマの版は `PRAGMA user_version` に持ち、本節のスキーマを 1 とする。
 - 保存のたびに DB 全体を書き直す。行数が増える `typo_events` と `typo_reading_pairs` には保持上限（下記）を課す。
   確定ごとに同期保存せず、`docs/user-learning-enhancement-spec.md` §3.1.1 と同じく件数と時間で
@@ -630,42 +635,65 @@ v2 のストアはメモリ上の SQLite DB として開き、ディスクへは
 
 #### SQLite の取り込み
 
-- sqlite.org が配布する amalgamation の zip を、CMake の FetchContent で取得する。版と zip の
-  SHA3-256 を `CMakeLists.txt` に固定し、取得は opt-in の `AZOOKEY_FETCH_SQLITE` で行う
-  （`docs/build-ci-spec.md` §3.1 の「取得元を固定して pin する」に従う）。
-- `azookey_learning` は常に build するので、SQLite を外した build は作らない。手元の amalgamation を
-  source dir の cache 変数で与えるか、`AZOOKEY_FETCH_SQLITE=ON` にする。どちらも無ければ configure を
-  失敗させ、取得の方法をエラーに出す（WIL と同じ扱い）。
+- sqlite.org が配布する amalgamation（`sqlite3.c` と `sqlite3.h`）を、repo の third_party の下の sqlite の
+  ディレクトリに commit する。取得元の zip の版と SHA256 を同じディレクトリに記録する。
+  amalgamation の実物の追加は実装（DEV-2148）で行う。
+- 既定の configure は、ネットワークに触れずに成功する（`docs/dev-infrastructure-spec.md` §1 のオフラインビルド原則）。
+  そのため `docs/build-ci-spec.md` §3.1 の 2（ビルドが要る依存を opt-in の `FetchContent` で取る）ではなく、
+  ソースを repo に置く。取得のための CMake option は設けない。
 - `azookey_learning` に静的リンクし、配布物に DLL を足さない。x64・ARM64・Linux で同じソースを使う。
 - 使わない機能を外して組み込む。少なくとも拡張の読み込みを外し（`SQLITE_OMIT_LOAD_EXTENSION`）、
   二重引用符の文字列リテラルを受けず（`SQLITE_DQS=0`）、一時ファイルを常にメモリに置く
   （`SQLITE_TEMP_STORE=3`）。`sqlite3_serialize` / `sqlite3_deserialize` を含む版を使う
   （3.36 以降は既定で含む）。
 - OS の `winsqlite3.dll` は使わない。版と compile option を固定できず、OS の更新に左右されるためである。
-  vcpkg での取得もしない（`docs/build-ci-spec.md` §3.3 は vcpkg を必須にしない）。
+  vcpkg も使わない（`docs/build-ci-spec.md` §3.1 は vcpkg を必須にしない）。
 - ライセンスは public domain（SPDX `blessing`）で、帰属表示の義務は無い。それでも配布物に含むので、
   取り込む PR で `THIRD_PARTY_LICENSES` に同梱の節を足す。リリース SBOM の生成
-  （`scripts/complete-release-sbom.py`）は CMake の Git commit の pin しか扱わないため、URL と hash の
-  pin を扱えるように同じ PR で広げる。
+  （`scripts/complete-release-sbom.py`）は CMake の Git commit の pin しか扱わないため、repo に置いたソースの
+  版と hash を扱えるように同じ PR で広げる。
+
+#### 由来の印
+
+v2 のストアは、`typo_settings` のキー `store_origin` に作られた経緯を持つ。値は次のどれかで、v2 を初めて
+保存するときに必ず書く。ただし v1 からの移行では、読み戻しの検証が済んでから書く。印の無い v2 は、
+v1 からの移行の検証が済んでいないものだけである。
+
+| 値 | 意味 |
+|---|---|
+| `v1_migrated` | v1（または v1 の退避）から移し、読み戻しの検証まで済んだ |
+| `empty` | 移す v1 が無く、空で始めた |
+| `rebuilt` | 破損から作り直した（移し直したときは `v1_migrated`） |
 
 #### 起動時の読み込みと破損時の復旧
 
 Host は起動時にストアを読み、次の順に判定する。
 
-1. v2 のファイルが無い: v1 からの移行（下記）を行う。v1 が無く v1 の `.bak` だけがあれば `.bak` から移す
-   （`.bak` は rename しない）。どちらも無ければ空のストアで始める。
-2. 復号に失敗した: 空のストアで動き、保存を止める。v2 にも v1 にも書かない（v1 と
+1. v2 のファイルが無い:
+   - v1 のストアを v1 の `Load` で読めれば、v1 からの移行（下記）を行う。平文の `typo_corrections.tsv` しか
+     無いときは、`Load` が M34 の暗号化移行を済ませてから移す。
+   - v1 のストアが無く v1 の退避があれば、v1 の退避から移す（v1 の退避は動かさない）。
+   - v1 のストアの読み込みに失敗した（復号の失敗、M34 の残った退避など）: v2 を作らず、v1 の既存の規則
+     （空のストアで動き、保存を止める）に従う。v2 を作ると、後で読めるようになる v1 を隠すためである。
+   - どれも無ければ、空のストアで始め、印を `empty` にする。
+2. v2 の復号に失敗した: 空のストアで動き、保存を止める。v2 にも v1 にも書かない（v1 と
    `docs/user-learning-enhancement-spec.md` §3.1 の v2 と同じ扱い）。
-3. `user_version` が既知の版より新しい: 新しい版の Host が書いたファイルとみなし、保存を止めて上書きしない。
-4. `sqlite3_deserialize` が失敗した、または `PRAGMA integrity_check` の結果が `ok` でない:
-   暗号化したままのファイルを `<ファイル名>.corrupt-<epoch 秒>` へ一度だけ複写する。複写に失敗したら
-   保存を止める。複写の後は、v1 の `.bak` があればそこから移し直し、無いとき・`.bak` を読めないとき・
-   移し直しに失敗したときは空のストアを作り直す（`.bak` は残す）。どの場合も学習を続け、破損を診断に
-   warning として出す。ログには件数と理由だけを出し、行の内容は出さない。
-5. v2 を読めたうえで v1 の `typo_corrections.tsv.enc` も残っている（移行の rename の前に止まった）:
-   v2 の `typo_settings` に移行の検証済みの印（下記の手順 4）があれば、v2 を使い、v1 を `.bak` へ rename し直す。
-   印が無ければ、検証の済んでいない v2 とみなして消し、移行をやり直す。v1 の `.enc` が残っている間は、忘却と全削除を `.bak` と同じく
-   v1 の `.enc` にも及ぼす。
+3. `sqlite3_deserialize` が失敗した: 下記 5 の破損として扱う。
+4. 載せた DB の `user_version` が既知の版より新しい: 新しい版の Host が書いたファイルとみなし、保存を止めて
+   上書きしない。
+5. `PRAGMA integrity_check` の結果が `ok` でない（または 3）: 暗号化したままのファイルを
+   `<ファイル名>.corrupt-<epoch 秒>` へ一度だけ複写する。複写に失敗したら保存を止める。複写の後は、
+   v1 のストア、v1 の退避の順に、読める方から移し直す（印は `v1_migrated`）。どちらも無いか、
+   読めないか、移し直しに失敗したときは空のストアを作り直す（印は `rebuilt`）。どの場合も学習を続ける。
+   破損は診断 D-010 の warning に出す（`docs/diagnostics-compat-spec.md` §12.2）。ログには件数と理由だけを出し、
+   行の内容は出さない。
+6. 印の無い v2 と v1 のストアが併存する: 移行の検証が済んでいない v2 なので消し、v1 からの移行をやり直す。
+   印の無い v2 だけがある（v1 のストアが無い）ときは、v1 の退避から移し直す。退避も無ければ空で作り直す
+   （印は `rebuilt`）。
+7. 印のある v2 と v1 のストアが併存する（移行の rename の前に止まった、または旧版の Host に戻して v1 に書いた）:
+   v1 の組を v2 の `typo_reading_pairs` に取り込む。同じ組は `count` と `last_updated_at` の大きい方を採る。
+   v2 を保存してから、v1 のストアを v1 の退避へ移す。v1 の退避が既にあれば置き換える（その中身は
+   取り込んだ v1 より古い）。
 
 `integrity_check` は起動時に毎回、DB 全体に対して行う。`.corrupt-*` の複写は忘却と全削除の対象に入れない
 （`docs/user-learning-enhancement-spec.md` §3.1 の学習ストアと同じ扱い）。全ストア共通の見直しは DEV-2173 で行う。
@@ -681,49 +709,78 @@ Host は起動時にストアを読み、次の順に判定する。
 
 #### v1 からの移行
 
-v2 のファイルが無く、v1 のストアがあるときに行う。平文の `typo_corrections.tsv` しか無いときは、
-先に v1 の `Load` が M34 の暗号化移行を済ませてから移す。
-
-1. v1 を v1 の `Load` で読み、各組を `typo_reading_pairs` の行にする（`count` と
-   `last_updated_at` は v1 の値をそのまま使う）。保持上限はこの段階では当てない。
-2. v2 を保存する。
+1. v1 を v1 の `Load` で読み、各組を `typo_reading_pairs` の行にする（`count` と `last_updated_at` は
+   v1 の値をそのまま使う）。保持上限はこの段階では当てない。
+2. v2 を印なしで保存する。
 3. v2 を読み戻し、復号、`integrity_check`、行数の一致を確かめる。
-4. 確かめられたら、`typo_settings` に移行の検証済みの印（キー `v1_migration_verified`、値は検証した epoch 秒）を
-   書いて v2 を保存し直す。
-5. v1 の `typo_corrections.tsv.enc` を `typo_corrections.v1.tsv.enc.bak` へ rename する。
-   暗号化したまま残し、平文に戻さない。
+4. 確かめられたら、印を `v1_migrated` にして v2 を保存し直す。
+5. v1 から移したときは、v1 のストアを v1 の退避へ rename する（暗号化したまま。平文に戻さない）。
+   v1 の退避から移したときは何も動かさない。
 
-- 1〜4 のどこかで失敗したら v1 を残し、v1 のまま読む。v2 を書けていたら消す。次の起動で移行をやり直す
-  （v2 を消せなくても、印の無い v2 は起動時の判定 5 で消してやり直す）。
-- 5 の rename だけが失敗したときは v2 を使い、次の起動で起動時の判定 5 により rename し直す。
-- v1 の `Load` が解析できない行を報告したときも、読めた行で移行する。v1 の `.enc` は `.bak` として残るので、
-  解析できなかった行は `.bak` に残る。
+- 1〜4 のどこかで失敗したら、v2 を書けていれば消し、その起動は下記の「v1 のまま読む」で動く。v2 を消せなくても、
+  印の無い v2 は次の起動の判定 6 で消してやり直す。
+- 5 の rename だけが失敗したときは v2 を使い、次の起動の判定 7 で取り込みと rename をやり直す。
+- v1 の `Load` が解析できない行を報告したときも、読めた行で移す。v1 のストアは v1 の退避として残るので、
+  解析できなかった行は退避に残る。
 - 設定のモード（`typoCorrectionMode` の `auto_replace` など）の読み替えはストアの移行と別で、§12.14 が持つ。
+
+**v1 のまま読む**: 移行に失敗した起動では、Host は v1 のストアを M35 の規則（§5-1・§6）のまま使い、
+v2 を持たない。
+
+- 観測は v1 のストアに保存する。パターンと `typo_events` は保存しない。
+- 忘却と全削除は v1 のストアに及ぼし（`docs/learning-data-management-spec.md` §4.2・§4.6）、v1 の退避が
+  あれば下記の「学習の削除」と同じく退避にも及ぼす。
+- 保持上限は当てない（v1 の `Lookup` の期限が効く）。
+- 次の起動で移行をやり直す。
 
 #### 学習の削除
 
-- 忘却（`ForgetLearningEntry`、`store` は `typo`）:
-  - パターンなら、該当する `typo_patterns` の行と、その `pattern_id` を持つ `typo_events` の行を消す。
-  - 読みの組なら、`typo_reading_pairs` の行と、`observed_reading` と `corrected_reading` が同じ組の
-    `typo_events` の行を消す。v1 の `.bak`（と、残っていれば v1 の `.enc`）からも同じ組を除く。書き戻しは
-    DPAPI 暗号化と atomic replace で行い、失敗したら忘却を失敗として返す。
-- 全削除（`ResetLearningStore`、`store` は `typo`）: `typo_patterns`、`typo_events`、`typo_reading_pairs` の
-  全行を消し、v1 の `.bak`（と、残っていれば v1 の `.enc`）を消す。`typo_settings` は学習ではないので残す。
-  途中で失敗しても半端に消えないよう、次の順に処理する（`docs/learning-data-management-spec.md` §4.6）。
-  1. 読み込みに失敗して保存を止めているときは、何も変えずに `save_failed` を返す。
-  2. v1 の `.bak` と v1 の `.enc` を消す。失敗したら、何も変えずに `save_failed` を返す。
-  3. v2 の複写を空にして保存する。失敗したら、公開済みの内容を保って `save_failed` を返す。
-     このとき v1 の `.bak` は既に無いので、消した学習が破損時の移し直しで戻ることは無い。
+一覧と忘却の id（`docs/learning-data-management-spec.md` §4.1）は次のとおり導く。
+
+- 読みの組: チャネルを空、読みを誤った読み、表記を正しい読みとする（v1 と同じ）。移行の前後で id は変わらない。
+- パターン: チャネルを `pattern`、読みを `observed_pattern`、表記を `intended_pattern` とする。
+  一覧の entry の `channel` に `pattern` を出して、読みの組と見分ける。
+
+忘却（`ForgetLearningEntry`、`store` は `typo`）:
+
+- パターンなら、該当する `typo_patterns` の行と、その `pattern_id` を持つ `typo_events` の行を消す。
+- 読みの組なら、`typo_reading_pairs` の行と、`observed_reading` と `corrected_reading` が同じ組の
+  `typo_events` の行を消し、v1 の退避（と、残っていれば v1 のストア）からも同じ組を除く。
+- 書く順: v1 の退避と v1 のストアを先に書き戻し、成功してから v2 を保存する。書き戻しに失敗したら、
+  v2 を変えずに忘却を失敗として返す。v2 の保存に失敗したら `save_failed` を返し、公開済みの内容を保つ
+  （v1 の側からは組が除かれたままになるが、消した学習が戻る向きの不整合は生じない）。
+- v1 の側の書き戻しでは、除く組の行だけを除き、解析できない行を含むほかのバイト列は保つ
+  （`LearningStore` の M7 ファイルへの書き戻しと同じ。`docs/learning-data-management-spec.md` §4.2）。
+
+全削除（`ResetLearningStore`、`store` は `typo`）: `typo_patterns`、`typo_events`、`typo_reading_pairs` の
+全行を消し、v1 の退避（と、残っていれば v1 のストア）を消す。`typo_settings` は学習ではないので残す。
+次の順に処理する。
+
+1. 読み込みに失敗して保存を止めているときは、何も変えずに `save_failed` を返す。
+2. v1 の退避と v1 のストアを消す。失敗したら `save_failed` を返す。このとき一部だけ消えていることがあるが、
+   Host が提示する内容（v2）は変わらない。
+3. v2 の複写を空にして保存する。失敗したら、公開済みの内容を保って `save_failed` を返す。
+   v1 の側は既に無いので、消した学習が破損時の移し直しで戻ることは無い。
+
+「v1 のまま読む」起動では、v1 の退避を先に消し、その後で v1 のストアを空にして保存する。どちらで失敗しても
+`save_failed` を返し、Host が提示する内容（v1 のストア）は失敗の前と変わらない。
+いずれの経路でも、`save_failed` の後に Host が提示する学習の内容が変わらないという
+`docs/learning-data-management-spec.md` §4.6 の契約を満たす。変わりうるのは退避の写しだけである。
+
 - 消した値がページの残りとして保存されないよう、`PRAGMA secure_delete` を常に `ON` にする。
   忘却と全削除の後は `VACUUM` してから保存する。
-- v1 の `.bak` を削除の範囲に入れるのは、残すと破損時の移し直しで消した学習が戻るためである。
+- v1 の退避を削除の範囲に入れるのは、残すと破損時の移し直しで消した学習が戻るためである。
 
-v1 の `.bak` を含むバックアップの形式（`docs/learning-data-management-spec.md` §5）は DEV-2148 で決める。
+#### バックアップと export
+
+`docs/learning-data-management-spec.md` §5・§5.1 の typo の entry（`typo_corrections.tsv.enc`、v1 の TSV）は
+v1 の形式である。v2 を有効にする実装（DEV-2148）は、この entry を v2 に合わせて改める変更を含み、
+改めるまで v2 を有効にしない（DEV-2148 の完了条件）。
 
 #### 保持上限
 
-`typo_events` と `typo_reading_pairs` は、それぞれ次の早く当たる方で古い行から消す。保存の直前に当て、
-v1 からの移行では、検証済みの印（上記の手順 4）を書くまでは当てない。
+`typo_events` と `typo_reading_pairs` は、それぞれ次の早く当たる方で古い行から消す。保存の直前に当てる。
+印の無い v2（移行の検証の前）には当てない。
 
 - 期間: 180 日（`created_at` / `last_updated_at` から。v1 の `Lookup` の期限と同じ）
 - 件数: 10000 行（`docs/user-learning-enhancement-spec.md` §3.1.1 の `learning_max_records` と同じ）

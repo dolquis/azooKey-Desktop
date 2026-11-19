@@ -2666,6 +2666,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **変更対象**: `reranker/`（新規ディレクトリ）、
   `reranker/TinyReranker.h`、`reranker/TinyRerankerOnnx.cpp`、
   `models/tiny_reranker.onnx`（新規アセット）、
+  ONNX Runtime の取り込み（`CMakeLists.txt` の取得と pin、MSI への `onnxruntime.dll` の同梱、
+  `THIRD_PARTY_LICENSES`。方式は `docs/neural-reranker-spec.md` §7.3）、
   `inference-host/src/Dispatcher.cpp`（rerank フェーズに統合）、
   `docs/neural-reranker-spec.md`。
 - **受け入れ条件**:
@@ -2689,13 +2691,13 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   [`docs/decisions/2026-11-20-onnx-runtime-for-reranker.md`](../docs/decisions/2026-11-20-onnx-runtime-for-reranker.md)。
 - **変更対象**: `reranker/ModernBertScorer.h`、
   `reranker/ModernBertScorerOnnx.cpp`、
-  `models/modernbert-ja-70m.onnx`（新規アセット）、
+  `models/modernbert-ja-70m.onnx`（新規アセット。repo と MSI には置かず、既定パスへダウンロードする。spec §6）、
   `inference-host/src/Dispatcher.cpp`（ambiguity 判定で起動制御）、
   `docs/modernbert-ja-scoring-spec.md`。
 - **受け入れ条件**:
   - M52 ベンチで homophone top1 が baseline 比 +5% 以上
   - 通常入力の p95 latency 悪化が +20ms 以内
-  - ModernBERT がロードできない環境（CPU only / モデル未配置）でも fallback で動作する
+  - ModernBERT がロードできない環境（spec §6.3 の許可した実行 EP が無い / モデル未配置）でも fallback で動作する
     （IME が止まらない）
   - M46 secure 中は完全 OFF（cache 読み書きも行わない）
   - `ambiguity_score < threshold` のリクエストでは ModernBERT が呼ばれない

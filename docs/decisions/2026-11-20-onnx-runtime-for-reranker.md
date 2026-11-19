@@ -16,7 +16,7 @@ M57 spec は backend を R2 `winml` と R1 `cuda` / `vulkan` に限り、CPU を
 
 確認済み:
 
-- MSI に第三者の DLL は無かった。llama.cpp は `BUILD_SHARED_LIBS=OFF` で Host に静的リンクしている。
+- MSI が同梱する第三者の DLL は MSVC runtime（`msvcp140.dll` など。`sideload-packaging-spec.md` §4.1）だけで、推論ライブラリの DLL は無かった。llama.cpp は `BUILD_SHARED_LIBS=OFF` で Host に静的リンクしている。
 - `docs/build-ci-spec.md` §3.1 は、prebuilt バイナリを取得元の固定と SHA256 の pin で扱う。vcpkg は必須にしない。
 - DirectML は maintenance mode で、新しい op や最適化は足されない（Microsoft Learn）。
 - Windows ML は ORT のコピーを持つ。2026-10-26 の `Microsoft.Windows.AI.MachineLearning` 2.5.96 は ORT 1.28.3 を含む。CPU EP と DirectML EP は全版で使えるが、NPU / GPU の EP は Windows 11 24H2 以降にカタログから取得する。self-contained の構成は約 41 MB（`onnxruntime.dll` 約 20 MB と `DirectML.dll` 約 20 MB）。Windows App SDK の bootstrap が要る（Microsoft Learn）。
@@ -27,7 +27,7 @@ M57 spec は backend を R2 `winml` と R1 `cuda` / `vulkan` に限り、CPU を
 
 確認していない事実:
 
-- GitHub release の win-arm64 の zip の有無
+- GitHub release の win-arm64 の zip の有無（無ければ、ARM64 の取得元は NuGet の `Microsoft.ML.OnnxRuntime` の nupkg の URL にする。取得元は取り込む PR で確かめて固定する）
 - 素の ORT の `onnxruntime.dll`（CPU 版）の実サイズ
 - CPU EP での fp16 の速さ
 - ORT の prebuilt に同梱される第三者表記の中身

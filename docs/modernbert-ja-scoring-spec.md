@@ -276,9 +276,10 @@ runtime ガード双方の判定境界になる。合計 2 GB は固定の絶対
 **ロードゲート（モデルロード時に 1 回評価。降格ラダー付き）**
 
 ```
-load_target = modernbertQuantization        # 既定 fp16
+ep          = execution_ep                   # §6.3 の選択順で決めた実行 EP
+load_target = (ep == CPU) ? int8 : modernbertQuantization   # CPU EP は INT8 から（§6.3）
 loop:
-  est_rss   = RSS_INCREMENT[backend][load_target]      # 上表
+  est_rss   = RSS_INCREMENT[ep][load_target]           # 上表の行（CPU INT8 / GPU・NPU の EP）
   proj_total = current_host_rss + est_rss
   if est_rss <= modernbertRssCapMb and proj_total <= 2GB:
       load(load_target); break               # ロード成功
@@ -290,7 +291,7 @@ loop:
       break
 ```
 
-- 降格ラダーは **fp16 → int8 → ロードせず**。INT8 でも上限を超える低メモリ
+- 降格ラダーは **fp16 → int8 → ロードせず**（CPU EP は §6.3 のとおり INT8 から始め、**int8 → ロードせず**）。INT8 でも上限を超える低メモリ
   環境ではロードせず、全リクエストを `modernbert_used=false, reason=rss_cap`
   で M56 `final_score`（ModernBERT 抜き）に fallback する（IME は通常動作）。
 - ユーザーが `always` を選んでも上限は不変（上限超過時はロードしない）。
@@ -347,6 +348,10 @@ ModernBERT は M56 と同じ ONNX Runtime で動かす（ランタイム、依�
   CUDA の実リンクは中止している（`docs/decisions/2026-08-04-cuda-real-link-cancellation.md`）。
 - DirectML の EP は使わない（`docs/neural-reranker-spec.md` §7.3）。
 - 許可集合に入る EP が無いあいだは、M57 はロードせず `reason=cpu_backend` で fallback する（§4.0 順 3）。
+- 実行 EP の選択順: モデルのロード時に、許可集合の中から GPU / NPU の EP（R2）を先に選ぶ。その機器で GPU / NPU の
+  EP を使えない（OS build が 26100 未満、Windows ML の EP の取得や登録に失敗した、など。
+  `docs/copilot-pc-backend-spec.md` §4.3・§4.6）ときは、CPU EP が許可集合に入っていれば CPU EP を選ぶ。
+  どちらも選べなければロードしない（`reason=cpu_backend`）。選んだ EP は load イベントログに記録する。
 
 **CPU EP の計測ゲート**
 
@@ -396,7 +401,8 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `rer
     RSS / backend / timeout の安全ゲートは適用され、上限超過時はロードしない
   - `off`: 無効
 - `modernbertQuantization`: **初期ロード対象**（`fp16` 既定）。RSS 上限超過時は
-  §6.1 の降格ラダー（fp16→int8→ロードせず）で実効値が変わりうる。
+  §6.1 の降格ラダー（fp16→int8→ロードせず）で実効値が変わりうる。CPU EP では値によらず
+  INT8 をロードする（§6.3）。
 - `modernbertRssCapMb`: §6.1 のハード上限（既定 200）。設計上は `always` でも
   この上限を緩めない。`0` 指定は無効化ではなく**上限緩和禁止**のため最小値で
   clamp する（下限の既定は 100。実機検証で校正する）。
@@ -427,7 +433,7 @@ M46 secure 中は ModernBERT を **完全 OFF** にする:
 - integration: M52 ベンチで homophone top1 +5% 以上、p95 latency +20ms
   以内
 - integration: M46 secure 中の完全 OFF
-- snapshot: ONNX schema / FP16 / INT8 量子化版の結果同等性
+- snapshot: ONNX schema / FP16 / INT8 量子化版の結果同等性（FP16 は GPU / NPU の EP がある環境だけで比べる。§6.3）
 
 ## 11. M57 受け入れ条件
 

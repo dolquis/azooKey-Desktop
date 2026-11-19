@@ -65,6 +65,87 @@ double ResidentMb() {
 #endif
 }
 
+// The file bytes [begin, end) that count as the lattice's memory (spec section 9): all of
+// lattice_core, and the CONN section of each layer.
+struct LatticeRange {
+  std::filesystem::path file;
+  uint64_t begin{};
+  uint64_t end{};
+};
+
+// [offset, offset + size) of section `name`, read from the .azdic section table
+// (docs/azdic-physical-layer-spec.md section 3); nullopt without that section.
+std::optional<LatticeRange> SectionRange(const std::filesystem::path& file, const char (&name)[5]) {
+  std::ifstream input(file, std::ios::binary);
+  unsigned char header[64];
+  if (!input.read(reinterpret_cast<char*>(header), sizeof(header))) return std::nullopt;
+  const auto load = [](const unsigned char* bytes, int width) {
+    uint64_t value = 0;
+    for (int i = width - 1; i >= 0; --i) value = (value << 8) | bytes[i];
+    return value;
+  };
+  const auto count = load(header + 28, 4);
+  for (uint64_t i = 0; i < count; ++i) {
+    unsigned char entry[24];
+    if (!input.read(reinterpret_cast<char*>(entry), sizeof(entry))) return std::nullopt;
+    if (std::equal(entry, entry + 4, name)) {
+      const auto offset = load(entry + 8, 8);
+      return LatticeRange{file, offset, offset + load(entry + 16, 8)};
+    }
+  }
+  return std::nullopt;
+}
+
+#ifdef _WIN32
+// Bytes of each range resident in this process: the working set pages of a view mapped from the
+// range's file at a file offset inside the range. DoubleArrayTrie maps a whole file at offset 0.
+// Empty when the working set cannot be read.
+std::vector<uint64_t> ResidentBytes(const std::vector<LatticeRange>& ranges) {
+  SYSTEM_INFO system{};
+  GetSystemInfo(&system);
+  const uint64_t page = system.dwPageSize;
+  std::vector<unsigned char> buffer(sizeof(PSAPI_WORKING_SET_INFORMATION));
+  for (;;) {
+    if (QueryWorkingSet(GetCurrentProcess(), buffer.data(), static_cast<DWORD>(buffer.size())))
+      break;
+    if (GetLastError() != ERROR_BAD_LENGTH) return {};
+    const auto entries =
+        reinterpret_cast<PSAPI_WORKING_SET_INFORMATION*>(buffer.data())->NumberOfEntries;
+    buffer.resize(sizeof(PSAPI_WORKING_SET_INFORMATION) +
+                  (entries + 4096) * sizeof(PSAPI_WORKING_SET_BLOCK));
+  }
+  const auto* info = reinterpret_cast<const PSAPI_WORKING_SET_INFORMATION*>(buffer.data());
+  std::map<const void*, std::wstring> mapped_files;  // File name by view base.
+  std::vector<uint64_t> resident(ranges.size());
+  for (ULONG_PTR i = 0; i < info->NumberOfEntries; ++i) {
+    const auto address = static_cast<uint64_t>(info->WorkingSetInfo[i].VirtualPage) * page;
+    MEMORY_BASIC_INFORMATION region{};
+    if (!VirtualQuery(reinterpret_cast<const void*>(address), &region, sizeof(region)) ||
+        region.Type != MEM_MAPPED)
+      continue;
+    auto name = mapped_files.find(region.AllocationBase);
+    if (name == mapped_files.end()) {
+      wchar_t device_path[1024];
+      const auto length =
+          GetMappedFileNameW(GetCurrentProcess(), region.AllocationBase, device_path, 1024);
+      std::wstring file(device_path, length);
+      name = mapped_files.emplace(region.AllocationBase, file.substr(file.rfind(L'\\') + 1)).first;
+    }
+    const uint64_t offset = address - reinterpret_cast<uint64_t>(region.AllocationBase);
+    for (size_t r = 0; r < ranges.size(); ++r) {
+      if (_wcsicmp(name->second.c_str(), ranges[r].file.filename().wstring().c_str()) != 0)
+        continue;
+      const auto begin = (std::max)(offset, ranges[r].begin);
+      const auto end = (std::min)(offset + page, ranges[r].end);
+      if (begin < end) resident[r] += end - begin;
+    }
+  }
+  return resident;
+}
+#endif
+
+double Mb(uint64_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); }
+
 // Code points of every evaluation reading, concatenated in file order.
 std::vector<std::string> ReadCodepoints(const std::filesystem::path& eval) {
   std::ifstream input(eval, std::ios::binary);
@@ -156,8 +237,11 @@ int main(int argc, char** argv) {
     const auto rss_before = ResidentMb();
     core::LatticeDictionary dictionary;
     auto start = Clock::now();
-    if (!dictionary.Load(dict_dir / "lattice_core.azdic"))
+    const auto core_path = dict_dir / "lattice_core.azdic";
+    if (!dictionary.Load(core_path))
       throw std::runtime_error("lattice_core: " + std::string(dictionary.Error()));
+    std::vector<LatticeRange> lattice_ranges{
+        {core_path, 0, static_cast<uint64_t>(std::filesystem::file_size(core_path))}};
     std::cout << "lattice_core_load_ms=" << Ms(start, Clock::now()) << '\n';
     std::vector<std::unique_ptr<core::DoubleArrayTrie>> tries;
     std::vector<std::unique_ptr<core::StaticLatticeVocabulary>> layers;
@@ -175,6 +259,8 @@ int main(int argc, char** argv) {
       std::cout << "layer=" << name << " load_ms=" << load_ms
                 << " connection_check_ms=" << Ms(start, Clock::now())
                 << " uses_connections=" << (layer->UsesConnections() ? 1 : 0) << '\n';
+      if (const auto connections = SectionRange(path, "CONN"))
+        lattice_ranges.push_back(*connections);
       vocabularies.push_back(layer.get());
       tries.push_back(std::move(trie));
       layers.push_back(std::move(layer));
@@ -229,6 +315,25 @@ int main(int argc, char** argv) {
                 << " resident_mb_after_queries=" << rss_after
                 << " resident_mb_increase_loaded=" << rss_loaded - rss_before
                 << " resident_mb_increase_total=" << rss_after - rss_before << '\n';
+    // The lattice's own memory (spec section 9): lattice_core and every CONN, all resident in the
+    // worst case (mapped), and as resident after the queries (resident).
+    uint64_t lattice_core_bytes = lattice_ranges.front().end, connection_bytes = 0;
+    for (size_t i = 1; i < lattice_ranges.size(); ++i)
+      connection_bytes += lattice_ranges[i].end - lattice_ranges[i].begin;
+    std::cout << "lattice_mapped_mb=" << Mb(lattice_core_bytes + connection_bytes)
+              << " lattice_core_mapped_mb=" << Mb(lattice_core_bytes)
+              << " connection_mapped_mb=" << Mb(connection_bytes);
+#ifdef _WIN32
+    const auto resident = ResidentBytes(lattice_ranges);
+    if (!resident.empty()) {
+      uint64_t resident_connections = 0;
+      for (size_t i = 1; i < resident.size(); ++i) resident_connections += resident[i];
+      std::cout << " lattice_resident_mb=" << Mb(resident.front() + resident_connections)
+                << " lattice_core_resident_mb=" << Mb(resident.front())
+                << " connection_resident_mb=" << Mb(resident_connections);
+    }
+#endif
+    std::cout << '\n';
     return within_budget ? 0 : 1;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';

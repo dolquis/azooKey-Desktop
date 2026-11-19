@@ -1,6 +1,7 @@
 # --dict-dir and --lattice (conversion-quality-benchmark-spec sections 7 and 14.1): the bundled
 # dictionaries change the candidates, both runs record the compatibility keys, a run with the
-# bundled dictionaries does not compare against one without them, and bad input exits 2.
+# bundled dictionaries does not compare against one without them, --lattice on converts a
+# sentence --lattice off does not, and bad input exits 2.
 foreach(required_variable BENCH_EXE FIXTURE_DIR WORK_DIR)
   if(NOT DEFINED ${required_variable})
     message(FATAL_ERROR "${required_variable} is required")
@@ -16,9 +17,23 @@ file(REMOVE_RECURSE "${WORK_DIR}")
 file(WRITE "${EVAL_DATA}"
      "{\"id\":\"dict_dir_smoke_001\",\"input\":\"げんいん\",\"expected\":\"原因\","
      "\"category\":[\"general\"],\"provenance\":\"authored\"}\n")
-file(MAKE_DIRECTORY "${WORK_DIR}/empty" "${WORK_DIR}/broken" "${WORK_DIR}/no_layer")
+file(MAKE_DIRECTORY "${WORK_DIR}/empty" "${WORK_DIR}/broken" "${WORK_DIR}/no_layer"
+     "${WORK_DIR}/lattice" "${WORK_DIR}/broken_lattice")
 file(COPY_FILE "${FIXTURE_DIR}/magic.azdic" "${WORK_DIR}/broken/sudachi_lexicon.azdic")
 file(COPY_FILE "${FIXTURE_DIR}/valid.azdic" "${WORK_DIR}/no_layer/other.azdic")
+# DEV-2101: the sentence fixture of the lattice, whole and with a lattice_core lacking CMAT.
+foreach(directory lattice broken_lattice)
+  file(COPY_FILE "${FIXTURE_DIR}/lattice/sudachi_lexicon.azdic"
+       "${WORK_DIR}/${directory}/sudachi_lexicon.azdic")
+endforeach()
+file(COPY_FILE "${FIXTURE_DIR}/lattice/lattice_core.azdic" "${WORK_DIR}/lattice/lattice_core.azdic")
+file(COPY_FILE "${FIXTURE_DIR}/lattice/core_no_cmat.azdic"
+     "${WORK_DIR}/broken_lattice/lattice_core.azdic")
+# Only the lattice splits this sentence; the dictionary has no word for the whole reading.
+set(LATTICE_EVAL_DATA "${WORK_DIR}/bench/data/lattice_smoke.jsonl")
+file(WRITE "${LATTICE_EVAL_DATA}"
+     "{\"id\":\"lattice_smoke_001\",\"input\":\"きょうはいいてんきです\","
+     "\"expected\":\"今日はいい天気です\",\"category\":[\"general\"],\"provenance\":\"authored\"}\n")
 
 function(run_bench name)
   file(REMOVE "${OUTPUT_PATH}")
@@ -86,9 +101,20 @@ expect_config("${first_sha}" "off" 1)
 run_bench(compared --dict-dir "${DICT_DIR}" --lattice off --baseline "${BASELINE_PATH}")
 expect_failure(compared "baseline is incompatible: dictionary_bundle_sha256")
 
-# --dict-dir defaults to --lattice on, which needs lattice conversion.
+# --dict-dir defaults to --lattice on, which needs lattice_core.azdic (lattice spec section 10.1).
 run_bench(default_on --dict-dir "${DICT_DIR}")
-expect_failure(default_on "--lattice on needs lattice conversion")
+expect_failure(default_on "--lattice on could not load lattice_core.azdic")
+run_bench(broken_lattice --dict-dir "${WORK_DIR}/broken_lattice" --lattice on)
+expect_failure(broken_lattice "--lattice on could not load lattice_core.azdic")
+# A and B on the same dictionaries: only B converts the sentence.
+set(EVAL_DATA "${LATTICE_EVAL_DATA}")
+run_bench(lattice_off --dict-dir "${WORK_DIR}/lattice" --lattice off)
+expect_success(lattice_off)
+expect_config("hash" "off" 0)
+set(lattice_sha "${last_sha}")
+run_bench(lattice_on --dict-dir "${WORK_DIR}/lattice")
+expect_success(lattice_on)
+expect_config("${lattice_sha}" "on" 1)
 run_bench(on_without_dictionary --lattice on)
 expect_failure(on_without_dictionary "--lattice on requires --dict-dir")
 run_bench(empty_directory --dict-dir "${WORK_DIR}/empty" --lattice off)

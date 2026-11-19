@@ -330,6 +330,8 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 
 `left_count` と `right_count` は `0xffff` 未満とする。ID 0（文頭・文末）は必ず添字を持つ。詰める対象は、同梱する
 どれかの層の `CONN` と lattice_core の `CONN` が使う ID、および `docs/lattice-conversion-spec.md` §8.3 の代表 ID である。
+コストの並びが同じ行（列）を持つ ID は、同じ添字を指す（`docs/lattice-conversion-spec.md` §9 の縮め方の 1）。添字は、
+ID の昇順に見て、並びが初めて現れた順に振る。
 
 `CONN` と `CMAT` も `format_version` を上げずに足せる。v1 のリーダーは未知の `type` を無視するので、
 `CONN` を持つ層をラティス変換を知らないリーダーが読んでも、完全一致・前方一致・予測の結果は変わらない。
@@ -694,9 +696,10 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 （MeCab・Sudachi と同じ）。`CMAT` は、詰める対象のセルがすべてちょうど 1 回ずつ現れることを求め、欠けたセル・重複・範囲外の
 ID とコストをビルドエラーとする。
 
-20260723 版の語彙と上の規則では、語が使う連接 ID は左 3,332 種・右 3,336 種で、ID 0 を足して詰めた `CMAT` の行列は
-約 22 MB になる。lattice_core は 20,473 エントリ、約 25 MB で、同梱 `.azdic` の合計は約 105 MB になり §15.9 に収まる。
-足切りを外すと ID は約 5,800 種になり、行列は約 67 MB になる。
+20260723 版の語彙と上の規則では、語が使う連接 ID は左 3,332 種・右 3,336 種である。ID 0 を足して詰め、コストの並びが
+同じ行と列をまとめた `CMAT` の行列は、左 2,647・右 2,606 の添字で約 14 MB になる（まとめる前は約 22 MB）。lattice_core は
+20,473 エントリ、約 17 MB で、同梱 `.azdic` の合計は約 97 MB になり §15.9 に収まる。足切りを外すと ID は約 5,800 種になり、
+まとめる前の行列は約 67 MB になる。
 
 **同梱ビルドと再現性**。`build_bundled.py` は SudachiDict に続けて、プロジェクト自作の
 `dictbuild/sources/technical_terms_lexicon.lex.tsv` を同じビルダで生成する。技術用語seedの

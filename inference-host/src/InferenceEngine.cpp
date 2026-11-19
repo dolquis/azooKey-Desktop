@@ -66,6 +66,33 @@ std::optional<std::string> SafeModelRuntimeError(const std::optional<std::string
 }
 constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
 constexpr size_t kPredictionDisplayLimit = 5;
+// docs/lattice-conversion-spec.md section 3: the budget of a lattice built after the model fell
+// back (the 32 code point p95 of section 9), N, and the debug_info of its candidates.
+constexpr auto kLatticeFallbackBudget = std::chrono::milliseconds(15);
+constexpr size_t kLatticeMaxPaths = 8;
+constexpr std::string_view kLatticeDebugPrefix = "lattice;rank=";
+
+// The request's candidate limit under EngineConfig::max_candidates; 0 is no limit.
+uint32_t EffectiveMaxCandidates(uint32_t configured, uint32_t requested) {
+  return configured == 0  ? requested
+         : requested == 0 ? configured
+                          : std::min(requested, configured);
+}
+
+// N of lattice-conversion-spec section 3.5.
+size_t LatticePathCount(uint32_t effective_max_candidates, bool live) {
+  if (live) return 1;
+  return effective_max_candidates == 0
+             ? kLatticeMaxPaths
+             : (std::min)(kLatticeMaxPaths, static_cast<size_t>(effective_max_candidates));
+}
+
+// Whether a request gets the lattice's N-best (lattice-conversion-spec sections 3.2 and 3.3).
+// `model_answered` is a request the model converter answered without falling back.
+bool LatticeApplies(const LatticeConfig& config, bool model_answered) {
+  // Stage 2 (with_model) keeps its score band for DEV-2102 to decide: no candidates yet.
+  return config.enabled && !model_answered;
+}
 
 void LogTracePhase(logging::RuntimeLogger* logger, const InferenceTelemetry* telemetry,
                    logging::Phase phase, std::chrono::steady_clock::time_point start,
@@ -252,6 +279,9 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
       reranker_(store),
       config_(std::move(config)),
       runtime_logger_(runtime_logger) {
+  lattice_fallback_budget_ns_.store(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(kLatticeFallbackBudget).count(),
+      std::memory_order_relaxed);
   ApplyDictionaryConfigLocked();
   if (store_) {
     learning_flush_thread_ = std::thread([this] {
@@ -876,7 +906,9 @@ void InferenceEngine::RefreshDictionaryLocked() {
 bool InferenceEngine::LoadDictionaryLayer(learning::LayerId layer,
                                           const std::filesystem::path& path, bool verify) {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  return dictionaries_.LoadStatic(layer, path, verify);
+  const bool loaded = dictionaries_.LoadStatic(layer, path, verify);
+  LogLatticeConnectionsLocked(layer);
+  return loaded;
 }
 
 std::vector<InferenceEngine::DictionaryLoadResult> InferenceEngine::LoadBundledDictionaryLayers(
@@ -891,7 +923,59 @@ std::vector<InferenceEngine::DictionaryLoadResult> InferenceEngine::LoadBundledD
     const bool loaded = dictionaries_.LoadStatic(layer, directory / name);
     results.push_back({name, loaded, dictionaries_.LayerError(layer)});
   }
+  if (config_.lattice.enabled) {
+    // Not a layer: only the lattice reads it (lattice-conversion-spec section 8.2).
+    const bool loaded = dictionaries_.LoadLatticeCore(directory / "lattice_core.azdic");
+    results.push_back({"lattice_core.azdic", loaded, dictionaries_.LatticeError()});
+    LogLatticeConnectionsLocked();
+  }
   return results;
+}
+
+void InferenceEngine::LogLatticeConnectionsLocked(std::optional<learning::LayerId> only) const {
+  if (!runtime_logger_ || !dictionaries_.IsLatticeAvailable()) return;
+  for (const auto& [layer, name] :
+       {std::pair{learning::LayerId::Base, "base_lexicon"},
+        std::pair{learning::LayerId::Sudachi, "sudachi_lexicon"},
+        std::pair{learning::LayerId::Neologd, "neologd_lexicon"},
+        std::pair{learning::LayerId::NamedEntity, "named_entity_lexicon"},
+        std::pair{learning::LayerId::TechnicalTerms, "technical_terms_lexicon"}}) {
+    if (only && layer != *only) continue;
+    // The layer's words take the default ids instead (spec sections 3.6 and 8.3).
+    if (!dictionaries_.LatticeConnectionError(layer).empty())
+      runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "lattice_connections",
+                           {{"layer", logging::RuntimeLogSafeText(name)},
+                            {"result", logging::RuntimeLogSafeText("unused")}});
+  }
+}
+
+std::vector<core::Candidate> InferenceEngine::LatticeCandidatesLocked(
+    const std::string& kana, size_t max_paths, const std::atomic<bool>* cancel,
+    std::optional<std::chrono::steady_clock::time_point> deadline,
+    core::LatticeStatus& status) const {
+  core::LatticeQuery query;
+  query.max_paths = max_paths;
+  query.limits.cancel = cancel;
+  query.limits.deadline = deadline;
+  const auto result = dictionaries_.ConvertLattice(kana, query);
+  status = result.status;
+  std::vector<core::Candidate> candidates;
+  const double scale = dictionaries_.LatticeScoreScale();
+  if (result.paths.empty() || !(scale > 0)) return candidates;
+  // Section 3.4: rank i scores 1 - min(0.9, (cost_i - cost_1) / C), within [0.1, 1.0].
+  const int32_t best = result.paths.front().cost;
+  for (size_t i = 0; i < result.paths.size(); ++i) {
+    core::Candidate candidate;
+    candidate.surface = result.paths[i].Surface();
+    candidate.reading = kana;
+    // 1.0 - 0.9 rounds below 0.1 in binary floating point; the band's floor holds exactly.
+    candidate.score = (std::max)(
+        0.1, 1.0 - (std::min)(0.9, static_cast<double>(result.paths[i].cost - best) / scale));
+    candidate.source = core::CandidateSource::SystemDictionary;
+    candidate.debug_info = std::string(kLatticeDebugPrefix) + std::to_string(i + 1);
+    candidates.push_back(std::move(candidate));
+  }
+  return candidates;
 }
 
 void InferenceEngine::EnableDictionaryLayer(learning::LayerId layer, bool enabled) {
@@ -1204,6 +1288,10 @@ void InferenceEngine::SetBeforeUserDictionaryFileLockForTests(std::function<void
 void InferenceEngine::SetBeforeLearningSaveForTests(
     std::function<void(std::chrono::milliseconds)> hook) {
   before_learning_save_for_tests_ = std::move(hook);
+}
+
+void InferenceEngine::SetLatticeFallbackBudgetForTests(std::chrono::nanoseconds budget) {
+  lattice_fallback_budget_ns_.store(budget.count(), std::memory_order_relaxed);
 }
 
 void InferenceEngine::SetBenchInstructionProfile(std::string profile) {
@@ -1564,6 +1652,7 @@ void InferenceEngine::ApplyConfigLocked(const EngineConfig& config) {
   config_.english = config.english;
   config_.nll = ClampNllConfig(config.nll);
   ++nll_config_revision_;
+  config_.lattice = config.lattice;
   config_.enable_live_conversion = config.enable_live_conversion;
   config_.dynamic_punctuation = config.dynamic_punctuation;
   config_.segment_boundary_confidence = config.segment_boundary_confidence;
@@ -1713,8 +1802,18 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
     const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
     const MixedConversionOptions* mixed) {
-  auto result = QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel,
-                                      max_candidates, live, telemetry, tag_boosts, mixed);
+  return QueryFilteredCandidates(requested_kana, context, now_epoch_sec, cancel, max_candidates,
+                                 live, telemetry, tag_boosts, mixed, true);
+}
+
+InferenceEngine::CandidatesResult InferenceEngine::QueryFilteredCandidates(
+    const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
+    const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
+    const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
+    const MixedConversionOptions* mixed, bool lattice_allowed) {
+  auto result =
+      QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel, max_candidates, live,
+                            telemetry, tag_boosts, mixed, lattice_allowed);
   DropPrivateUseCandidates(result.candidates);
   DropMixedKanaAsciiModelCandidates(result.candidates, requested_kana,
                                     mixed ? mixed->english_ranges : kNoEnglishRanges);
@@ -1756,8 +1855,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
   if (alternative == alternatives.end() || !typed.corrected_reading.empty() ||
       typed.model_deadline_exceeded || (cancel && cancel->load(std::memory_order_relaxed)))
     return typed;
-  auto other = QueryCandidatesEx(*alternative, context, now_epoch_sec, cancel, max_candidates,
-                                 false, telemetry, tag_boosts);
+  // DEV-2101: without the lattice, so the other reading's dictionary candidates appended below
+  // are its words, not the lattice's paths of it (the DEV-1773 behavior).
+  auto other = QueryFilteredCandidates(*alternative, context, now_epoch_sec, cancel, max_candidates,
+                                       false, telemetry, tag_boosts, nullptr, false);
   const auto best_model_score = [](const CandidatesResult& result) -> std::optional<double> {
     std::optional<double> best;
     for (const auto& candidate : result.candidates)
@@ -1855,7 +1956,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
     const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
-    const MixedConversionOptions* mixed) {
+    const MixedConversionOptions* mixed, bool lattice_allowed) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -1901,6 +2002,15 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   bool using_model_converter = false;
   learning::AutoWordStore* auto_word_store = nullptr;
   std::vector<core::Candidate> merged;
+  // lattice-conversion-spec section 3.2; appended after the converter's candidates.
+  std::vector<core::Candidate> lattice;
+  std::optional<core::LatticeStatus> lattice_status;
+  // The request's own deadline (section 3.2): a lattice never runs past it.
+  const std::optional<std::chrono::steady_clock::time_point> request_deadline =
+      mixed ? mixed->deadline : std::nullopt;
+  const auto request_time_left = [&request_deadline] {
+    return !request_deadline || std::chrono::steady_clock::now() < *request_deadline;
+  };
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     converter = active_converter_;
@@ -1927,6 +2037,15 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
         merged.push_back(std::move(c));
       }
     }
+    // Without the model (not loaded, failed to load, SafeMode) the lattice is built in this
+    // section, under the request's cancel and deadline only.
+    if (lattice_allowed && !using_model_converter && LatticeApplies(config.lattice, false) &&
+        request_time_left()) {
+      lattice = LatticeCandidatesLocked(
+          kana,
+          LatticePathCount(EffectiveMaxCandidates(config.max_candidates, max_candidates), live),
+          cancel, request_deadline, lattice_status.emplace());
+    }
   }
   if (auto_word_store && config.dictionary.auto_words_enabled) {
     // M36-A (spec section 6). Read the store's published table outside the
@@ -1952,10 +2071,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   // M63-B section 10: the request's own deadline cuts the budget short.
   if (mixed && mixed->deadline)
     conversion_deadline = (std::min)(conversion_deadline, *mixed->deadline);
-  const uint32_t effective_max_candidates = config.max_candidates == 0 ? max_candidates
-                                            : max_candidates == 0
-                                                ? config.max_candidates
-                                                : std::min(max_candidates, config.max_candidates);
+  const uint32_t effective_max_candidates =
+      EffectiveMaxCandidates(config.max_candidates, max_candidates);
   const auto limited_context = TakeLastUtf8Codepoints(context, config.max_context_length);
   // Spec 6.2: the Fast lane converts with a single Zenzai beam, as live conversion does. The
   // fallback converter and the dictionary candidates keep their own limits.
@@ -2011,6 +2128,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       throw;
     }
   };
+  // The model converter answered with the fallback's candidates: zenzai-degraded,
+  // zenzai-deadline-fallback, or an exception (lattice-conversion-spec section 3.2).
+  bool model_fell_back = false;
   {
     // IConverter implementations own mutable decode state. Serialize calls to
     // that state without holding state_mutex_, so Health and model swaps remain responsive.
@@ -2023,6 +2143,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
         const auto stats = zenzai->last_decode_stats();
         out.model_deadline_exceeded =
             zenzai->last_fell_back_at_deadline() || (stats && stats->deadline_exceeded);
+        // The states behind the debug_info tags zenzai-deadline-fallback and zenzai-degraded.
+        const auto error = zenzai->last_error();
+        model_fell_back = zenzai->last_fell_back_at_deadline() ||
+                          (error && error->rfind("zenzai-degraded:", 0) == 0);
       }
       // A cut-off before the first beam step is no evidence the model recovered, so it leaves an
       // earlier runtime error in place instead of clearing it (DEV-1700).
@@ -2058,8 +2182,53 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   // the conversion's runtime error or KV state before its scoring step.
   const bool nll = config.nll.enabled && !live && (!mixed || mixed->nll);
   if (!nll) converter_lock.unlock();
+  model_fell_back = using_model_converter && (model_fell_back || convert_failed);
+  if (lattice_allowed && using_model_converter &&
+      LatticeApplies(config.lattice, !model_fell_back) && request_time_left()) {
+    // Section 3.2: not the converter's spent budget but 15 ms from here, within the request's
+    // own deadline and under its cancel.
+    auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::nanoseconds(lattice_fallback_budget_ns_.load(std::memory_order_relaxed)));
+    if (request_deadline) deadline = (std::min)(deadline, *request_deadline);
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    lattice = LatticeCandidatesLocked(kana, LatticePathCount(effective_max_candidates, live),
+                                      cancel, deadline, lattice_status.emplace());
+  }
+  // Section 3.6: each degradation of the request, by its result only (never the reading or a
+  // surface). A canceled request returns nothing, so its cut-off is not one.
+  const char* lattice_result = nullptr;
+  if (lattice_status) {
+    switch (*lattice_status) {
+      case core::LatticeStatus::Failed:
+        lattice_result = "failed";
+        break;
+      case core::LatticeStatus::Rejected:
+        lattice_result = "rejected";
+        break;
+      case core::LatticeStatus::Aborted:
+        lattice_result = canceled() ? nullptr : "aborted";
+        break;
+      case core::LatticeStatus::Truncated:
+        lattice_result = canceled() ? nullptr : "truncated";
+        break;
+      case core::LatticeStatus::Complete:
+      case core::LatticeStatus::Unavailable:  // Logged when lattice_core loaded.
+        break;
+    }
+  }
+  if (lattice_result && runtime_logger_) {
+    runtime_logger_->Log(
+        *lattice_status == core::LatticeStatus::Failed ? logging::RuntimeLogLevel::Warn
+                                                       : logging::RuntimeLogLevel::Info,
+        "lattice_conversion", {{"result", logging::RuntimeLogSafeText(lattice_result)}});
+  }
   merged.insert(merged.end(), std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));
+  // zenzai-inference-spec section 7.1 step 5: the lattice's N-best follows the converter's.
+  merged.insert(merged.end(), std::make_move_iterator(lattice.begin()),
+                std::make_move_iterator(lattice.end()));
   DedupMergedCandidates(merged);
 
   if (canceled()) return {};

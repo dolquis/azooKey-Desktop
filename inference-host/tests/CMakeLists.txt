@@ -1,8 +1,11 @@
 add_executable(host_engine_tests engine_test.cpp nll_scorer_test.cpp rewriter_test.cpp
   candidate_tags_test.cpp english_candidates_test.cpp english_dictionary_files_test.cpp
-  punctuation_inserter_test.cpp)
+  punctuation_inserter_test.cpp engine_lattice_test.cpp)
 target_compile_definitions(host_engine_tests PRIVATE
-  AZOOKEY_REWRITER_DATA_DIR="${PROJECT_SOURCE_DIR}/data")
+  AZOOKEY_REWRITER_DATA_DIR="${PROJECT_SOURCE_DIR}/data"
+  AZOOKEY_DICT_FIXTURE="${PROJECT_BINARY_DIR}/dictbuild/fixtures")
+# engine_lattice_test.cpp reads the lattice fixture (DEV-2101).
+add_dependencies(host_engine_tests dictionary_fixtures)
 target_link_libraries(host_engine_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )

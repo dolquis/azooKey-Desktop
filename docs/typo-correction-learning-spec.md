@@ -258,13 +258,11 @@ correct_reading` の頻度ペア学習だったのに対し、v2 は以下を統
 - raw_keys を IPC で受領（プライバシー処理）
 
 v1 の `wrong_reading → correct_reading` ペア学習は v2 でも下位互換
-として残す。マイグレート時は §12.8 の `typo_patterns` テーブル
-（`id INTEGER PRIMARY KEY`）に **legacy 集約用の予約行 1 行**
-（`typo_type = 'legacy_v1'`, `observed_pattern = ''`, `intended_pattern = ''`）
-を INSERT し、得られた整数 `id` を全 v1 由来 `typo_events.pattern_id`
-（INTEGER）に書き込む。`pattern_id` の文字列値（例: `"v1_legacy"`）は
+として残す。マイグレート時は v1 の組を §12.8 の `typo_reading_pairs` へ移し、
+`typo_patterns` と `typo_events` には入れない（手順は §12.8「v1 からの移行」）。
+v1 の組に由来する候補を示す `pattern_id` の文字列値（例: `"v1_legacy"`）は
 JSON 候補メタデータ（§12.2 の `pattern_id` フィールド、TEXT）でのみ使い、
-SQL の INTEGER 列とは混在させない。
+SQL の INTEGER 列（`typo_events.pattern_id`）とは混在させない。
 
 ### 12.1 アーキテクチャ
 
@@ -597,7 +595,23 @@ CREATE TABLE typo_reading_pairs (
 );
 ```
 
-v2 は TSV の拡張を経ずに SQLite で始める（DEV-1955）。以下の規則は DEV-2162 で定めた。
+v2 は TSV の拡張を経ずに SQLite で始める（DEV-1955）。
+
+#### パス
+
+v2 のファイルと v1 の `.bak` は、v1 の論理パス（既定は `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv`。host CLI の `--typo-store`
+で上書きできる。§5-1）と同じディレクトリに置き、名前は次のとおり v1 の論理パスから導く。
+
+| ファイル | 名前 | ディスク上 |
+|---|---|---|
+| v2 のストア | `typo_learning.v2.db` | `typo_learning.v2.db.enc` |
+| 移行した v1 | — | `typo_corrections.v1.tsv.enc.bak`（v1 の `typo_corrections.tsv.enc` を rename したもの） |
+
+`typo_corrections.tsv.bak` の名前は使わない。平文の v1 を DPAPI 形式へ移すときの退避と同名で、
+`WriteProtectedText` がこれを残った退避（orphan backup）とみなして保存を止めるためである。
+v1 の `.bak` は `<論理パス>.enc` の形を取らないので、読み書きは `.bak` の実パスを直接与えて行う。
+復号と暗号化、file lock（`.bak` の実パスに対する `AcquireExclusiveFileLockForPath`）、atomic replace は
+v2 のファイルと同じ規則に従う。
 
 #### 保存の形
 
@@ -605,13 +619,12 @@ v2 のストアはメモリ上の SQLite DB として開き、ディスクへは
 
 - 保存: `sqlite3_serialize` で得たバイト列を、v1 と同じ `WriteProtectedText`（DPAPI 暗号化、
   file lock、atomic replace。`learning/include/azookey/learning/DpapiCrypto.h`）で書く。
-  ファイル名は `typo_learning.v2.db` とし、DPAPI 保存ではディスク上は `typo_learning.v2.db.enc` になる。
-  置き場所は v1 と同じ `data\` 配下である（`docs/learning-data-management-spec.md` §2）。
 - 読み込み: 復号したバイト列を `sqlite3_deserialize` でメモリ DB に載せる。
-- ディスク上に平文の DB、`-journal`、`-wal`、`-shm` を置かない。`typo_events` と `typo_reading_pairs` は
-  読みと表記を持つため、平文で置くと M34 の暗号化の契約を破る。
+- ディスク上に平文の DB を置かない。ジャーナル（`-journal`、`-wal`、`-shm`）も、`VACUUM` や並べ替えが使う
+  一時ファイルもディスクに作らない（下記の `journal_mode` と `SQLITE_TEMP_STORE`）。`typo_events` と
+  `typo_reading_pairs` は読みと表記を持つため、平文で置くと M34 の暗号化の契約を破る。
 - スキーマの版は `PRAGMA user_version` に持ち、本節のスキーマを 1 とする。
-- ストアは保持上限（下記）で大きさが抑えられるので、保存のたびに DB 全体を書き直す。
+- 保存のたびに DB 全体を書き直す。行数が増える `typo_events` と `typo_reading_pairs` には保持上限（下記）を課す。
   確定ごとに同期保存せず、`docs/user-learning-enhancement-spec.md` §3.1.1 と同じく件数と時間で
   まとめて保存する。
 
@@ -620,12 +633,16 @@ v2 のストアはメモリ上の SQLite DB として開き、ディスクへは
 - sqlite.org が配布する amalgamation の zip を、CMake の FetchContent で取得する。版と zip の
   SHA3-256 を `CMakeLists.txt` に固定し、取得は opt-in の `AZOOKEY_FETCH_SQLITE` で行う
   （`docs/build-ci-spec.md` §3.1 の「取得元を固定して pin する」に従う）。
+- `azookey_learning` は常に build するので、SQLite を外した build は作らない。手元の amalgamation を
+  source dir の cache 変数で与えるか、`AZOOKEY_FETCH_SQLITE=ON` にする。どちらも無ければ configure を
+  失敗させ、取得の方法をエラーに出す（WIL と同じ扱い）。
 - `azookey_learning` に静的リンクし、配布物に DLL を足さない。x64・ARM64・Linux で同じソースを使う。
 - 使わない機能を外して組み込む。少なくとも拡張の読み込みを外し（`SQLITE_OMIT_LOAD_EXTENSION`）、
-  二重引用符の文字列リテラルを受けない（`SQLITE_DQS=0`）。`sqlite3_serialize` / `sqlite3_deserialize` を
-  含む版を使う（3.36 以降は既定で含む）。
+  二重引用符の文字列リテラルを受けず（`SQLITE_DQS=0`）、一時ファイルを常にメモリに置く
+  （`SQLITE_TEMP_STORE=3`）。`sqlite3_serialize` / `sqlite3_deserialize` を含む版を使う
+  （3.36 以降は既定で含む）。
 - OS の `winsqlite3.dll` は使わない。版と compile option を固定できず、OS の更新に左右されるためである。
-  vcpkg も使わない（`docs/build-ci-spec.md` §3.1）。
+  vcpkg での取得もしない（`docs/build-ci-spec.md` §3.3 は vcpkg を必須にしない）。
 - ライセンスは public domain（SPDX `blessing`）で、帰属表示の義務は無い。それでも配布物に含むので、
   取り込む PR で `THIRD_PARTY_LICENSES` に同梱の節を足す。リリース SBOM の生成
   （`scripts/complete-release-sbom.py`）は CMake の Git commit の pin しか扱わないため、URL と hash の
@@ -635,17 +652,23 @@ v2 のストアはメモリ上の SQLite DB として開き、ディスクへは
 
 Host は起動時にストアを読み、次の順に判定する。
 
-1. v2 のファイルが無い: v1 からの移行（下記）を行う。v1 が無く v1 の `.bak` だけがあれば `.bak` から移す。
-   どちらも無ければ空のストアで始める。
+1. v2 のファイルが無い: v1 からの移行（下記）を行う。v1 が無く v1 の `.bak` だけがあれば `.bak` から移す
+   （`.bak` は rename しない）。どちらも無ければ空のストアで始める。
 2. 復号に失敗した: 空のストアで動き、保存を止める。v2 にも v1 にも書かない（v1 と
    `docs/user-learning-enhancement-spec.md` §3.1 の v2 と同じ扱い）。
 3. `user_version` が既知の版より新しい: 新しい版の Host が書いたファイルとみなし、保存を止めて上書きしない。
 4. `sqlite3_deserialize` が失敗した、または `PRAGMA integrity_check` の結果が `ok` でない:
    暗号化したままのファイルを `<ファイル名>.corrupt-<epoch 秒>` へ一度だけ複写する。複写に失敗したら
-   保存を止める。複写の後は、v1 の `.bak`（下記）があればそこから移行し直し、無ければ空のストアを作り直す。
-   どちらでも学習を続け、破損を診断に warning として出す。ログには件数と理由だけを出し、行の内容は出さない。
+   保存を止める。複写の後は、v1 の `.bak` があればそこから移し直し、無いとき・`.bak` を読めないとき・
+   移し直しに失敗したときは空のストアを作り直す（`.bak` は残す）。どの場合も学習を続け、破損を診断に
+   warning として出す。ログには件数と理由だけを出し、行の内容は出さない。
+5. v2 を読めたうえで v1 の `typo_corrections.tsv.enc` も残っている（移行の rename の前に止まった）:
+   v2 の `typo_settings` に移行の検証済みの印（下記の手順 4）があれば、v2 を使い、v1 を `.bak` へ rename し直す。
+   印が無ければ、検証の済んでいない v2 とみなして消し、移行をやり直す。v1 の `.enc` が残っている間は、忘却と全削除を `.bak` と同じく
+   v1 の `.enc` にも及ぼす。
 
-`integrity_check` は起動時に毎回、DB 全体に対して行う。
+`integrity_check` は起動時に毎回、DB 全体に対して行う。`.corrupt-*` の複写は忘却と全削除の対象に入れない
+（`docs/user-learning-enhancement-spec.md` §3.1 の学習ストアと同じ扱い）。
 
 #### 同時書き込み
 
@@ -658,37 +681,49 @@ Host は起動時にストアを読み、次の順に判定する。
 
 #### v1 からの移行
 
-v2 のファイルが無く、v1 の `typo_corrections.tsv.enc` があるときに行う。
+v2 のファイルが無く、v1 のストアがあるときに行う。平文の `typo_corrections.tsv` しか無いときは、
+先に v1 の `Load` が M34 の暗号化移行を済ませてから移す。
 
-1. v1 を v1 の parser で読み、各組を `typo_reading_pairs` の行にする（`count` と
-   `last_updated_at` は v1 の値をそのまま使う）。
+1. v1 を v1 の `Load` で読み、各組を `typo_reading_pairs` の行にする（`count` と
+   `last_updated_at` は v1 の値をそのまま使う）。保持上限はこの段階では当てない。
 2. v2 を保存する。
 3. v2 を読み戻し、復号、`integrity_check`、行数の一致を確かめる。
-4. 確かめられたら、v1 の `typo_corrections.tsv.enc` を `typo_corrections.v1.tsv.enc.bak` へ rename する。
+4. 確かめられたら、`typo_settings` に移行の検証済みの印（キー `v1_migration_verified`、値は検証した epoch 秒）を
+   書いて v2 を保存し直す。
+5. v1 の `typo_corrections.tsv.enc` を `typo_corrections.v1.tsv.enc.bak` へ rename する。
    暗号化したまま残し、平文に戻さない。
 
-- どこかで失敗したら v1 を残し、v1 のまま読む。v2 を書けていたら消す。次の起動で移行をやり直す。
-- `typo_corrections.tsv.bak` の名前は使わない。平文の v1 を DPAPI 形式へ移すときの退避と同名で、
-  `WriteProtectedText` がこれを残った退避（orphan backup）とみなして保存を止めるためである。
+- 1〜4 のどこかで失敗したら v1 を残し、v1 のまま読む。v2 を書けていたら消す。次の起動で移行をやり直す
+  （v2 を消せなくても、印の無い v2 は起動時の判定 5 で消してやり直す）。
+- 5 の rename だけが失敗したときは v2 を使い、次の起動で起動時の判定 5 により rename し直す。
+- v1 の `Load` が解析できない行を報告したときも、読めた行で移行する。v1 の `.enc` は `.bak` として残るので、
+  解析できなかった行は `.bak` に残る。
 - 設定のモード（`typoCorrectionMode` の `auto_replace` など）の読み替えはストアの移行と別で、§12.14 が持つ。
 
 #### 学習の削除
 
-- 忘却（`ForgetLearningEntry`、`store` は `typo`）: 該当する `typo_patterns` の行と、その `pattern_id` を持つ
-  `typo_events` の行を消す。`typo_reading_pairs` の組なら、その行を消す。
+- 忘却（`ForgetLearningEntry`、`store` は `typo`）:
+  - パターンなら、該当する `typo_patterns` の行と、その `pattern_id` を持つ `typo_events` の行を消す。
+  - 読みの組なら、`typo_reading_pairs` の行と、`observed_reading` と `corrected_reading` が同じ組の
+    `typo_events` の行を消す。v1 の `.bak`（と、残っていれば v1 の `.enc`）からも同じ組を除く。書き戻しは
+    DPAPI 暗号化と atomic replace で行い、失敗したら忘却を失敗として返す。
 - 全削除（`ResetLearningStore`、`store` は `typo`）: `typo_patterns`、`typo_events`、`typo_reading_pairs` の
-  全行を消す。`typo_settings` は学習ではないので残す。
+  全行を消し、v1 の `.bak`（と、残っていれば v1 の `.enc`）を消す。`typo_settings` は学習ではないので残す。
+  途中で失敗しても半端に消えないよう、次の順に処理する（`docs/learning-data-management-spec.md` §4.6）。
+  1. 読み込みに失敗して保存を止めているときは、何も変えずに `save_failed` を返す。
+  2. v1 の `.bak` と v1 の `.enc` を消す。失敗したら、何も変えずに `save_failed` を返す。
+  3. v2 の複写を空にして保存する。失敗したら、公開済みの内容を保って `save_failed` を返す。
+     このとき v1 の `.bak` は既に無いので、消した学習が破損時の移し直しで戻ることは無い。
 - 消した値がページの残りとして保存されないよう、`PRAGMA secure_delete` を常に `ON` にする。
   忘却と全削除の後は `VACUUM` してから保存する。
-- v1 の `.bak` も削除の範囲に入れる。全削除では `.bak` を消す。忘却では `.bak` からも同じ組を除く
-  （書き戻しは DPAPI 暗号化と atomic replace で行い、失敗したら忘却を失敗として返す）。
-  残すと、破損時の移行し直しで消した学習が戻るためである。
+- v1 の `.bak` を削除の範囲に入れるのは、残すと破損時の移し直しで消した学習が戻るためである。
 
 v1 の `.bak` を含むバックアップの形式（`docs/learning-data-management-spec.md` §5）は DEV-2148 で決める。
 
 #### 保持上限
 
-`typo_events` と `typo_reading_pairs` は、それぞれ次の早く当たる方で古い行から消す。
+`typo_events` と `typo_reading_pairs` は、それぞれ次の早く当たる方で古い行から消す。保存の直前に当て、
+v1 からの移行では、検証済みの印（上記の手順 4）を書くまでは当てない。
 
 - 期間: 180 日（`created_at` / `last_updated_at` から。v1 の `Lookup` の期限と同じ）
 - 件数: 10000 行（`docs/user-learning-enhancement-spec.md` §3.1.1 の `learning_max_records` と同じ）

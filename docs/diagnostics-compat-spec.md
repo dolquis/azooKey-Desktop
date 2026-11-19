@@ -327,7 +327,7 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 - Magic Conversion の prompt
 - 変換前後の全文
 - ユーザー辞書の実データ
-- 学習 TSV / typo_corrections.tsv / auto_words.tsv の本文
+- 学習 TSV / typo_corrections.tsv / typo v2 ストア（`typo_learning.v2.db`）/ auto_words.tsv の本文
 
 必要な場合でも、**件数・サイズ・hash・mtime のみ**を記録する。
 `settings.redacted.json` は API key 等の機密 field を `***redacted***`

@@ -211,6 +211,7 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
 | WIL | header-only | submodule または `FetchContent`（オプトイン） | 採用（M43 の範囲。§9） |
 | nlohmann-json | header-only | 任意・保留 | `ipc-persistence-hardening-spec.md` §6、`build-ci-spec.md` §11 参照（即時導入しない） |
 | spdlog | 要ビルド | 任意・保留 | `observability-spec.md` §7、`build-ci-spec.md` §11 参照（自前ロガーを優先評価） |
+| SQLite | 要ビルド（amalgamation の C ソース） | 版と SHA3-256 を固定した `FetchContent`（オプトイン `AZOOKEY_FETCH_SQLITE`）または手元の source dir。静的リンク | 採用（M55 の typo v2 ストア。`typo-correction-learning-spec.md` §12.8） |
 | miniz | 要ビルド（C ソース 2 ファイル） | 導入しない | M49 の ZIP backup は STORE 方式だけの自前実装で足りるため採用しない（`docs/learning-data-management-spec.md` §7） |
 
 ### 3.3 vcpkg.json の扱い
@@ -232,6 +233,7 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
 | llama.cpp | `CMakeLists.txt` の `AZOOKEY_LLAMA_CPP_GIT_TAG` | フル SHA |
 | WIL | `CMakeLists.txt` の `AZOOKEY_WIL_GIT_TAG` | フル SHA |
 | GoogleTest | `CMakeLists.txt` の `FetchContent_Declare(googletest)` | リリースタグ |
+| SQLite | `CMakeLists.txt` の amalgamation の取得（`typo-correction-learning-spec.md` §12.8） | 版と zip の SHA3-256 |
 | prebuilt バイナリ / GGUF モデル | 各取得経路（§3.1 の 3） | SHA256 |
 
 **GoogleTest も本手順の対象**である。テスト専用の依存でも、更新を思いつきで

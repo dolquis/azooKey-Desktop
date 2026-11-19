@@ -861,7 +861,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `learning.v2.tsv.enc`（v2 移行前は `learning.tsv.enc` を読むだけ） | Host のみ | Host、`lookup` CLI、`azookey_bench --personal-eval`（`LoadReadOnly` でロックを取らずに読み、書き換えない。`docs/conversion-quality-benchmark-spec.md` §15.2） | Host 内で直列化（debounce flush、`docs/user-learning-enhancement-spec.md` §3.1.1）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
 | `english_learning.v2.tsv.enc`（v2 移行前は `english_learning.tsv.enc` を読むだけ） | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
 | `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/host-availability-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
-| `typo_learning.v2.db.enc`（v2 移行前は `typo_corrections.tsv.enc`。移行後の `typo_corrections.v1.tsv.enc.bak` を含む） | Host のみ（`docs/typo-correction-learning-spec.md` §12.8） | Host | Host 内で直列化し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace（`WriteProtectedText`） |
+| `typo_learning.v2.db.enc`（v2 移行前は `typo_corrections.tsv.enc`。移行後の `typo_corrections.v1.tsv.enc.bak` を含む） | Host のみ（`docs/typo-correction-learning-spec.md` §12.8） | Host | Host 内で直列化し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace（v2 は `WriteProtectedText`。v1 の `.bak` は実パスを直接与えて同じ規則で書く。`docs/typo-correction-learning-spec.md` §12.8「パス」） |
 | `auto_words.tsv.enc` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | `AcquireExclusiveFileLockForPath` + atomic replace。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
 
 拡張子 `.enc` のない旧平文ファイルは移行元であり、移行時は `.bak` を保全する。

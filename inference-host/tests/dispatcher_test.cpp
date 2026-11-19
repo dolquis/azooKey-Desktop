@@ -8062,3 +8062,88 @@ TEST_F(DispatcherTest, ImportOfAVersion3UserDictionaryItemChangesNothing) {
   EXPECT_EQ(user_dict.Lookup("にほんご").size(), 1u);
   std::filesystem::remove_all(dir);
 }
+
+// user-dictionary-pos-spec 3.2 (DEV-2135): an export that comes first after
+// another version rewrote the dictionary as version 3 reads it again, refuses
+// it and publishes what it read.
+TEST_F(DispatcherTest, ExportReadsTheUserDictionaryAgainAndRefusesVersion3) {
+  azookey::learning::test::TestByteCrypto backup_crypto;
+  engine.SetBackupCrypto(&backup_crypto);
+  EnableEventPrivacy(dispatcher);
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_export_v3"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  ipc::AddUserWordRequest add;
+  add.word = "日本語";
+  add.ruby = "にほんご";
+  auto response = dispatcher.Dispatch(
+      MakeReq(790, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(response);
+  ASSERT_TRUE(ipc::ParseAddUserWordResponse(response->payload_json)->ok);
+
+  ASSERT_TRUE(azookey::learning::WriteProtectedText(
+      user_dict_path, R"({"version":3,"entries":[{"word":"ググる","ruby":"ぐぐる"}]})",
+      azookey::learning::test::Crypto()));
+  const auto encrypted = azookey::learning::EncryptedPathFor(user_dict_path);
+  const auto before = ReadAllBytes(encrypted);
+  ASSERT_FALSE(user_dict.too_new());
+
+  ipc::ExportLearningDataRequest export_request;
+  export_request.stores = {"user_dict"};
+  export_request.destination_path = azookey::core::PathToUtf8(dir / "backup.zip");
+  response = dispatcher.Dispatch(MakeReq(791, ipc::MessageType::ExportLearningData,
+                                         ipc::BuildExportLearningDataRequest(export_request)));
+  ASSERT_TRUE(response);
+  const auto exported = ipc::ParseExportLearningDataResponse(response->payload_json);
+  ASSERT_TRUE(exported);
+  EXPECT_EQ(exported->status, "error");
+  EXPECT_EQ(exported->error, "store_unavailable");
+  EXPECT_FALSE(std::filesystem::exists(dir / "backup.zip"));
+  EXPECT_TRUE(user_dict.too_new());
+  EXPECT_EQ(user_dict.Lookup("ぐぐる").size(), 1u);
+  EXPECT_EQ(ReadAllBytes(encrypted), before);
+  std::filesystem::remove_all(dir);
+}
+
+// user-dictionary-pos-spec 3.2 (DEV-2135): a backup import that comes first
+// after the rewrite refuses it and publishes what it read, as an edit does.
+TEST_F(DispatcherTest, ImportReadsTheUserDictionaryAgainAndPublishesVersion3) {
+  azookey::learning::test::TestByteCrypto backup_crypto;
+  engine.SetBackupCrypto(&backup_crypto);
+  EnableEventPrivacy(dispatcher);
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_import_v3"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  ipc::AddUserWordRequest add;
+  add.word = "日本語";
+  add.ruby = "にほんご";
+  ASSERT_TRUE(dispatcher.Dispatch(
+      MakeReq(795, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add))));
+  ipc::ExportLearningDataRequest export_request;
+  export_request.stores = {"user_dict"};
+  export_request.destination_path = azookey::core::PathToUtf8(dir / "backup.zip");
+  auto response = dispatcher.Dispatch(MakeReq(796, ipc::MessageType::ExportLearningData,
+                                              ipc::BuildExportLearningDataRequest(export_request)));
+  ASSERT_TRUE(response);
+  ASSERT_EQ(ipc::ParseExportLearningDataResponse(response->payload_json)->status, "success");
+
+  ASSERT_TRUE(azookey::learning::WriteProtectedText(
+      user_dict_path, R"({"version":3,"entries":[{"word":"ググる","ruby":"ぐぐる"}]})",
+      azookey::learning::test::Crypto()));
+  const auto encrypted = azookey::learning::EncryptedPathFor(user_dict_path);
+  const auto before = ReadAllBytes(encrypted);
+  ipc::ImportLearningDataRequest import_request;
+  import_request.source_path = export_request.destination_path;
+  import_request.stores = {"user_dict"};
+  response = dispatcher.Dispatch(MakeReq(797, ipc::MessageType::ImportLearningData,
+                                         ipc::BuildImportLearningDataRequest(import_request)));
+  ASSERT_TRUE(response);
+  const auto imported = ipc::ParseImportLearningDataResponse(response->payload_json);
+  ASSERT_TRUE(imported);
+  EXPECT_EQ(imported->status, "error");
+  EXPECT_EQ(imported->error, "store_unavailable");
+  EXPECT_TRUE(user_dict.too_new());
+  EXPECT_EQ(user_dict.Lookup("ぐぐる").size(), 1u);
+  EXPECT_EQ(ReadAllBytes(encrypted), before);
+  std::filesystem::remove_all(dir);
+}

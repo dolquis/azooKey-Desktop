@@ -512,6 +512,21 @@ class TextService final : public ITfTextInputProcessorEx,
     candidates_.clear();
     candidate_window_show_pending_ = false;
   }
+  // What the IPC worker leaves for a fresh answer to query `request_id`: the
+  // candidates of `reading`, or of `corrected_reading` when the Host corrected
+  // it (segment-editing-spec §5.1).
+  void answer_query_for_test(uint64_t request_id, const std::string& reading,
+                             std::vector<ipc::CandidateField> candidates,
+                             const std::string& corrected_reading = {});
+  std::string pending_ipc_remaining_reading_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_remaining_reading_;
+  }
+  std::string pending_ipc_left_context_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_left_context_;
+  }
+  bool partial_commit_pending_for_test() const { return partial_commit_.has_value(); }
   std::vector<CandidateViewItem> candidate_views_for_test(
       const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
   // DEV-1828: the state that decides whether a key is eaten, one line for a
@@ -1416,6 +1431,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // ipc_mtx_; M55: the pending reading's raw_keys, empty for a secure field.
   // The user's input: never logged.
   std::string ipc_pending_raw_keys_;
+  // ipc_mtx_; the reading after the first segment of a resize's query
+  // (segment-editing-spec §5.1), empty for every other query. Never logged.
+  std::string ipc_pending_remaining_reading_;
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
   // ipc_mtx_; custom romaji table of the pending batch, set with its raw romaji.
@@ -1574,6 +1592,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // thread, read by TIP thread).
   std::mutex candidates_mtx_;
   std::vector<TipCandidate> candidates_;
+  // candidates_mtx_; the request candidates_ answers, 0 until an answer of the
+  // latest query arrives. A window query answered empty sets it too, so the
+  // first segment's wait tells an empty answer from none (segment-editing-spec §5.2).
+  uint64_t candidates_request_id_{0};
   std::string candidates_trace_id_;                                 // candidates_mtx_
   std::chrono::steady_clock::time_point candidates_trace_start_{};  // candidates_mtx_
   bool candidates_trace_pending_{false};                            // candidates_mtx_
@@ -1716,9 +1738,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void CancelInflightWindowQueryLocked();
   std::string NextCommitObservationId();
   std::string CurrentActionTraceId() const;
-  // Both return the left context the query carries (empty when secure).
+  // Both return the left context the query carries (empty when secure). A
+  // nonempty `remaining_reading` makes it the first segment's window query
+  // (segment-editing-spec §5.1), which carries none of the typed romaji.
   std::string PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
-                                  const std::string& emoji_trigger = {});
+                                  const std::string& emoji_trigger = {},
+                                  const std::string& remaining_reading = {});
   std::string PostQueryLiveConversion(ITfContext* context, const std::string& reading,
                                       LiveRequestTiming timing = LiveRequestTiming::Edit);
   // M59 dynamic punctuation (docs/dynamic-punctuation-spec.md sections 4.3.1, 7.3, 7.4).
@@ -2097,6 +2122,73 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT CommitPreeditAsIs(ITfContext* context);
   // F6-F10 (tsf-deep-integration-spec §3.6): commit the whole reading in one form.
   HRESULT CommitReadingInForm(ITfContext* context, core::CommitForm form);
+
+  // M66 (docs/segment-editing-spec.md): the first segment of a normal
+  // conversion, resized with Shift+Left / Shift+Right while Selecting.
+  // The first segment's window query in flight (spec §5.1): an answer to another
+  // request id is stale, even for the same reading. UI thread only.
+  struct SegmentQuery {
+    uint64_t request_id{0};
+    std::string reading;
+  };
+  std::optional<SegmentQuery> segment_query_;
+  // The TIP metadata of the whole reading's candidates as the resize began,
+  // which core shows again when the segment returns to the whole reading (§4).
+  std::vector<TipCandidate> whole_reading_candidates_;
+  // A partial commit (spec §6.2) until its edit session finishes: committing_
+  // and commit_surface_ (the surface and the remaining reading, which a
+  // lifecycle commit writes whole) are set with it. `next` is the core state
+  // after it and `queries` the remaining reading's query, which waits for the
+  // commit so its left context holds the committed surface.
+  struct PartialCommit {
+    std::string surface;
+    std::string remaining;
+    core::InputState next;
+    std::vector<core::ClientAction> queries;
+  };
+  std::optional<PartialCommit> partial_commit_;  // Read by EditSession.
+  // Set by the edit session that committed the first segment; the caller then
+  // finishes it with FinishPartialCommit.
+  std::optional<PartialCommit> completed_partial_commit_;
+  // Core's Selecting shows a first segment shorter than the reading (§3).
+  bool ResizingSegment() const {
+    return core_input_active_ && input_state_.kind() == core::InputStateKind::Selecting &&
+           input_state_.resizing_segment();
+  }
+  // Core waits for the first segment's candidates; the window stays (§5.2).
+  bool AwaitingSegmentCandidates() const;
+  // Whether core maps Shift+Left / Shift+Right of Selecting to the resize: a
+  // normal conversion on the core path, not the batch segments or a window of
+  // the TIP's own pre-processing (spec §4).
+  bool ResizesSegments() const { return core_input_active_; }
+  // The answer of the first segment's query, if it has arrived (§5.1, §5.2).
+  bool ApplySegmentCandidatesFromCache();
+  // Without a Host, or with nothing usable in the answer: the local candidates
+  // of the first segment's reading (§5.1, §5.2).
+  HRESULT OpenLocalSegmentCandidates(ITfContext* context);
+  std::vector<TipCandidate> LocalSegmentCandidates(const std::string& reading) const;
+  HRESULT ApplySegmentCandidates(ITfContext* context, std::vector<TipCandidate> candidates);
+  // Drops the first segment's query, queued or in flight (§4, §5.2).
+  void CancelSegmentQuery();
+  // M10: cancels the queued and in-flight queries, and an answer already on
+  // its way fails the staleness check, as every commit does.
+  void CancelOutstandingQueries();
+  // Spec §6.1: core's partial commit [HideCandidateWindow, CommitFirstSegment,
+  // ObserveCommit, QueryCandidates].
+  HRESULT ApplyPartialCommitResult(ITfContext* context, core::HandleResult result);
+  // F6-F10 while the first segment is resized (tsf-deep-integration-spec §3.6).
+  HRESULT CommitFirstSegmentInForm(ITfContext* context, core::CommitForm form,
+                                   const core::UserActionEvent& event);
+  // Spec §6.2: commits `surface` for the first segment and keeps the remaining
+  // reading as the composition. `result` is core's state after it with the
+  // remaining reading's query, sent once the commit is done.
+  HRESULT CommitFirstSegment(ITfContext* context, std::string surface, core::HandleResult result,
+                             std::optional<PendingCommitObservation> observation);
+  HRESULT FinishPartialCommit(ITfContext* context);
+  // Spec §4, §8: what an off key commits while the first segment shows its
+  // candidate, as typing a key commits it (the candidate and the remaining
+  // reading as typed, only the first segment observed).
+  core::HandleResult CommitShownSegmentResult() const;
 };
 
 class EditSession final : public ITfEditSession {

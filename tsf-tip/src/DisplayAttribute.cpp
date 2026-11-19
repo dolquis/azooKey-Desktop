@@ -88,6 +88,13 @@ std::vector<SegmentAttributeRange> BuildSegmentAttributeRanges(
   return ranges;
 }
 
+std::vector<SegmentAttributeRange> BuildFirstSegmentAttributeRanges(LONG first_length,
+                                                                    LONG remaining_length) {
+  // The remaining reading is no candidate, yet legacy draws it as converted
+  // text (tsf-deep-integration-spec §5.5).
+  return BuildSegmentAttributeRanges({{first_length, true}, {remaining_length, true}}, 0);
+}
+
 bool SegmentIndexAtMouseEdge(const std::vector<DisplayedSegment>& segments, ULONG edge,
                              ULONG quadrant, size_t* index) {
   // Quadrants 0 and 1 lie before the edge, so they belong to the preceding character.

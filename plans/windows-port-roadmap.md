@@ -1769,8 +1769,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   先頭の区間の候補の取り出し（`docs/lattice-conversion-spec.md` §7.3）は本 M で足す。
 - **変更対象**: `core/include/azookey/core/UserAction.h`、`core/src/UserActionMap.cpp`、
   `core/include/azookey/core/InputState.h`・`core/src/InputState.cpp`、`core/include/azookey/core/ClientAction.h`、
-  `tsf-tip/src/TextService.cpp`（先頭文節の要求と応答待ちの保留、部分確定の edit session、表示属性、観測）、
-  `tsf-tip/src/CharacterFormEditSession.cpp`（F6〜F10 の部分確定）、`tsf-tip/src/DisplayAttribute.cpp`、
+  `tsf-tip/src/TextService.cpp`（先頭文節の要求と応答待ちの保留、部分確定と F6〜F10 の部分確定の edit session、
+  表示属性、観測）、`tsf-tip/src/DisplayAttribute.cpp`、
   `ipc/include/azookey/ipc/Payloads.h`・`ipc/src/Payloads.cpp`（残りの読み）、
   `inference-host/src/Dispatcher.cpp`（先頭文節の要求の補正の停止と、残りの読みの受け渡し）、
   `inference-host/src/InferenceEngine.cpp`（ラティスへの残りの読みの受け渡し）、core のラティスの部品

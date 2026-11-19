@@ -1919,7 +1919,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   （`CommitCorrection`）、M66（部分確定）。
 - **変更対象**: `core/include/azookey/core/UserAction.h`（`UndoCommit`）、`core/src/UserActionMap.cpp`、
   `core/src/InputState.cpp`、`tsf-tip/src/TextService.cpp`（取り消しの対象の記録と破棄、キーの判定、学習）、
-  取り消しの edit session（`tsf-tip/src/CharacterFormEditSession.cpp` の直近の確定の確かめ方を使う）。
+  取り消しの edit session（`tsf-tip/src/TextService.cpp`。`tsf-tip/src/CharacterFormEditSession.cpp` の直近の確定と同じ手順で確かめる）。
 - **受け入れ条件**:
   - spec §4.1 の各確定の直後の Ctrl+Backspace で、確定した表層が確定する前の読みの composition に置き換わり、
     `Composing`（ライブ変換 ON は `Previewing`）になる。Space で候補窓が開き、Esc で文字列が消える

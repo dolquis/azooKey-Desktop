@@ -522,7 +522,7 @@ M35 ─→ M55                    （TypoLearningStore v1 を v2 統合エンジ
 M46 ─→ M55                    （secure 中の補正・学習抑止契約）
 M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
 M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
-M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
+M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング。M24 は R2 の EP の経路。CPU EP の計測ゲートに合格すれば M24 を要しない）
 M52 + M53 ─→ M65              （モデル非経由のラティス変換。.azdic 物理層とベンチの上に載る）
 M9 / M30 / M49 ─→ M71-A ─→ M71-B（ユーザー辞書の品詞の保存と他 IME の辞書の取り込み → 活用形の展開。M71-B は M65 にも依存）
 M46 + M48 + M52 + M54 ─→ M74  （個人回帰ベンチ。学習ストアを読み取り専用で読み、端末内だけで測る）
@@ -2704,7 +2704,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     （`reason=low_ambiguity` がログに残る）
   - RSS 増分が spec §6.1 の許容上限内（200 MB 以下）。上限超過環境では `reason=rss_cap` で
     ロードせず fallback し、IME が継続動作する
-  - `modernbertEnabled=always` でも RSS / backend / secure の安全ゲートを逸脱しない
+  - `modernbertEnabled=always` でも RSS / 実行 EP / secure の安全ゲートを逸脱しない
     （上限超過時はロードしない）
   - timeout 予算切れ時は評価済み候補のみ適用し、未評価候補は ModernBERT 抜きの順位で確定する
     （spec §5.4）

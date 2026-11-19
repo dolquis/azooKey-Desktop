@@ -255,7 +255,7 @@ pin 値の正典は `CMakeLists.txt` と各取得経路であり、本 spec や 
 
 #### 比較項目
 
-推論に関わる依存（llama.cpp / GGUF モデル）は、ビルドが通ることだけでは判断
+推論に関わる依存（llama.cpp / GGUF モデル / ONNX Runtime）は、ビルドが通ることだけでは判断
 しない。更新前後で次を比較する。
 
 | 項目 | 測り方 | 判断 |
@@ -265,6 +265,7 @@ pin 値の正典は `CMakeLists.txt` と各取得経路であり、本 spec や 
 | レイテンシ | bench の JSON 出力（§4.5 の回帰監視） | 既存のしきい値内に収まること |
 | メモリ | 同 bench のピーク常駐 | 明確な増加があれば理由を特定する |
 | ライセンス | 上流 LICENSE と `THIRD_PARTY_LICENSES` の差分 | 変化があれば `docs/licensing-policy.md` を同時に更新する |
+| ONNX Runtime の opset と latency | 固定した opset の M56 / M57 のモデルを新しい版で読めるか、M52 ベンチの reranker の latency（`neural-reranker-spec.md` §7.3） | 読めない、または latency が既存のしきい値を超えるなら更新を保留する |
 
 GoogleTest と WIL は推論品質に影響しないため、比較は「CTest 全件が緑」と
 「ライセンス差分の確認」に留めてよい。cadence と次項の独立 PR 規約は同じく適用する。

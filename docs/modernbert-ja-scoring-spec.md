@@ -78,7 +78,7 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 |---:|---|---|---|
 | 1 | `modernbertEnabled != off` | `disabled` | `off` は明示無効。`auto` / `always` は通過 |
 | 2 | secure モードでない（M46） | `secure_mode` | §9。最優先で OFF（順序上は 1 の直後） |
-| 3 | 実行 EP が §6.3 の許可集合に入る | `cpu_backend` | 許可集合に入る EP が無いとき（CPU EP が計測ゲートに未合格で、R2 も使えないとき）はモデルをロードしない（§6.1）ため、loaded ゲートより**前**に判定して `cpu_backend` を握り潰さない |
+| 3 | §6.3 の許可集合が空でなく、かつモデルのロード時の §6.3 の選択で実行 EP を選べた | `cpu_backend` | 許可集合とロード時の選択は、リクエストより前に決まる静的な条件である。どの EP も選べないときはモデルをロードしない（§6.1）ため、loaded ゲート（順 4）より**前**に判定して `cpu_backend` を握り潰さない |
 | 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 ロード時に上限超過で抑止）/ `rss_runtime`（§6.1 runtime ガードでアンロード済み）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止 / runtime アンロード理由を保持して引き継ぐ。ロード時上限超過は `rss_cap`、ロード後 runtime 超過は `rss_runtime` を立て、roadmap M57 の RSS fallback 検証に使う（`not_loaded` に潰さない） |
 | 5 | circuit breaker が開いていない | `circuit_open` | §5.4 の連続失敗で開く **runtime 状態**（ユーザー設定 `modernbertEnabled` とは独立）。次回モデル再ロードまで閉じない。`off` のようなユーザー設定値ではない |
 | 6 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
@@ -87,7 +87,7 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 
 `reason` は構造化ログ（`modernbert_used=false, reason=<上記>`）と M52 ベンチ
 集計に用いる。`always` は曖昧性ゲート（順 7）のみスキップし、その他の
-安全ゲート（secure / circuit breaker / RSS / backend / timeout）は必ず適用する。
+安全ゲート（secure / circuit breaker / RSS / 実行 EP / timeout）は必ず適用する。
 circuit breaker（順 5）はユーザー設定ではなく runtime 状態であり、`always`
 でもスキップしない。
 
@@ -235,6 +235,7 @@ timeout に当たりやすくなるため既定 5 を上限の目安とする。
 | 実行 EP | §6.3 で許可した ONNX Runtime の EP |
 
 モデルは MSI に同梱せず、既定パスへダウンロードして配置する（`docs/neural-reranker-spec.md` §7.3）。
+量子化（FP16 / INT8）ごとに別の artifact とする。CPU EP で INT8 の artifact が無ければロードせず、`not_loaded` で fallback する（§4.0 順 4）。
 ダウンロードの経路と catalog の artifact の定義は、モデル資産の Issue（DEV-2156）で決める。
 ベンチ用の manual download スクリプトも同じ Issue で用意する。M45（モデル管理 UI）は前提ではなく、
 完了後の follow-up として GUI 経由のインストール / 切替を統合する位置づけ。
@@ -244,7 +245,7 @@ timeout に当たりやすくなるため既定 5 を上限の目安とする。
 ModernBERT-Ja 70M をロードした場合の Host プロセス RSS 増分（**推定値**。
 確定実測は §6.2 の検証で固定する）:
 
-| backend / 量子化 | model RSS | activations | RSS 増分 | VRAM 増分 | 本 scorer での扱い |
+| 実行 EP / 量子化 | model RSS | activations | RSS 増分 | VRAM 増分 | 本 scorer での扱い |
 |---|---:|---:|---:|---:|---|
 | CPU FP32 | 280 MB | 50 MB | 330 MB | — | 参照のみ（ロードしない） |
 | CPU FP16 | 140 MB | 30 MB | 170 MB | — | 参照のみ（CPU EP では FP16 をロードしない。§6.3） |
@@ -342,7 +343,7 @@ ModernBERT は M56 と同じ ONNX Runtime で動かす（ランタイム、依�
 | 実行 EP | 許可集合に入る条件 | ロードする量子化 |
 |---|---|---|
 | CPU EP | 下記の計測ゲートに合格したとき | INT8 だけ。`modernbertQuantization` が `fp16` でも INT8 をロードし、§6.1 の降格ラダーは INT8 → ロードせず、になる |
-| GPU / NPU の EP（Windows ML、R2） | M24 の R2 が再開したとき（`docs/copilot-pc-backend-spec.md` §4.3）。reranker の ORT は §7.3 のとおり R2 と同じ Windows ML の ORT へ移す | `modernbertQuantization` に従う（FP16 → INT8 → ロードせず） |
+| GPU / NPU の EP（Windows ML、R2） | M24 の R2 が再開し、その Host が Windows ML の ORT を読んでいるとき（`docs/copilot-pc-backend-spec.md` §4.3、`docs/neural-reranker-spec.md` §7.3） | `modernbertQuantization` に従う（FP16 → INT8 → ロードせず） |
 
 - R1（llama.cpp）の CUDA / Vulkan は許可集合に入れない。ONNX Runtime に Vulkan の EP は無く、
   CUDA の実リンクは中止している（`docs/decisions/2026-08-04-cuda-real-link-cancellation.md`）。
@@ -352,6 +353,15 @@ ModernBERT は M56 と同じ ONNX Runtime で動かす（ランタイム、依�
   EP を使えない（OS build が 26100 未満、Windows ML の EP の取得や登録に失敗した、など。
   `docs/copilot-pc-backend-spec.md` §4.3・§4.6）ときは、CPU EP が許可集合に入っていれば CPU EP を選ぶ。
   どちらも選べなければロードしない（`reason=cpu_backend`）。選んだ EP は load イベントログに記録する。
+- GPU / NPU の EP で session を作れなかったとき: CPU EP が許可集合に入っていれば、CPU EP で 1 回だけ作り直す。
+  作り直しの理由（GPU / NPU の EP での session の作成の失敗）は load イベントログに記録する。CPU EP でも作れない、
+  または CPU EP が許可集合に入っていなければ、ロードせず `not_loaded` で fallback する（§4.0 順 4）。
+- GPU / NPU の EP の登録: reranker は Windows ML の EP の catalog を自分で呼ばない。Zenzai の R2 が
+  `docs/copilot-pc-backend-spec.md` §4.6 で取得・登録した EP device を使う。R2 がその起動で EP を登録していなければ、
+  GPU / NPU の EP は選べない。バッテリ駆動時は、R2 と同じく NPU の EP だけを選ぶ（同 §4.5・§4.6）。
+- CPU EP のスレッド数: ORT の intra-op / inter-op のスレッド数は明示して設定し、ORT の既定（全コア）は使わない。
+  値は llama.cpp の推論スレッド数（`docs/copilot-pc-backend-spec.md` §6.2 の電源ごとの表）と合わせて論理コア数を
+  超えない範囲で、下記の計測ゲートで決める。
 
 **CPU EP の計測ゲート**
 
@@ -359,15 +369,23 @@ CPU EP を許すかは、推定ではなく実測で決める。本 spec は CPU
 
 1. 計測の対象: ONNX Runtime の CPU EP、INT8 の `modernbert-ja-70m`、§5.2 の batch（K=5 の候補単位）、
    §5.0 の context window。量子化と ONNX への変換の手順はモデル資産の Issue（DEV-2156）で固定したものを使う。
-2. 計測の項目: 候補単位の forward の latency（p50 / p95）、K=5 を評価し終えるまでの時間、§6.1 の RSS 増分、
+2. 計測の条件: R1 CPU の baseline と同じクラスの機材（`docs/decisions/2026-08-23-r1-cpu-baseline.md`）で、
+   Zenzai（R1 CPU）が動いている状態で測る。ORT のスレッド数は上記の方針で決めた値にする。
+3. 計測の項目: 候補単位の forward の latency（p50 / p95）、K=5 を評価し終えるまでの時間、§6.1 の RSS 増分、
    M52 の homophone top1 と通常入力の p95 の悪化。
-3. 合格の条件: 次をすべて満たす。
+4. 合格の条件: 次をすべて満たす。
    - K=5 を評価し終えるまでの p95 が `modernbertTimeoutMs` の既定（40ms、§5.4）に収まる。
    - 通常入力の p95 の悪化が +20ms 以内（§1、roadmap M57）。
+   - homophone top1 が baseline 比 +5% 以上（§1、roadmap M57）。CPU EP の INT8 は M57 を届ける経路なので、
+     M57 の受け入れ条件をその経路でも満たすことを合格に含める。
    - RSS 増分が `modernbertRssCapMb` の既定（200 MB、§6.1）以下。
-4. 合格したら、CPU EP を許可集合に入れ、§6.1 の CPU INT8 の行に実測値を入れる。
-5. 不合格なら、CPU EP は許可集合に入れず、M57 は R2 の再開を待つ。
-6. 計測の機材・OS build・CPU と結果は、`docs/decisions/` に測定記録として残す。
+5. 合格したら、CPU EP を許可集合に入れ、§6.1 の CPU INT8 の行に実測値を入れる。
+6. 不合格なら、CPU EP は許可集合に入れず、M57 は R2 の再開を待つ。
+7. 計測の機材・OS build・CPU・スレッド数と結果は、`docs/decisions/` に測定記録として残す。
+
+合格の効く範囲: 合格は計測した機材のクラスでの結果であり、より遅い機材での速さは保証しない。そのため CPU EP では、
+実行時の降格として、1 リクエストで候補を 1 つも評価できずに予算（§5.4）が切れたことを、§5.4 の circuit breaker の
+連続失敗に数える。連続して閾値（既定 3 回）に達すると breaker が開き、以降は `circuit_open` で fallback する。
 
 ## 7. 設定スキーマ
 
@@ -398,7 +416,7 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `rer
 - `modernbertEnabled`:
   - `auto`（既定）: ambiguity_score とリソース可用性に応じて自動 ON/OFF
   - `always`: 曖昧性ゲート（§4.0 順 7）のみスキップ。secure / circuit breaker /
-    RSS / backend / timeout の安全ゲートは適用され、上限超過時はロードしない
+    RSS / 実行 EP / timeout の安全ゲートは適用され、上限超過時はロードしない
   - `off`: 無効
 - `modernbertQuantization`: **初期ロード対象**（`fp16` 既定）。RSS 上限超過時は
   §6.1 の降格ラダー（fp16→int8→ロードせず）で実効値が変わりうる。CPU EP では値によらず

@@ -38,13 +38,13 @@ M57 spec は backend を R2 `winml` と R1 `cuda` / `vulkan` に限り、CPU を
 | 論点 | 候補 | 結論 |
 |---|---|---|
 | M57 の backend（R2 が止まっている間） | (a) ORT の CPU EP + INT8 を計測 spike でゲートする / (b) R2 の再開を待つ / (c) DirectML EP / (d) R1 の ggml | (a)。spike が不合格なら (b)。(c) は maintenance mode のため採らない。(d) は MLM ヘッドへの対応が未確認 |
-| ランタイム | (a) 素の ORT の CPU EP（C API） / (b) Windows ML（R2 と共有） / (c) 自前の MLP 推論 | (a)。R2 の再開時に Windows ML の ORT へ移し、1 プロセスに ORT を 1 つとする。(b) は非パッケージの Host に bootstrap を今入れることになる。(c) は M57 に使えない |
+| ランタイム | (a) 素の ORT の CPU EP（C API） / (b) Windows ML（R2 と共有） / (c) 自前の MLP 推論 | (a)。R2 の再開後は、Windows ML の ORT を読める Host ではそれを使い、読めない Host（26100 未満、bootstrap の失敗）では同梱の素の ORT を使う。1 プロセスで読む ORT は 1 つとする。(b) は非パッケージの Host に bootstrap を今入れることになる。(c) は M57 に使えない |
 | 依存の取り込み | (a) 公式 prebuilt を URL + SHA256 で固定し、opt-in の `AZOOKEY_FETCH_ONNXRUNTIME` で取る / (b) NuGet restore を CMake に足す / (c) ソースから build / (d) vcpkg | (a)。取得しない build と Linux は mock |
 | x64 / ARM64 | — | 両方を固定する。ARM64 の同梱は M27 |
-| 配布 | (a) base MSI に同梱 / (b) 別 MSI の add-on / (c) 初回にダウンロード | (a)。delay-load と、絶対パスでの `LoadLibraryExW`。M57 のモデルはダウンロード |
+| 配布 | (a) base MSI に同梱 / (b) 別 MSI の add-on / (c) 初回にダウンロード | (a)。import せず、絶対パスでの `LoadLibraryExW`（`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`）と `GetProcAddress` の `OrtGetApiBase` で読む（承認の時点の「delay-load」を、管制塔のレビューを受けてこの形に改めた）。M57 のモデルはダウンロード |
 | fallback | — | 既存の `reason` を流用し、原因の内訳はログだけに出す |
 | BackendSelector | (a) 加えない / (b) 記録だけする / (c) 判定に加える | (a) |
-| ライセンス | — | ORT は MIT。同梱の第三者表記は全文を引き継ぐ。表記の確定は Human Gate の課題に分ける |
+| ライセンス | — | ORT は MIT。同梱の第三者表記は全文を引き継ぐ。表記の確定は Human Gate の DEV-2174 に分け、取り込む PR は DEV-2174 の確定の後に出す |
 | opset と量子化 | — | opset は固定した ORT が読める範囲で 1 つに固定する。M56 は fp32。M57 は CPU EP で INT8 だけ、fp16 は GPU / NPU の EP だけ |
 
 ## 再評価の条件

@@ -213,7 +213,7 @@ Response:
 | ストア | 忘却 |
 |---|---|
 | `learning` | 組の全 app 行の weight と回数を 0 にする。次の保存でファイルから除く。再観測時は新規として扱い、過去の回数を引き継がない |
-| `typo` | ペアを削除する。v2 で消す行と v1 の `.bak` の扱いは `docs/typo-correction-learning-spec.md` §12.8「学習の削除」 |
+| `typo` | ペアを削除する。v2 で消す行と v1 の退避の扱いは `docs/typo-correction-learning-spec.md` §12.8「学習の削除」 |
 | `user_dict` | 単語を削除する |
 | `auto_word` | 状態を `rejected` にする。削除すると同じ語を再び候補として提案するため、行は残す |
 
@@ -375,7 +375,7 @@ counts のキーは archive の item 名（§5.1）である。
 |---|---|
 | `learning` | かなと英語の学習チャネルの全行と、M7 ファイル（§4.2）の全行 |
 | `user_dict` | ユーザー辞書の全単語 |
-| `typo` | タイプミス補正の全ペア。v2 で消す表と v1 の `.bak` は `docs/typo-correction-learning-spec.md` §12.8「学習の削除」 |
+| `typo` | タイプミス補正の全ペア。v2 で消す表と v1 の退避は `docs/typo-correction-learning-spec.md` §12.8「学習の削除」 |
 | `auto_word` | 新語候補の全行。`rejected` も消えるので、断った語も再び候補になりうる。確定から派生して英単語辞書に入った語（追加語の journal、overlay、コンパクション済みの base、退避した journal。`docs/inline-english-candidate-spec.md` §4.8） |
 
 リセットは途中で失敗しても半端に消えない。Host は複写を空にして保存し、成功時だけ公開する。

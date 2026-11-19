@@ -62,13 +62,14 @@ OpenMP 経路で暗黙インポートするため、欠けるとクリーン環�
 
 静的辞書層は `dictbuild\build_bundled.py` が SHA256 固定の SudachiDict と自作の技術用語seedから生成します
 （Python 3.10 以降、初回は語彙の 2 本と連接行列の `matrix.def.zip` で約 165 MB をダウンロードし、生成に数分かかります）。MSI は
-`BundledDictionaryDir`（既定 `build\bundled-dictionaries`）の `dict\sudachi_lexicon.azdic` と
-`dict\technical_terms_lexicon.azdic` を
-`INSTALLFOLDER\dict` へ、帰属の `ThirdPartyNotices.txt` を `INSTALLFOLDER` へ配置し、
-どちらかが欠けるとビルドは失敗します。`dictbuild\check_bundle.py` は、生成物と
-`Package.wxs` の同梱一覧の差、standalone の `neologd_lexicon` pack の混入、帰属の欠落を
-検出します。同じ `dict` に生成される `lattice_core.azdic` は MSI がまだ同梱しないので、この差の検査から
-除きます（`docs/azdic-physical-layer-spec.md` §15.12。DEV-2099 で必須に戻します）。インストール後は Host の起動ログで `static_dictionary_load` が
+`BundledDictionaryDir`（既定 `build\bundled-dictionaries`）の `dict\sudachi_lexicon.azdic`、
+`dict\technical_terms_lexicon.azdic`、`dict\lattice_core.azdic` を
+`INSTALLFOLDER\dict` へ、帰属の `ThirdPartyNotices.txt` を `INSTALLFOLDER` へ配置します。
+3 つの `.azdic` と `ThirdPartyNotices.txt` のどれかが欠けるとビルドは失敗します。
+`lattice_core.azdic` は層ではなく、ラティス変換だけが読みます（`docs/lattice-conversion-spec.md` §8.2）。
+`dictbuild\check_bundle.py` は、生成物と `Package.wxs` の同梱一覧の差、lattice_core の欠落、
+standalone の `neologd_lexicon` pack の混入、帰属の欠落を検出します（`docs/azdic-physical-layer-spec.md` §15.12）。
+インストール後は Host の起動ログで `static_dictionary_load` が
 両方の層で `result=ok` になることを確認します。設定アプリの「ライセンス」から
 インストール先の `ThirdPartyNotices.txt` を開けます。同梱しない層
 （`base_lexicon` など）は同じイベントが `result=error` の警告になります。

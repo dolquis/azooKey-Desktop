@@ -202,6 +202,7 @@
   <data name="Setting_inputMode" xml:space="preserve"><value>カッコ補完の字形</value></data>
   <data name="Setting_convertKeysAction" xml:space="preserve"><value>変換・無変換キー</value></data>
   <data name="Setting_fullWidthSpace" xml:space="preserve"><value>読みが無いときの Space で全角空白を入れる</value></data>
+  <data name="Setting_inputScopeSwitching" xml:space="preserve"><value>入力欄の種類に合わせて入力モードを切り替える</value></data>
   <data name="Setting_inputStyle" xml:space="preserve"><value>ローマ字テーブル</value></data>
   <data name="Setting_customRomajiTablePath" xml:space="preserve"><value>カスタムローマ字テーブルのパス</value></data>
   <data name="Setting_liveConversion" xml:space="preserve"><value>ライブ変換</value></data>
@@ -336,6 +337,7 @@
   <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、変換エンジンが起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を下に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。プライバシーモードが「オフライン」か「常にセーフ入力」の間は確認しません。更新のダウンロードやインストールはしません。</value></data>
   <data name="SettingNote_typoCorrection_learnPersonalPatterns" xml:space="preserve"><value>オフにすると、新しい打ち間違いの蓄積を止めます。すでに学習した訂正は使い続けます。「タイプミスの訂正」が「しない」のときは、どちらにしても学習しません。</value></data>
   <data name="SettingNote_inputMode" xml:space="preserve"><value>カッコ補完が入れるカッコの字形です（ひらがなは全角カッコ全般、半角英数は ( ) などの半角カッコ、全角英数は（ ）などの全角 ASCII カッコ）。起動時の入力モードや、カッコ以外の文字の字種は変えません。絵文字検索の「:」は「ひらがな」のときだけ働きます。</value></data>
+  <data name="SettingNote_inputScopeSwitching" xml:space="preserve"><value>URL・メール・数値・電話番号・半角英数の欄は英数モードで始め、カッコ補完と自動句読点を止めます。検索欄では自動句読点だけを止めます。欄の種類を伝えないアプリでは変わりません。アプリ別の設定で上書きできます。</value></data>
   <data name="SettingNote_fullWidthSpace" xml:space="preserve"><value>ひらがなモードで読みが無いときに使います。Shift+Space はもう一方の幅の空白を入れます。英数モードと IME オフでは常に半角です。</value></data>
   <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>
   <data name="SettingNote_punctuationConversion" xml:space="preserve"><value>「変換して確定する」では、読みを第 1 候補へ変換し、句読点と一緒に確定します。数字の直後と一括変換中は読みに足します。</value></data>
@@ -666,6 +668,7 @@
   <data name="Profiles_Summary_Technical" xml:space="preserve"><value>技術語を優先</value></data>
   <data name="Profiles_Summary_Privacy" xml:space="preserve"><value>プライバシー</value></data>
   <data name="Profiles_Summary_Bracket" xml:space="preserve"><value>カッコ補完</value></data>
+  <data name="Profiles_Summary_InputScope" xml:space="preserve"><value>入力欄による切替</value></data>
   <data name="Profiles_Summary_Boosts" xml:space="preserve"><value>候補タグ</value></data>
   <data name="Profiles_LegacyHeading" xml:space="preserve"><value>以前の設定にある AI への指示文（読み取り専用）</value></data>
   <data name="Profiles_LegacyNote" xml:space="preserve"><value>ここでは編集せず、保存しても消えません。「プロファイルへ移す」で同じアプリのプロファイルへコピーでき、プロファイルの指示文が優先されます。</value></data>
@@ -688,6 +691,7 @@
   <data name="Profiles_Technical_Header" xml:space="preserve"><value>技術語を優先する</value></data>
   <data name="Profiles_Privacy_Header" xml:space="preserve"><value>プライバシーモード</value></data>
   <data name="Profiles_Bracket_Header" xml:space="preserve"><value>カッコ補完</value></data>
+  <data name="Profiles_InputScope_Header" xml:space="preserve"><value>入力欄の種類に合わせて入力モードを切り替える</value></data>
   <data name="Profiles_Boosts_Header" xml:space="preserve"><value>候補タグの倍率</value></data>
   <data name="Profiles_Boosts_Note" xml:space="preserve"><value>タグ名（Technical、Polite、English など）ごとに 1.0〜3.0 の倍率を指定します。1.0 は変化なしです。</value></data>
   <data name="Profiles_Boost_Tag" xml:space="preserve"><value>タグ名</value></data>

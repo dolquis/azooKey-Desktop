@@ -828,6 +828,8 @@ class BundleGuardTests(unittest.TestCase):
         (bundle / "dict").mkdir(parents=True)
         (bundle / "dict" / "technical_terms_lexicon.azdic").write_bytes(
             (path / "fixture" / "valid.azdic").read_bytes())
+        (bundle / "dict" / "lattice_core.azdic").write_bytes(
+            (path / "fixture" / "lattice_core.azdic").read_bytes())
         (bundle / "ThirdPartyNotices.txt").write_text("fixture\nMIT\n", encoding="utf-8")
         return bundle
 
@@ -843,7 +845,7 @@ class BundleGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)
             bundle = self.make_bundle(path)
-            package = self.write_package(path, "technical_terms_lexicon.azdic")
+            package = self.write_package(path, "technical_terms_lexicon.azdic", "lattice_core.azdic")
             self.assertEqual(check_bundle.check(bundle, package), [])
 
     def test_rejects_neologd_pack_wrong_layer_missing_notice_and_package_drift(self):
@@ -861,16 +863,24 @@ class BundleGuardTests(unittest.TestCase):
             self.assertIn("source fixture is not attributed", errors)
             self.assertIn("Package.wxs ships", errors)
 
+    def test_requires_lattice_core_in_the_payload_and_the_package(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            bundle = self.make_bundle(path)
+            self.assertEqual(check_bundle.check(bundle, None), [])
+            # The MSI ships lattice_core like the layers (DEV-2099): a package without it drifts.
+            self.assertTrue(any("Package.wxs ships" in e for e in check_bundle.check(
+                bundle, self.write_package(path, "technical_terms_lexicon.azdic"))))
+            self.assertTrue(any("Package.wxs ships" in e for e in check_bundle.check(
+                bundle, self.write_package(path, "lattice_core.azdic"))))
+            (bundle / "dict" / "lattice_core.azdic").unlink()
+            self.assertEqual(check_bundle.check(bundle, None), ["lattice_core.azdic: missing from the payload"])
+
     def test_accepts_lattice_core_only_under_the_sudachi_layer_id(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)
             bundle = self.make_bundle(path)
-            (bundle / "dict" / "lattice_core.azdic").write_bytes((path / "fixture" / "lattice_core.azdic").read_bytes())
             self.assertEqual(check_bundle.check(bundle, None), [])
-            # Until the MSI ships lattice_core (DEV-2099), the package comparison leaves it out.
-            self.assertEqual(check_bundle.check(bundle, self.write_package(path, "technical_terms_lexicon.azdic")), [])
-            self.assertTrue(any("Package.wxs ships" in e for e in check_bundle.check(
-                bundle, self.write_package(path, "lattice_core.azdic"))))
             # A sudachi_lexicon in another connection space (here: none) leaves the lattice unused.
             (bundle / "dict" / "sudachi_lexicon.azdic").write_bytes(
                 (path / "fixture" / "ambiguous" / "sudachi_lexicon.azdic").read_bytes())
@@ -898,8 +908,10 @@ class BundleGuardTests(unittest.TestCase):
             self.assertIn("neologd_lexicon-20991231.azdic: not a bundled static layer", errors)
             self.assertIn("neologd_lexicon.manifest.json: not a bundled static layer", errors)
             package = path / "Package.wxs"
+            # Only the pack manifest differs from the clean payload, so it alone makes the drift.
             package.write_text('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"><Package>'
                                '<File Source="$(BundledDictionaryDir)\\dict\\technical_terms_lexicon.azdic" />'
+                               '<File Source="$(BundledDictionaryDir)\\dict\\lattice_core.azdic" />'
                                '<File Source="$(PackDir)\\neologd_lexicon.manifest.json" /></Package></Wix>',
                                encoding="utf-8")
             clean = self.make_bundle(path / "clean")
@@ -910,9 +922,12 @@ class BundleGuardTests(unittest.TestCase):
             path = Path(temporary)
             bundle = self.make_bundle(path)
             package = path / "Package.wxs"
+            # Only the installed name differs from the payload, so it alone makes the drift.
             package.write_text('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"><Package>'
                                '<File Source="$(BundledDictionaryDir)\\dict\\technical_terms_lexicon.azdic" '
-                               'Name="base_lexicon.azdic" /></Package></Wix>', encoding="utf-8")
+                               'Name="base_lexicon.azdic" />'
+                               '<File Source="$(BundledDictionaryDir)\\dict\\lattice_core.azdic" /></Package></Wix>',
+                               encoding="utf-8")
             self.assertTrue(any("Package.wxs ships" in e for e in check_bundle.check(bundle, package)))
 
     def test_rejects_an_empty_bundle(self):

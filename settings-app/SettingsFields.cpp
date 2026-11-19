@@ -72,6 +72,7 @@ std::vector<SettingField> BuildFields() {
       Enum("convertKeysAction", Pane::Input, "InputMethod", "default", {"default", "imeOnOff"},
            std::nullopt, true),
       Bool("fullWidthSpace", Pane::Input, "InputMethod", true, std::nullopt, true),
+      Bool("inputScopeSwitching", Pane::Input, "InputMethod", true, std::nullopt, true),
       Enum("inputStyle", Pane::Input, "InputMethod", "default", {"default", "custom"}),
       Text("customRomajiTablePath", Pane::Input, "InputMethod",
            "%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv", custom_romaji),

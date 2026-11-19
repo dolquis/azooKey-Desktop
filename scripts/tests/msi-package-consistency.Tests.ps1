@@ -65,10 +65,14 @@ Describe "WiX MSI package consistency" {
     $script:package | Should -Match '<Directory Id="DictionaryFolder" Name="dict">'
     $script:package | Should -Match 'Source="\$\(BundledDictionaryDir\)\\dict\\sudachi_lexicon\.azdic"'
     $script:package | Should -Match 'Source="\$\(BundledDictionaryDir\)\\dict\\technical_terms_lexicon\.azdic"'
+    # lattice_core は層ではなくラティス変換だけが読む（lattice-conversion-spec §8.2、DEV-2099）。
+    $script:package | Should -Match 'Id="LatticeCoreFile" Source="\$\(BundledDictionaryDir\)\\dict\\lattice_core\.azdic"'
+    $script:package | Should -Match '<ComponentRef Id="LatticeCoreComponent" />'
     $script:package | Should -Match 'Source="\$\(BundledDictionaryDir\)\\ThirdPartyNotices\.txt"[\s\S]*?Name="ThirdPartyNotices\.txt"'
     $script:package | Should -Not -Match 'neologd'
     $script:project | Should -Match '\$\(MSBuildThisFileDirectory\)\.\.\\\.\.\\build\\bundled-dictionaries</BundledDictionaryDir>'
     $script:project | Should -Match "Condition=`"!Exists\('\$\(BundledDictionaryDir\)\\dict\\sudachi_lexicon\.azdic'\)`""
+    $script:project | Should -Match "Condition=`"!Exists\('\$\(BundledDictionaryDir\)\\dict\\lattice_core\.azdic'\)`""
     $script:releaseWorkflow | Should -Match 'python dictbuild/build_bundled\.py --output build\\bundled-dictionaries'
     $script:releaseWorkflow | Should -Match 'python dictbuild/check_bundle\.py build\\bundled-dictionaries --package pkg\\msi\\Package\.wxs'
     $script:releaseWorkflow | Should -Match 'python dictbuild/check_bundle\.py[^\r\n]* --compare build\\bundled-dictionaries-repeated'
@@ -86,7 +90,8 @@ Describe "WiX MSI package consistency" {
     $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
     $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
     $files = $xml.SelectNodes('//w:Directory[@Id="DictionaryFolder"]/w:Component/w:File', $ns)
-    $files.Count | Should -Be 2
+    # sudachi_lexicon、technical_terms_lexicon、lattice_core。
+    $files.Count | Should -Be 3
     foreach ($file in $files) {
       $file.KeyPath | Should -Be "yes"
       $xml.SelectNodes("//w:Feature/w:ComponentRef[@Id='$($file.ParentNode.Id)']", $ns).Count |

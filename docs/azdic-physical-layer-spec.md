@@ -718,8 +718,8 @@ release workflow は同じキャッシュを使って別出力先へ2回生成�
 `check_bundle.py --compare <2回目の出力先>` は両方の配布ガードに加え、層集合、ヘッダの
 `content_hash`、ファイルサイズ、全バイトのSHA256と帰属文書の一致を検査する。
 配布ガードは lattice_core について、`CONN`・`CMAT`・`META.lattice` を持つことと、`connection_space` が
-`sudachi_lexicon` と一致することも検査する。`check_bundle.py --package` の `Package.wxs` との突き合わせは、
-MSI が lattice_core を同梱するまで lattice_core を両側から除く一時的な扱いとし、DEV-2099 で必須に戻す。
+`sudachi_lexicon` と一致することも検査し、生成物に lattice_core が無ければ失敗させる。`check_bundle.py --package` は
+`Package.wxs` の同梱一覧を、lattice_core を含めて生成物と突き合わせる。
 独立した2回の生成が一致しなければMSIを作成しない。
 
 ### 15.13 ビルダと Host の接続契約

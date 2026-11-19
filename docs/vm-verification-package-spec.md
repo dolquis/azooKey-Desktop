@@ -37,14 +37,15 @@ zip を生成する。
 `-ModelPath` の省略には `-AllowNoModel` の明示を必須とする。
 `-BundledDictionaryDirectory` は `dictbuild/build_bundled.py` の出力先を受け取り、
 既定を `build/bundled-dictionaries` とする。同梱対象は
-`dict/sudachi_lexicon.azdic`、`dict/technical_terms_lexicon.azdic`、
-`ThirdPartyNotices.txt`、`bundle-provenance.json` で、zip 内でも同じ相対パスを保つ。role は辞書2層が
-`bundled-dictionary`、帰属表示が `dictionary-notices`、生成入力の記録が `dictionary-provenance` であり、SHA-256 を他の同梱物と
+`dict/sudachi_lexicon.azdic`、`dict/technical_terms_lexicon.azdic`、`dict/lattice_core.azdic`、
+`ThirdPartyNotices.txt`、`bundle-provenance.json` で、zip 内でも同じ相対パスを保つ。lattice_core は層ではないが、
+VM の Host も MSI と同じ辞書でラティス変換を行うように含める（`docs/lattice-conversion-spec.md` §8.2）。role は辞書2層と
+lattice_core が `bundled-dictionary`、帰属表示が `dictionary-notices`、生成入力の記録が `dictionary-provenance` であり、SHA-256 を他の同梱物と
 同様に manifest へ記録する。配布可否と帰属の正典は
 `auto-word-registration-spec.md` §14.9 / §14.10 とする。
 MSI の `RewriterDataDir` と同じ `data/english-words.tsv`、`data/symbol.tsv`、`data/emoji.tsv` も role `rewriter-data` として同梱する。
 既定ディレクトリが存在しない場合だけ、`-AllowNoDictionary` の明示で辞書省略を許可し、
-警告を出す。明示したディレクトリの不存在、2層の欠落・空ファイル、帰属表示の欠落・白紙は
+警告を出す。明示したディレクトリの不存在、2層と lattice_core の欠落・空ファイル、帰属表示の欠落・白紙は
 このスイッチでも許可しない。辞書省略時は辞書層を前提とする Human Gate の証跡に使わない。
 辞書を同梱する場合は Python 3.10 以降で `dictbuild/check_bundle.py --vm-package-json` を実行し、
 既存ビルダと同じ `.azdic` 形式検査、層ID、METAの出所・帰属と、生成入力の記録を検査する。
@@ -104,7 +105,7 @@ zip のルートには次を置く。
 - `verify-bootstrap.ps1`
 - `learning-data-snapshot.ps1`
 - `tip-manual-verification-checklist.md`
-- `dict/`（`sudachi_lexicon.azdic`、`technical_terms_lexicon.azdic`。辞書省略時は含めない）
+- `dict/`（`sudachi_lexicon.azdic`、`technical_terms_lexicon.azdic`、`lattice_core.azdic`。辞書省略時は含めない）
 - `ThirdPartyNotices.txt`（辞書省略時は含めない）
 - `bundle-provenance.json`（辞書省略時は含めない）
 - `manifest.json`

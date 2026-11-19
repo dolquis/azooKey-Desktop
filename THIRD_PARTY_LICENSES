@@ -164,7 +164,7 @@ SPDX-License-Identifier: MIT
 - Copyright: Copyright (c) 2017-2023 Works Applications Co., Ltd.;
   Copyright (c) 2011-2013, The UniDic Consortium; Copyright (C) 2015-2019 Toshinori Sato (@overlast)
 - Derived path: MSI の `dict\sudachi_lexicon.azdic`（語ごとの連接 ID と語コストの `CONN` を含む）と、
-  `dictbuild/build_bundled.py` が同じ `dict` に作る `dict\lattice_core.azdic`（表層が読みと同じひらがなの語と
+  `dictbuild/build_bundled.py` が同じ `dict` に作り MSI が同梱する `dict\lattice_core.azdic`（表層が読みと同じひらがなの語と
   その `CONN`、`matrix.def.zip` から作る連接行列 `CMAT`、品詞の表）。どちらもリポジトリには置かない
 - Regeneration: `python dictbuild/build_bundled.py --output <dir> --cache <dir>`
   （`dictbuild/extract_sudachi.py` が品詞・読み・cost で絞り込み、`dictbuild/dictbuild.py` が変換する）

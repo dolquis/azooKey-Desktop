@@ -398,6 +398,7 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "liveConversion": true,
+    "inputScopeSwitching": false,
     "numberRewriter": true,
     "katakanaRewriter": true,
     "dateTimeRewriter": true,
@@ -440,6 +441,8 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   ASSERT_TRUE(parsed && parsed->IsObject());
   const auto& root = parsed->AsObject();
   EXPECT_TRUE(root.contains("liveConversion"));
+  ASSERT_TRUE(root.contains("inputScopeSwitching"));
+  EXPECT_FALSE(root.at("inputScopeSwitching").AsBool());
   ASSERT_TRUE(root.contains("numberRewriter"));
   EXPECT_TRUE(root.at("numberRewriter").AsBool());
   EXPECT_TRUE(root.at("katakanaRewriter").AsBool());

@@ -341,6 +341,9 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   bool alnum_mode_for_test() const { return alnum_mode_; }
   void set_alnum_mode_for_test(bool alnum) { alnum_mode_ = alnum; }
+  InputScopeField input_scope_field_for_test() const { return input_scope_field_.field; }
+  bool input_scope_field_applies_for_test() const { return input_scope_field_.applies; }
+  bool input_scope_field_reprobe_for_test() const { return input_scope_field_.reprobe; }
   const std::string& batch_raw_romaji_for_test() const { return batch_raw_romaji_; }
   // Gives a harness that never calls ActivateEx an open/close compartment
   // (no sink); Deactivate releases it.
@@ -434,6 +437,9 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   bool resolve_detailed_logging_for_test(ITfContext* context) {
     return ResolvePrivacy(context, false).detailed_logging_allowed;
+  }
+  bool resolve_learning_allowed_for_test(ITfContext* context) {
+    return ResolvePrivacy(context, false).learning_allowed;
   }
   bool secure_toast_pending_for_test() const {
     return candidate_ui_.secure_toast_pending_for_test();
@@ -1043,6 +1049,31 @@ class TextService final : public ITfTextInputProcessorEx,
   bool function_provider_advised_{false};
   bool ui_less_mode_{false};
   bool alnum_mode_{false};
+  // M67 (app-profile-spec §13.3, §13.4): the input scope field of the focused
+  // document, determined once when the document gains focus.
+  struct InputScopeFieldState {
+    // The kind §13.3 found, kept even when the entry did not switch.
+    InputScopeField field{InputScopeField::None};
+    // The field is not secure and inputScopeSwitching was on when it was found,
+    // so the entry mode and the suppressions apply.
+    bool applies{false};
+    // The focus probe could not read the scopes: read them once more before
+    // the first key without a composition.
+    bool reprobe{false};
+    // An On that is not the user's switches to the alphanumeric mode. Off once
+    // the user switches, and when input kept the entry from switching.
+    bool reapply_on_open{false};
+    // Input was there while the field waited to be read again, so the late
+    // read keeps the entry mode as well.
+    bool entry_kept{false};
+    // The mode before entering (true: alphanumeric), restored on leaving.
+    std::optional<bool> restore_alnum;
+  };
+  InputScopeFieldState input_scope_field_;
+  // While SetKeyboardOpen writes the compartment: the change is the user's.
+  bool keyboard_open_by_user_{false};
+  // Field kind last reported by input_gate.
+  std::string input_scope_field_logged_;
   // Input indicator button (spec §4.5), present between activation and deactivation.
   InputModeLangBar input_mode_langbar_;
   // Counts deactivations, so a menu that closes after one does nothing.
@@ -1725,9 +1756,18 @@ class TextService final : public ITfTextInputProcessorEx,
     core::AiPrivacy ai;
     std::string backend;
     bool detailed_logging_allowed{false};
+    // From the same input scope probe, for M67 only.
+    InputScopeProbeStatus scope_status{InputScopeProbeStatus::NoContext};
+    InputScopeField field{InputScopeField::None};
+    bool show_secure_indicator{true};
   };
+  // Decides and applies the decision (secure state, indicator, input_gate log).
   PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai,
                                  std::optional<TfEditCookie> edit_cookie = std::nullopt);
+  // Decides only.
+  PrivacyDecision EvaluatePrivacy(ITfContext* context, bool evaluate_ai,
+                                  std::optional<TfEditCookie> edit_cookie = std::nullopt,
+                                  InputGateDecision* gate_out = nullptr);
   static void OnCandidatesReady(void* context);
   bool ShowCandidateWindowFromCache();
   void ApplyLiveConversionResult();
@@ -1940,6 +1980,21 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT CloseKeyboardCommittingShownText(ITfContext* context, std::string_view source);
   void OpenKeyboardIfClosed(std::string_view source);
   void ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr);
+  // M67 (app-profile-spec §13.3–§13.5). Enter determines the field of
+  // `context` (null: none yet) and switches its entry mode; source is the
+  // fixed word "focus" or "first_key" for the log.
+  void EnterInputScopeField(ITfContext* context, std::string_view source);
+  void ReprobeInputScopeFieldBeforeKey(ITfContext* context);
+  void RestoreInputModeAfterInputScopeField(std::optional<bool> alnum);
+  void ApplyInputScopeFieldAfterAutoOpen();
+  void NoteUserInputModeSwitch() { input_scope_field_.reapply_on_open = false; }
+  void SwitchToAlphanumericForInputScope();
+  // The effective inputScopeSwitching of the app now (§13.5, §13.6).
+  bool InputScopeSwitchingEnabled();
+  bool InputScopeSuppressesBrackets();
+  // dynamicPunctuation as the focused field allows it.
+  TipDynamicPunctuationSettings EffectiveDynamicPunctuation();
+  void LogInputScopeFieldOnChange(InputScopeField field, std::string_view source) noexcept;
   void ReopenIfInitialOpenWasUndone();
   void ClearKeyboardOpenTracking();
   void LogKeyPassthroughOnce(bool keyboard_disabled = false) noexcept;

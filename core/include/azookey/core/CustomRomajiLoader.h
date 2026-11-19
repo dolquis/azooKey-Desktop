@@ -25,7 +25,12 @@ struct CustomRomajiParseResult {
 class CustomRomajiLoader {
  public:
   // Parse UTF-8 TSV bytes. File reading and warning logging belong to the caller.
-  static CustomRomajiParseResult Parse(std::string_view tsv);
+  //
+  // `case_sensitive_rules` false (the default) folds the ASCII letters of every rule key to
+  // lowercase, so Shift does not matter when the rules are looked up. True keeps the case of the
+  // keys (docs/legacy-parity-spec.md section 5.1): a capital rule then matches only Shift-typed
+  // letters, so the caller must feed the letters in the case Shift gives them.
+  static CustomRomajiParseResult Parse(std::string_view tsv, bool case_sensitive_rules = false);
 };
 
 }  // namespace azookey::core

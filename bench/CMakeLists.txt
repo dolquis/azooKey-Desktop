@@ -215,7 +215,7 @@ if(AZOOKEY_BUILD_TESTS)
                      "-DDECODE_STATS_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-decode-stats.jsonl"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertDecodeStatsOutput.cmake")
     set_tests_properties(azookey_conversion_quality_decode_stats PROPERTIES TIMEOUT 10)
-    # --dict-dir reads the dictbuild fixture in place; --lattice is checked without lattice support.
+    # --dict-dir reads the dictbuild fixture; --lattice on and off run on the same dictionaries.
     add_dependencies(azookey_bench dictionary_fixtures)
     add_test(NAME azookey_conversion_quality_dict_dir
              COMMAND "${CMAKE_COMMAND}"

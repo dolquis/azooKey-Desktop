@@ -34,6 +34,12 @@ target_link_libraries(user_dictionary_tests
 )
 azookey_discover_tests(user_dictionary_tests)
 
+add_executable(user_dictionary_text_import_tests user_dictionary_text_import_test.cpp)
+target_link_libraries(user_dictionary_text_import_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(user_dictionary_text_import_tests)
+
 add_executable(reranker_tests reranker_test.cpp)
 target_link_libraries(reranker_tests
   PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings

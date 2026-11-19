@@ -964,6 +964,66 @@ TEST(PayloadsTest, AddUserWordPos) {
   EXPECT_FALSE(without->pos.has_value());
 }
 
+// user-dictionary-pos-spec 7.2 (DEV-2136).
+TEST(PayloadsTest, ImportUserDictionaryTextRoundTripsAndRejectsUnknownValues) {
+  azookey::ipc::ImportUserDictionaryTextRequest request;
+  request.source_path = "C:\\dict\\msime.txt";
+  request.format = "msime";
+  request.conflict_resolution = "overwrite";
+  request.dry_run = true;
+  auto parsed = azookey::ipc::ParseImportUserDictionaryTextRequest(
+      azookey::ipc::BuildImportUserDictionaryTextRequest(request));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->source_path, request.source_path);
+  EXPECT_EQ(parsed->format, "msime");
+  EXPECT_EQ(parsed->conflict_resolution, "overwrite");
+  EXPECT_TRUE(parsed->dry_run);
+
+  // Section 7.2 defaults.
+  const auto defaults =
+      azookey::ipc::ParseImportUserDictionaryTextRequest(R"({"source_path":"C:\\d.txt"})");
+  ASSERT_TRUE(defaults.has_value());
+  EXPECT_EQ(defaults->format, "auto");
+  EXPECT_EQ(defaults->conflict_resolution, "merge");
+  EXPECT_FALSE(defaults->dry_run);
+  for (const char* json : {R"({"source_path":"C:\\d.txt","format":"atok"})",
+                           R"({"source_path":"C:\\d.txt","conflict_resolution":"newest"})",
+                           R"({"source_path":"C:\\d.txt","dry_run":"yes"})", R"({"format":"auto"})",
+                           R"({"source_path":""})"}) {
+    EXPECT_FALSE(azookey::ipc::ParseImportUserDictionaryTextRequest(json)) << json;
+  }
+
+  azookey::ipc::ImportUserDictionaryTextResponse response;
+  response.ok = true;
+  response.format = "msime";
+  response.encoding = "utf-16le";
+  response.counts = azookey::ipc::UserDictionaryTextImportCounts{120, 1, 3, 1, 2, 4, 5, 6};
+  const auto json = azookey::ipc::BuildImportUserDictionaryTextResponse(response);
+  EXPECT_NE(json.find(R"("skipped":{)"), std::string::npos);
+  const auto back = azookey::ipc::ParseImportUserDictionaryTextResponse(json);
+  ASSERT_TRUE(back.has_value());
+  EXPECT_TRUE(back->ok);
+  EXPECT_FALSE(back->error.has_value());
+  EXPECT_EQ(back->format, "msime");
+  EXPECT_EQ(back->encoding, "utf-16le");
+  ASSERT_TRUE(back->counts.has_value());
+  EXPECT_EQ(back->counts->added, 120u);
+  EXPECT_EQ(back->counts->replaced, 1u);
+  EXPECT_EQ(back->counts->kept, 3u);
+  EXPECT_EQ(back->counts->duplicates_in_file, 1u);
+  EXPECT_EQ(back->counts->malformed, 2u);
+  EXPECT_EQ(back->counts->too_long, 4u);
+  EXPECT_EQ(back->counts->unsupported_pos, 5u);
+  EXPECT_EQ(back->counts->pos_mismatch, 6u);
+
+  const auto failure =
+      azookey::ipc::ParseImportUserDictionaryTextResponse(R"({"ok":false,"error":"bad_encoding"})");
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_FALSE(failure->ok);
+  EXPECT_EQ(failure->error, "bad_encoding");
+  EXPECT_FALSE(failure->counts.has_value());
+}
+
 TEST(PayloadsTest, UpdateConfigResponse) {
   azookey::ipc::UpdateConfigResponse ok;
   ok.ok = true;

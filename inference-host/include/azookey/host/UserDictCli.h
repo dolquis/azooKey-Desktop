@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "azookey/host/CliHostConnect.h"
+#include "azookey/learning/ImportConflictPolicy.h"
+#include "azookey/learning/UserDictionaryTextImport.h"
 
 namespace azookey::learning {
 class ByteCrypto;
@@ -36,6 +38,10 @@ struct UserDictCliOptions {
   std::optional<double> weight;
   // add --pos: a part-of-speech id (docs/user-dictionary-pos-spec.md 7.5).
   std::optional<std::string> pos;
+  // import --input-format / --conflict (user-dictionary-pos-spec 7.5). The
+  // default, azookey_tsv with overwrite, reads the TSV as before.
+  learning::TextImportFormat input_format{learning::TextImportFormat::AzookeyTsv};
+  learning::ImportConflictPolicy conflict{learning::ImportConflictPolicy::Overwrite};
   std::string path;
   UserDictCliFormat format{UserDictCliFormat::Json};
   bool dry_run{false};

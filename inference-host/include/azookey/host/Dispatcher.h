@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "azookey/host/CatalogFetchService.h"
 #include "azookey/host/CatalogModelMatcher.h"
@@ -97,6 +98,16 @@ class Dispatcher {
 
   const DispatcherConfig& config() const { return config_; }
 
+  // Test-only (user-dictionary-pos-spec section 6.8): a text import's wait
+  // budget in place of kUserDictionaryEditWaitBudget, and a hook run between
+  // the end of the parse and the edit.
+  void SetTextImportWaitBudgetForTests(std::chrono::milliseconds budget) {
+    text_import_wait_budget_for_tests_ = budget;
+  }
+  void SetAfterTextImportParseForTests(std::function<void()> hook) {
+    after_text_import_parse_for_tests_ = std::move(hook);
+  }
+
  private:
   std::optional<ipc::Envelope> HandleUnauthenticated(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleHandshake(const ipc::Envelope& req);
@@ -125,6 +136,8 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleForgetLearningEntry(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleExportLearningData(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleImportLearningData(const ipc::Envelope& req);
+  // user-dictionary-pos-spec section 6.8 (M71-A).
+  std::optional<ipc::Envelope> HandleImportUserDictionaryText(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleResetLearningStore(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryPersona(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleDetectAnomalies(const ipc::Envelope& req);
@@ -156,6 +169,8 @@ class Dispatcher {
   bool authenticated_{false};
   bool client_supports_secure_flag_{false};
   std::string client_id_;
+  std::optional<std::chrono::milliseconds> text_import_wait_budget_for_tests_;
+  std::function<void()> after_text_import_parse_for_tests_;
 };
 
 }  // namespace azookey::host

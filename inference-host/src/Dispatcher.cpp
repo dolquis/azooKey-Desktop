@@ -321,6 +321,39 @@ void LogPersistentEdit(logging::RuntimeLogger* logger, const ipc::Envelope& req,
                {"total_ms", report.total_ms}});
 }
 
+// user-dictionary-pos-spec section 6.8: one record per text import, with the
+// counts and the times. Never a word, a reading or the path. The receipt is
+// the record's timestamp minus total_ms and parse_ms.
+void LogUserDictionaryImport(logging::RuntimeLogger* logger, const ipc::Envelope& req,
+                             const UserDictionaryEditReport& report,
+                             const ipc::UserDictionaryTextImportCounts& counts, double parse_ms) {
+  if (!logger || !logger->enabled()) return;
+  const uint64_t skipped =
+      counts.malformed + counts.too_long + counts.unsupported_pos + counts.pos_mismatch;
+  logger->Log(report.result == UserDictionaryEditResult::Ok ? logging::RuntimeLogLevel::Info
+                                                            : logging::RuntimeLogLevel::Warn,
+              "persistent_edit",
+              {{"trace_id",
+                logging::RuntimeLogSafeText(ipc::IsValidTraceId(req.trace_id) ? req.trace_id : "")},
+               {"request_id", req.request_id},
+               {"op", logging::RuntimeLogSafeText("user_dict_import")},
+               {"result", logging::RuntimeLogSafeText(UserDictionaryEditResultName(report.result))},
+               {"writer_wait_ms", report.writer_wait_ms},
+               {"lock_wait_ms", report.lock_wait_ms},
+               {"load_ms", report.load_ms},
+               {"load_skipped", report.load_skipped},
+               {"save_ms", report.save_ms},
+               // From the end of the parse, where the wait budget starts; the
+               // parse before it is parse_ms.
+               {"total_ms", report.total_ms},
+               {"parse_ms", parse_ms},
+               {"added", counts.added},
+               {"replaced", counts.replaced},
+               {"kept", counts.kept},
+               {"duplicates_in_file", counts.duplicates_in_file},
+               {"skipped", skipped}});
+}
+
 // M59 (dynamic-punctuation-spec section 7): the live conversion surface as one
 // converted segment, with punctuation inserted by the configured rules.
 // nullopt when the request or the settings leave punctuation off.
@@ -766,6 +799,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleExportLearningData(req);
     case ipc::MessageType::ImportLearningData:
       return HandleImportLearningData(req);
+    case ipc::MessageType::ImportUserDictionaryText:
+      return HandleImportUserDictionaryText(req);
     case ipc::MessageType::ResetLearningStore:
       return HandleResetLearningStore(req);
     case ipc::MessageType::QueryPersona:
@@ -890,6 +925,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
       return MakeResponse(req, ipc::BuildImportLearningDataResponse(r));
     }
+    case ipc::MessageType::ImportUserDictionaryText: {
+      ipc::ImportUserDictionaryTextResponse r;
+      r.error = std::string(ipc::kUserDictErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildImportUserDictionaryTextResponse(r));
+    }
     case ipc::MessageType::ResetLearningStore: {
       ipc::ResetLearningStoreResponse r;
       r.ok = false;
@@ -975,7 +1015,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   // transform_selected_text = M16: the TIP sends TransformSelectedText only to
   // a Host that advertises it (ai-backend-spec section 4.1).
   // user_dict_pos = M71-A: version 2 of the user dictionary, AddUserWord.pos
-  // and the list's pos (user-dictionary-pos-spec section 7.4).
+  // and the list's pos; user_dict_text_import = ImportUserDictionaryText
+  // (user-dictionary-pos-spec section 7.4).
   res.capabilities = {"oob_cancel",
                       "commit_segments",
                       "query_live_conversion",
@@ -993,7 +1034,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "mixed_english",
                       "raw_keys",
                       "transform_selected_text",
-                      "user_dict_pos"};
+                      "user_dict_pos",
+                      "user_dict_text_import"};
   // DEV-1974 (sideload-packaging-spec section 6.3): FetchUpdate, QueryUpdateFetch and
   // CancelUpdateFetch.
   if (config_.update_fetch) {
@@ -2411,6 +2453,120 @@ std::optional<ipc::Envelope> Dispatcher::HandleRemoveUserWord(const ipc::Envelop
     res.error = std::string(ipc::kUserDictErrorInvalidRequest);
   }
   return MakeResponse(req, ipc::BuildRemoveUserWordResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleImportUserDictionaryText(const ipc::Envelope& req) {
+  const auto received = std::chrono::steady_clock::now();
+  ipc::ImportUserDictionaryTextResponse res;
+  const auto reply = [&] {
+    return MakeResponse(req, ipc::BuildImportUserDictionaryTextResponse(res));
+  };
+  // user-dictionary-pos-spec 6.8: the Host-wide privacy policy and SafeMode
+  // decide before the path is looked at, as for a backup import.
+  if (LearningDataTransferBlocked()) {
+    res.error = std::string(kLearningDataErrorBlocked);
+    return reply();
+  }
+  const auto parsed = ipc::ParseImportUserDictionaryTextRequest(req.payload_json);
+  const auto format = parsed ? learning::ParseTextImportFormat(parsed->format) : std::nullopt;
+  const auto policy =
+      parsed ? learning::ParseImportConflictPolicy(parsed->conflict_resolution) : std::nullopt;
+  if (!format || !policy) {
+    res.error = std::string(ipc::kUserDictErrorInvalidRequest);
+    return reply();
+  }
+  if (!user_dict_) {
+    res.error = std::string(ipc::kUserDictErrorUnavailable);
+    return reply();
+  }
+
+  // Step 1.
+  const auto source = core::Utf8Path(parsed->source_path);
+  if (!IsAcceptableUserDataSourcePath(source)) {
+    res.error = "invalid_path";
+    return reply();
+  }
+  std::error_code ec;
+  // symlink_status: a link is refused rather than followed somewhere else.
+  const auto status = std::filesystem::symlink_status(source, ec);
+  if (status.type() == std::filesystem::file_type::not_found) {
+    res.error = "source_missing";
+    return reply();
+  }
+  if (ec || !std::filesystem::is_regular_file(status)) {
+    res.error = "invalid_path";
+    return reply();
+  }
+
+  // Step 2, holding no lock. The plaintext is erased once parsed, and on any
+  // way out.
+  std::string bytes;
+  struct EraseOnExit {
+    std::string& text;
+    ~EraseOnExit() { learning::SecureErase(text); }
+  } erase_bytes{bytes};
+  const auto read = learning::ReadUserDictionaryTextFile(source, bytes);
+  if (read != learning::TextImportError::None) {
+    // A file that cannot be read as a regular file is not one the import takes.
+    res.error = read == learning::TextImportError::ReadFailed
+                    ? std::string("invalid_path")
+                    : std::string(learning::TextImportErrorName(read));
+    return reply();
+  }
+  auto result = learning::ParseUserDictionaryText(bytes, *format);
+  learning::SecureErase(bytes);
+  if (after_text_import_parse_for_tests_) after_text_import_parse_for_tests_();
+  const auto parsed_at = std::chrono::steady_clock::now();
+  if (result.format) res.format = std::string(learning::TextImportFormatName(*result.format));
+  if (result.encoding)
+    res.encoding = std::string(learning::TextImportEncodingName(*result.encoding));
+  ipc::UserDictionaryTextImportCounts counts;
+  counts.duplicates_in_file = result.duplicates_in_file;
+  counts.malformed = result.skipped.malformed;
+  counts.too_long = result.skipped.too_long;
+  counts.unsupported_pos = result.skipped.unsupported_pos;
+  counts.pos_mismatch = result.skipped.pos_mismatch;
+  if (result.format) res.counts = counts;
+  if (result.error != learning::TextImportError::None) {
+    res.error = std::string(learning::TextImportErrorName(result.error));
+    return reply();
+  }
+
+  learning::TextImportMergeCounts merged;
+  if (parsed->dry_run) {
+    // Step 3.
+    const auto outcome = engine_->DryRunUserDictionaryText(result.words, *policy, &merged);
+    if (outcome != UserDictionaryEditResult::Ok) {
+      res.error = UserDictionaryEditResultName(outcome);
+      return reply();
+    }
+  } else {
+    // Steps 4 to 7. The wait budget runs from the end of the parse.
+    UserDictionaryEditReport report;
+    UserDictionaryEditOptions options;
+    options.received = parsed_at;
+    if (text_import_wait_budget_for_tests_)
+      options.wait_budget = *text_import_wait_budget_for_tests_;
+    options.report = &report;
+    const bool imported =
+        engine_->ImportUserDictionaryText(result.words, *policy, options, &merged);
+    counts.added = merged.added;
+    counts.replaced = merged.replaced;
+    counts.kept = merged.kept;
+    LogUserDictionaryImport(
+        runtime_logger_, req, report, counts,
+        std::chrono::duration<double, std::milli>(parsed_at - received).count());
+    if (!imported) {
+      res.error = UserDictionaryEditResultName(report.result);
+      return reply();
+    }
+  }
+  counts.added = merged.added;
+  counts.replaced = merged.replaced;
+  counts.kept = merged.kept;
+  res.counts = counts;
+  res.ok = true;
+  return reply();
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope& req) {

@@ -22258,26 +22258,37 @@ TEST(TsfTipKanaInputTest, AlphanumericModeAndImeOffLeaveTheKeysToTheApp) {
 
 TEST(TsfTipKanaInputTest, VoicingMarksCombineWithTheLastKanaAndBackspaceErasesTheResult) {
   for (const bool legacy : {false, true}) {
-    SCOPED_TRACE(legacy);
-    DocumentPreeditHarness h;
-    StartKana(h, legacy);
-    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
-    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
-    ASSERT_EQ(h.service.preedit_kana_, "が");
-    ASSERT_TRUE(TypeKanaKey(h, kKanaHa));
-    ASSERT_TRUE(TypeKanaKey(h, kKanaHandakuten));
-    ASSERT_TRUE(TypeKanaKey(h, kKanaU));
-    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
-    ASSERT_EQ(h.service.preedit_kana_, "がぱゔ");
-    // あ does not combine, nor does a mark already there: both stay alone.
-    ASSERT_TRUE(TypeKanaKey(h, kKanaA));
-    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
-    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
-    ASSERT_EQ(h.service.preedit_kana_, "がぱゔあ゛゛");
-    EXPECT_EQ(h.context.document->text, L"がぱゔあ゛゛");
-    for (const char* expected : {"がぱゔあ゛", "がぱゔあ", "がぱゔ", "がぱ", "が"}) {
-      ASSERT_TRUE(h.Press(VK_BACK));
-      EXPECT_EQ(h.service.preedit_kana_, expected);
+    for (const bool live : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "legacy " << legacy << " live " << live);
+      DocumentPreeditHarness h;
+      StartKana(h, legacy);
+      h.service.set_live_conversion_for_test(live);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+      if (live && !legacy)
+        ASSERT_EQ(h.service.input_state_for_test().kind(),
+                  azookey::core::InputStateKind::Previewing);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+      ASSERT_EQ(h.service.preedit_kana_, "が");
+      // Live conversion stays in Previewing over the combined kana.
+      if (live && !legacy)
+        ASSERT_EQ(h.service.input_state_for_test().kind(),
+                  azookey::core::InputStateKind::Previewing);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaHa));
+      ASSERT_TRUE(TypeKanaKey(h, kKanaHandakuten));
+      ASSERT_TRUE(TypeKanaKey(h, kKanaU));
+      ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+      ASSERT_EQ(h.service.preedit_kana_, "がぱゔ");
+      // あ does not combine, nor does a mark already there: both stay alone.
+      ASSERT_TRUE(TypeKanaKey(h, kKanaA));
+      ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+      ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+      ASSERT_EQ(h.service.preedit_kana_, "がぱゔあ゛゛");
+      // Without an answer the live composition shows the reading too.
+      EXPECT_EQ(h.context.document->text, L"がぱゔあ゛゛");
+      for (const char* expected : {"がぱゔあ゛", "がぱゔあ", "がぱゔ", "がぱ", "が"}) {
+        ASSERT_TRUE(h.Press(VK_BACK));
+        EXPECT_EQ(h.service.preedit_kana_, expected);
+      }
     }
   }
 }
@@ -22415,6 +22426,43 @@ TEST(TsfTipKanaInputTest, BatchAndTheEmojiEntryDoNotApply) {
     EXPECT_EQ(h.service.preedit_kana_, "け");
     EXPECT_TRUE(h.service.pending_emoji_trigger_for_test().empty());
   }
+}
+
+// The romaji of a commit typed before the switch to kana input comes back
+// with its undo (commit-undo-spec §5) but never goes out (spec §6).
+TEST(TsfTipKanaInputTest, RomajiAnUndoBringsBackIsNotSent) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  h.service.set_english_candidates_for_test(true);
+  CommitKanaCandidate(h);
+  h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  ASSERT_EQ(h.service.preedit_kana_, "かな");
+  ASSERT_EQ(h.service.english_raw_romaji_for_test(), "kana");
+  ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
+  EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+}
+
+// A kana key typed while Enter waits for its final answer waits with it,
+// also one the layout makes no character for (input-style-spec §4.4).
+TEST(TsfTipKanaInputTest, KeysWaitForTheHeldEnter) {
+  OemCompositionTranslationGuard oem_translation(&TranslateJisLayoutForTest);
+  AsciiDecimalDigitTranslationGuard digits;
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKakiBeforeItsAnswerAndHoldEnter(h);
+  h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+  ASSERT_TRUE(TypeKanaKey(h, kKanaWa, /*shift=*/true));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  ASSERT_EQ(h.context.document->text, L"蚊き");
+  h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kFinal);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"蚊きを");
+  EXPECT_EQ(h.service.preedit_kana_, "を");
 }
 
 TEST(TsfTipKanaInputTest, AStyleChangeAppliesFromTheNextInput) {

@@ -20988,10 +20988,10 @@ void OpenKakiku(DocumentPreeditHarness& h) {
 void AnswerLatestQuery(DocumentPreeditHarness& h,
                        std::vector<azookey::ipc::CandidateField> candidates,
                        const std::string& corrected_reading = {}) {
-  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  const uint64_t query_token = h.service.pending_ipc_query_token_for_test();
   const std::string reading = h.service.pending_ipc_reading_for_test();
   h.service.mark_pending_ipc_query_sent_for_test();
-  h.service.answer_query_for_test(request_id, reading, std::move(candidates), corrected_reading);
+  h.service.answer_query_for_test(query_token, reading, std::move(candidates), corrected_reading);
   h.service.process_candidates_ready_for_test();
 }
 
@@ -21109,6 +21109,7 @@ TEST(TsfTipSegmentEditingTest, BackToTheWholeReadingWhileWaitingCancelsTheQuery)
   PressShifted(h, VK_LEFT);
   ASSERT_TRUE(h.service.input_state_for_test().awaiting_segment_candidates());
   const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  const uint64_t query_token = h.service.pending_ipc_query_token_for_test();
   PressShifted(h, VK_RIGHT);
   EXPECT_FALSE(h.service.input_state_for_test().resizing_segment());
   EXPECT_FALSE(h.service.input_state_for_test().awaiting_segment_candidates());
@@ -21117,27 +21118,27 @@ TEST(TsfTipSegmentEditingTest, BackToTheWholeReadingWhileWaitingCancelsTheQuery)
   const auto cancelled = h.service.queued_cancel_targets_for_test();
   EXPECT_NE(std::find(cancelled.begin(), cancelled.end(), request_id), cancelled.end());
 
-  h.service.answer_query_for_test(request_id, "かき", KakiCandidates());
+  h.service.answer_query_for_test(query_token, "かき", KakiCandidates());
   h.service.process_candidates_ready_for_test();
   EXPECT_EQ(h.context.document->text, L"書き区");
   EXPECT_EQ(h.service.shown_candidates_for_test().front().surface, "書き区");
 }
 
 // §5.1: an answer for an earlier end, even of the same reading (e = 2, 1, 2),
-// is told apart by its request id and not used.
+// is told apart by its query and not used.
 TEST(TsfTipSegmentEditingTest, AnswerOfAnEarlierQueryForTheSameReadingIsDropped) {
   DocumentPreeditHarness h;
   ConfigureTypoHarness(h);
   OpenKakiku(h);
   PressShifted(h, VK_LEFT);
-  const uint64_t first_id = h.service.pending_ipc_request_id_for_test();
+  const uint64_t first_token = h.service.pending_ipc_query_token_for_test();
   PressShifted(h, VK_LEFT);
   ASSERT_EQ(h.service.pending_ipc_reading_for_test(), "か");
   PressShifted(h, VK_RIGHT);
   ASSERT_EQ(h.service.pending_ipc_reading_for_test(), "かき");
-  ASSERT_NE(h.service.pending_ipc_request_id_for_test(), first_id);
+  ASSERT_NE(h.service.pending_ipc_query_token_for_test(), first_token);
 
-  h.service.answer_query_for_test(first_id, "かき", {ModelField("牡蠣", "かき")});
+  h.service.answer_query_for_test(first_token, "かき", {ModelField("牡蠣", "かき")});
   h.service.process_candidates_ready_for_test();
   EXPECT_TRUE(h.service.input_state_for_test().awaiting_segment_candidates());
   EXPECT_EQ(h.context.document->text, L"かきく");
@@ -21725,6 +21726,150 @@ TEST(TsfTipSegmentEditingTest, DeadlineGivesTheFirstSegmentItsLocalCandidates) {
     h.service.stop_ipc_worker_for_test();
   }
   server.Stop();
+}
+
+// §5.1: a Host generation change sends the waiting first segment's query again
+// under a new request id; its answer still replaces the list and ends the wait.
+TEST(TsfTipSegmentEditingTest, AnswerAfterAHostGenerationChangeEndsTheWait) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-segment-generation-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::atomic<bool> first_segment_query{false};
+  std::atomic<bool> replacement_segment_query{false};
+  const auto respond = [](const Envelope& request, const char* generation,
+                          std::atomic<bool>& segment_query,
+                          bool answer_segment) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.host_generation_id = generation;
+      handshake.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type != MessageType::QueryCandidates) return std::nullopt;
+    const auto query = ParseQueryCandidatesRequest(request.payload_json);
+    if (!query) return std::nullopt;
+    QueryCandidatesResponse payload;
+    if (!query->remaining_reading.empty()) {
+      segment_query.store(true);
+      if (!answer_segment) return std::nullopt;
+      payload.candidates = KakiCandidates();
+    } else {
+      payload.candidates = query->reading == "かきく"
+                               ? KakikuCandidates()
+                               : std::vector<CandidateField>{ModelField("区", query->reading)};
+    }
+    response.payload_json = BuildQueryCandidatesResponse(payload);
+    return response;
+  };
+  NamedPipeServer first_server;
+  ASSERT_TRUE(first_server.Start(pipe_name, [&](const Envelope& request) {
+    return respond(request, "generation-a", first_segment_query, /*answer_segment=*/false);
+  }));
+  TextServiceHarness handshake_token_guard;
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.set_ipc_health_timing_for_test(/*interval_ms=*/600000, /*timeout_ms=*/500,
+                                             /*failure_threshold=*/100);
+    // No wall-clock deadline (DEV-1830): no local candidates end the wait.
+    h.service.set_query_deadline_ms_for_test(0);
+    h.service.set_window_query_deadline_ms_for_test(0);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil(
+        [&] {
+          return h.service.ipc_connection_state_for_test() ==
+                 azookey::tsf::IpcConnectionState::Ready;
+        },
+        std::chrono::seconds(10)));
+    TypeTypoRomaji(h, "KAKIKU");
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil(
+        [&] {
+          h.service.process_candidates_ready_for_test();
+          return h.service.input_state_for_test().kind() ==
+                 azookey::core::InputStateKind::Selecting;
+        },
+        std::chrono::seconds(10)));
+    PressShifted(h, VK_LEFT);
+    ASSERT_TRUE(WaitUntil([&] { return first_segment_query.load(); }, std::chrono::seconds(10)));
+    const uint64_t first_request_id = h.service.pending_ipc_request_id_for_test();
+
+    first_server.Stop();
+    NamedPipeServer replacement_server;
+    ASSERT_TRUE(replacement_server.Start(pipe_name, [&](const Envelope& request) {
+      return respond(request, "generation-b", replacement_segment_query, /*answer_segment=*/true);
+    }));
+    ASSERT_TRUE(
+        WaitUntil([&] { return replacement_segment_query.load(); }, std::chrono::seconds(10)));
+    ASSERT_TRUE(WaitUntil(
+        [&] {
+          h.service.process_candidates_ready_for_test();
+          return !h.service.input_state_for_test().awaiting_segment_candidates();
+        },
+        std::chrono::seconds(10)));
+    EXPECT_NE(h.service.pending_ipc_request_id_for_test(), first_request_id);
+    EXPECT_EQ(h.context.document->text, L"柿く");
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_EQ(shown.size(), 2u);
+    EXPECT_EQ(shown[0].surface, "柿");
+    h.service.stop_ipc_worker_for_test();
+    replacement_server.Stop();
+  }
+}
+
+// §4, §8: the off key commits what core commits for a key typed over a resized
+// first segment before that key starts the next reading
+// (InputState::CommitCandidate), action for action.
+TEST(TsfTipSegmentEditingTest, OffKeyCommitIsCoresCommitOfTheShownText) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  OpenKakiku(h);
+  ShrinkToKaki(h);
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.context.document->text, L"夏季く");
+  const auto off = h.service.commit_shown_segment_result_for_test();
+  azookey::core::UserActionEvent typed;
+  typed.action = azookey::core::UserAction::Input;
+  typed.codepoint = U'a';
+  const auto core_result = h.service.input_state_for_test().HandleEvent(typed);
+  ASSERT_EQ(off.actions.size(), 4u);
+  ASSERT_GT(core_result.actions.size(), off.actions.size());
+  for (size_t i = 0; i < off.actions.size(); ++i)
+    EXPECT_TRUE(off.actions[i] == core_result.actions[i]) << "action " << i;
+  EXPECT_TRUE(std::holds_alternative<azookey::core::CommitMarkedText>(off.actions[2]));
+  EXPECT_EQ(off.next.kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(off.next.Reading().empty());
+}
+
+// §5.1: a resize to a first segment of punctuation alone takes its fixed
+// candidates at once and cancels the query of the previous end.
+TEST(TsfTipSegmentEditingTest, ResizeToPunctuationAloneCancelsThePreviousQuery) {
+  OemCompositionTranslationGuard oem_translation;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  TypeTypoRomaji(h, "KAKI");
+  ASSERT_EQ(h.service.preedit_kana_, "、かき");
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test({ModelField("、柿", "、かき")}); }));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
+  PressShifted(h, VK_LEFT);
+  ASSERT_TRUE(h.service.input_state_for_test().awaiting_segment_candidates());
+  ASSERT_EQ(h.service.pending_ipc_reading_for_test(), "、か");
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  PressShifted(h, VK_LEFT);
+  EXPECT_EQ(h.service.input_state_for_test().segment_end(), 1u);
+  EXPECT_FALSE(h.service.input_state_for_test().awaiting_segment_candidates());
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  const auto cancelled = h.service.queued_cancel_targets_for_test();
+  EXPECT_NE(std::find(cancelled.begin(), cancelled.end(), request_id), cancelled.end());
+  ASSERT_FALSE(h.service.shown_candidates_for_test().empty());
+  EXPECT_EQ(h.service.shown_candidates_for_test().front().surface, "、");
+  EXPECT_EQ(h.context.document->text, L"、かき");
 }
 
 // commit-undo-spec §8, §10: a partial commit is no undo target while the

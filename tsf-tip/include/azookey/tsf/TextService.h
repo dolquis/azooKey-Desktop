@@ -512,12 +512,19 @@ class TextService final : public ITfTextInputProcessorEx,
     candidates_.clear();
     candidate_window_show_pending_ = false;
   }
-  // What the IPC worker leaves for a fresh answer to query `request_id`: the
-  // candidates of `reading`, or of `corrected_reading` when the Host corrected
-  // it (segment-editing-spec §5.1).
-  void answer_query_for_test(uint64_t request_id, const std::string& reading,
+  // What the IPC worker leaves for a fresh answer to the query of `query_token`:
+  // the candidates of `reading`, or of `corrected_reading` when the Host
+  // corrected it (segment-editing-spec §5.1).
+  void answer_query_for_test(uint64_t query_token, const std::string& reading,
                              std::vector<ipc::CandidateField> candidates,
                              const std::string& corrected_reading = {});
+  uint64_t pending_ipc_query_token_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_query_token_;
+  }
+  core::HandleResult commit_shown_segment_result_for_test() const {
+    return CommitShownSegmentResult();
+  }
   std::string pending_ipc_remaining_reading_for_test() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     return ipc_pending_remaining_reading_;
@@ -1434,6 +1441,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // ipc_mtx_; the reading after the first segment of a resize's query
   // (segment-editing-spec §5.1), empty for every other query. Never logged.
   std::string ipc_pending_remaining_reading_;
+  // ipc_mtx_; names the pending query for as long as it stands. Unlike
+  // ipc_pending_id_, a Host generation change that reissues it keeps it.
+  uint64_t ipc_pending_query_token_{0};
+  uint64_t ipc_query_token_seq_{0};  // ipc_mtx_
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
   // ipc_mtx_; custom romaji table of the pending batch, set with its raw romaji.
@@ -1592,10 +1603,11 @@ class TextService final : public ITfTextInputProcessorEx,
   // thread, read by TIP thread).
   std::mutex candidates_mtx_;
   std::vector<TipCandidate> candidates_;
-  // candidates_mtx_; the request candidates_ answers, 0 until an answer of the
-  // latest query arrives. A window query answered empty sets it too, so the
-  // first segment's wait tells an empty answer from none (segment-editing-spec §5.2).
-  uint64_t candidates_request_id_{0};
+  // candidates_mtx_; the query token (ipc_pending_query_token_) of the query
+  // candidates_ answers, 0 until an answer of the latest query arrives. A
+  // window query answered empty sets it too, so the first segment's wait tells
+  // an empty answer from none (segment-editing-spec §5.2).
+  uint64_t candidates_query_token_{0};
   std::string candidates_trace_id_;                                 // candidates_mtx_
   std::chrono::steady_clock::time_point candidates_trace_start_{};  // candidates_mtx_
   bool candidates_trace_pending_{false};                            // candidates_mtx_
@@ -2125,10 +2137,12 @@ class TextService final : public ITfTextInputProcessorEx,
 
   // M66 (docs/segment-editing-spec.md): the first segment of a normal
   // conversion, resized with Shift+Left / Shift+Right while Selecting.
-  // The first segment's window query in flight (spec §5.1): an answer to another
-  // request id is stale, even for the same reading. UI thread only.
+  // The first segment's window query in flight (spec §5.1): an answer to
+  // another query is stale, even for the same reading. The query token
+  // survives the new request id a Host generation change gives the query when
+  // it is sent again. UI thread only.
   struct SegmentQuery {
-    uint64_t request_id{0};
+    uint64_t token{0};
     std::string reading;
   };
   std::optional<SegmentQuery> segment_query_;

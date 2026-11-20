@@ -5179,9 +5179,12 @@ HRESULT TextService::ApplySegmentCandidates(ITfContext* context,
     candidate.description = item.description;
     list.push_back(std::move(candidate));
   }
-  segment_query_.reset();
-  return ApplyInputStateResult(context, input_state_.HandleSegmentCandidatesArrived(
-                                            input_state_.FirstSegmentReading(), std::move(list)));
+  const HRESULT hr =
+      ApplyInputStateResult(context, input_state_.HandleSegmentCandidatesArrived(
+                                         input_state_.FirstSegmentReading(), std::move(list)));
+  // A result rolled back still waits for this query, whose answer stays cached.
+  if (SUCCEEDED(hr)) segment_query_.reset();
+  return hr;
 }
 
 // Segment-editing-spec §5.1: only the answer of the latest first segment's
@@ -5194,10 +5197,12 @@ bool TextService::ApplySegmentCandidatesFromCache() {
   bool corrected = false;
   {
     std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
-    if (candidates_request_id_ != segment_query_->request_id) return false;
+    if (candidates_query_token_ != segment_query_->token) return false;
     answer = candidates_;
-    corrected = corrected_reading_result_ &&
-                corrected_reading_result_->request_id == segment_query_->request_id;
+    // Set with the candidates of this answer (the request id may have changed
+    // since, when a new Host generation was sent the query again).
+    corrected =
+        corrected_reading_result_ && corrected_reading_result_->reading == segment_query_->reading;
     if (corrected) corrected_reading_result_.reset();
   }
   const std::string reading = segment_query_->reading;
@@ -6757,7 +6762,7 @@ HRESULT TextService::CommitFirstSegment(ITfContext* context, std::string surface
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     candidates_.clear();
-    candidates_request_id_ = 0;
+    candidates_query_token_ = 0;
     candidate_window_show_pending_ = false;
     corrected_reading_result_.reset();
   }
@@ -6811,6 +6816,14 @@ HRESULT TextService::CommitFirstSegment(ITfContext* context, std::string surface
     return S_OK;
   }
   if (commit_hr == E_OUTOFMEMORY && committing_ && partial_commit_) {
+    // No session was created, so the document is unchanged. The resized
+    // Selecting comes back with its window, so the same key can commit again.
+    // What was dropped above stays dropped, each on the safe side: no query is
+    // left (the first segment's list was answered, and the Selecting shown
+    // reads shown_candidates_, not candidates_), no live text or corrected
+    // reading is shown, and no undo target, pending "undo", NonConvert target,
+    // typo pair or prediction survives, so nothing is learned or put back from
+    // this input that it would not have been after the partial commit.
     committing_ = false;
     commit_surface_.clear();
     partial_commit_.reset();
@@ -7618,6 +7631,7 @@ void TextService::ServeConnection() {
     std::string trace_id;
     std::chrono::steady_clock::time_point trace_start;
     uint64_t req_id = 0;
+    uint64_t query_token = 0;
     bool has_qc = false;
     bool is_batch = false;
     bool is_live_conversion = false;
@@ -7677,6 +7691,7 @@ void TextService::ServeConnection() {
         trace_id = ipc_pending_trace_id_;
         trace_start = ipc_pending_trace_start_;
         req_id = ipc_pending_id_;
+        query_token = ipc_pending_query_token_;
         is_batch = ipc_pending_is_batch_;
         is_live_conversion = ipc_pending_is_live_conversion_;
         apply_live_preview = ipc_pending_apply_live_preview_;
@@ -8220,7 +8235,7 @@ void TextService::ServeConnection() {
           if (window_query && IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id)) {
             candidate_window_show_pending_ = false;
             // An empty answer of this request (segment-editing-spec §5.2).
-            candidates_request_id_ = req_id;
+            candidates_query_token_ = query_token;
             end_wait = true;
           }
         }
@@ -8311,7 +8326,7 @@ void TextService::ServeConnection() {
           is_fresh = false;
         } else {
           candidates_ = std::move(tip_candidates);
-          candidates_request_id_ = req_id;
+          candidates_query_token_ = query_token;
           corrected_reading_result_.reset();
           if (!corrected_reading.empty())
             corrected_reading_result_ = CorrectedReadingResult{req_id, reading, corrected_reading};
@@ -8921,6 +8936,7 @@ std::string TextService::PostQueryCandidates(ITfContext* context, const std::str
   ipc_pending_alt_readings_ = std::move(alt_readings);
   ipc_pending_raw_keys_ = std::move(raw_keys);
   ipc_pending_remaining_reading_ = remaining_reading;
+  ipc_pending_query_token_ = ++ipc_query_token_seq_;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -8991,6 +9007,7 @@ std::string TextService::PostQueryLiveConversion(ITfContext* context, const std:
   // Host before M14 has no "raw_keys" either.
   ipc_pending_raw_keys_.clear();
   ipc_pending_remaining_reading_.clear();
+  ipc_pending_query_token_ = ++ipc_query_token_seq_;
   ipc_pending_english_candidates_ = false;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
@@ -9122,6 +9139,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_alt_readings_.clear();
   ipc_pending_raw_keys_.clear();  // QueryBatchConversion has no raw_keys.
   ipc_pending_remaining_reading_.clear();
+  ipc_pending_query_token_ = ++ipc_query_token_seq_;
   ipc_pending_batch_table_ = batch_romaji_table_;
   // ai-cleanup stays without English even when it falls back to neural, and a
   // secure field asks for none (DEV-1745). The request says whether it is
@@ -9768,18 +9786,22 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
       candidates_ = IsStandalonePunctuation(query->reading)
                         ? BuildTipCandidates(query->reading, {}, false, false)
                         : std::vector<TipCandidate>{};
-      candidates_request_id_ = 0;
+      candidates_query_token_ = 0;
       candidate_window_show_pending_ = input_state_.awaiting_candidates();
     }
     if (!query->remaining_reading.empty()) {
       // Segment-editing-spec §5.1: a resize asks for the first segment's list
       // with the remaining reading. Standalone punctuation needs no Host; its
-      // fixed candidates answer once the actions are applied.
+      // fixed candidates answer once the actions are applied, and the query of
+      // the previous end is cancelled as a new query would.
       if (!IsStandalonePunctuation(query->reading)) {
         (void)PostQueryCandidates(context, query->reading, /*live=*/false, {},
                                   query->remaining_reading);
         std::lock_guard<std::mutex> lock(ipc_mtx_);
-        segment_query_ = SegmentQuery{ipc_pending_id_, query->reading};
+        segment_query_ = SegmentQuery{ipc_pending_query_token_, query->reading};
+      } else {
+        segment_query_.reset();
+        CancelOutstandingQueries();
       }
     } else if (!IsStandalonePunctuation(query->reading)) {
       // The window query asks for the full list (live = false): typo
@@ -11986,16 +12008,16 @@ void TextService::set_corrected_candidates_for_test(const std::string& reading,
         CorrectedReadingResult{request_id.value_or(ipc_pending_id_), reading, corrected_reading};
 }
 
-void TextService::answer_query_for_test(uint64_t request_id, const std::string& reading,
+void TextService::answer_query_for_test(uint64_t query_token, const std::string& reading,
                                         std::vector<ipc::CandidateField> candidates,
                                         const std::string& corrected_reading) {
   std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
   candidates_ = BuildTipCandidates(corrected_reading.empty() ? reading : corrected_reading,
                                    std::move(candidates), false, false);
-  candidates_request_id_ = request_id;
+  candidates_query_token_ = query_token;
   corrected_reading_result_.reset();
   if (!corrected_reading.empty())
-    corrected_reading_result_ = CorrectedReadingResult{request_id, reading, corrected_reading};
+    corrected_reading_result_ = CorrectedReadingResult{ipc_pending_id_, reading, corrected_reading};
 }
 
 std::vector<ipc::MessageType> TextService::queued_ipc_types_for_test() {
@@ -12568,9 +12590,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           service_->composition_range_surface_ = service_->partial_commit_->surface;
           clear_display_attributes(whole.Get());
           // Detached first, so a termination callback leaves the remaining
-          // reading alone.
+          // reading alone. The mouse sink goes only with the composition.
           service_->composition_ = nullptr;
-          service_->UnadviseCompositionMouseSink();
           service_->etw_composition_end_in_progress_ = true;
           const HRESULT end_hr = comp->EndComposition(ec);
           service_->etw_composition_end_in_progress_ = false;
@@ -12579,6 +12600,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
             service_->composition_range_readback_.reset();
             return end_hr;
           }
+          service_->UnadviseCompositionMouseSink();
           comp->Release();
           core::EtwLogger::LogCompositionEnd(surface.size(), true);
           if (SUCCEEDED(whole->Collapse(ec, TF_ANCHOR_END))) {

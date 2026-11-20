@@ -506,7 +506,7 @@ schema 自体は superset のまま変えない。
 #### v1.0（M11）の UI アクション（設定キーではないボタン）
 
 - **ユーザー辞書の追加・削除** → 「学習」ペイン（§3.2）のユーザー辞書タブに置く。タブは一覧と検索、
-  「読み」「語」の 2 欄と「追加」ボタン、行ごとの「忘却」を持つ。追加は `AddUserWord`（roadmap M9）、
+  「読み」「語」の 2 欄（Host が品詞に対応していれば「品詞」の欄も）と「追加」ボタン、行ごとの「忘却」を持つ。追加は `AddUserWord`（roadmap M9）、
   削除は `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で Host へ送る
   （詳細は同 spec §3）。v1.0 は専用 GUI を作らず、この最小の導線だけを持つ。語の編集、辞書の単独の書き出し、
   既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json.enc` を直接開かず、Host への IPC を
@@ -545,7 +545,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `reranker.*` | — | 専用 UI を持たない（`neural-reranker-nll-spec.md` §B9） |
 | `typoCorrection.learnPersonalPatterns` | — | M55（辞書ペイン。`typoCorrection.mode` は辞書ペインの `typoCorrectionMode` と一緒に書く。`typo-correction-learning-spec.md` §12.14） |
 | `typoCorrection` のほかの下位キー | — | 専用 UI を持たない（`enabled` は `off` として示し、`rank` / `aggressive`、`maxReadingHypotheses`、信頼度の 2 キーは補正エンジンが変換に反映するまで出さない。`keyboardLayout` は値が `auto` だけ、`disableInSecretApps` は `true` 固定） |
-| ユーザー辞書の内容（設定キーではない。`user_dict.json.enc`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却） | M30（語の編集、単独の書き出し、既定で入る語） |
+| ユーザー辞書の内容（設定キーではない。`user_dict.json.enc`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却。ほかの IME の辞書の取り込みは M71-A。`user-dictionary-pos-spec.md` §8） | M30（語の編集、単独の書き出し、既定で入る語） |
 
 > v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で
 > 機能自体は動く。v1.0 設定アプリは未露出キーを**消さない**（下記バリデーションの write-back 規則）。

@@ -40,7 +40,14 @@ struct DictionaryEntry {
   double score{};
   bool use_user_word_score{};
   std::optional<double> user_word_score;
+  // A user dictionary word's part-of-speech id (UserDictionaryPos.h); empty for a noun and for
+  // the words of the other layers. Only the lattice reads it (user-dictionary-pos-spec 4.5).
+  std::string pos;
 };
+
+// Most forms the index of conjugated user dictionary words holds (user-dictionary-pos-spec
+// section 4.6).
+inline constexpr size_t kMaxUserWordForms = 100'000;
 struct LookupContext {
   LookupMode mode{LookupMode::Exact};
   size_t max_results{32};
@@ -83,13 +90,37 @@ class DictionaryStore {
   // C of lattice-conversion-spec section 3.4; 0 while the lattice is unavailable.
   int32_t LatticeScoreScale() const;
   // Builds and searches `reading` (spec sections 4 and 6) with lattice_core's words, the enabled
-  // static layers, and the words of the enabled mutable layers (spec section 5.3). The paths own
-  // their strings. Unavailable without a usable lattice_core.
+  // static layers, the words of the enabled mutable layers (spec section 5.3), and while the
+  // user dictionary is enabled, its conjugated forms (user-dictionary-pos-spec section 4.6).
+  // The paths own their strings. Unavailable without a usable lattice_core.
   core::LatticeResult ConvertLattice(std::string_view reading,
                                      const core::LatticeQuery& query) const;
 
+  // user-dictionary-pos-spec section 4.6: the forms of the user dictionary's conjugating words
+  // that lattice_core has rows for, built whenever the user words or lattice_core load. They
+  // reach ConvertLattice only: Lookup, ContainsKnownWord and ReverseLookup never see them.
+  // True when the user dictionary is enabled, lattice_core is usable, and from some position of
+  // the normalized `reading` a form's reading is a prefix of the rest (section 5.2).
+  bool HasUserWordForms(std::string_view reading) const;
+  size_t UserWordFormCount() const { return user_form_count_; }
+  // The last build stopped at the limit (kMaxUserWordForms) and left forms out.
+  bool UserWordFormsTruncated() const { return user_forms_truncated_; }
+  // Test-only: a smaller limit than kMaxUserWordForms; the index is built again with it.
+  void SetUserWordFormLimitForTests(size_t limit);
+
  private:
   using Index = std::map<std::string, std::vector<DictionaryEntry>>;
+  // One conjugated form with the row of lattice_core's part-of-speech table it takes.
+  struct FormNode {
+    std::string surface;
+    uint16_t left_id{};
+    uint16_t right_id{};
+    uint16_t pos{core::kNoLatticePos};
+    core::LatticeWordClass word_class{core::LatticeWordClass::Independent};
+  };
+  using FormIndex = std::map<std::string, std::vector<FormNode>, std::less<>>;
+  class FormVocabulary;  // The lattice vocabulary of user_forms_.
+  void RebuildUserWordForms();
   void QueryLayer(size_t layer, std::string_view key, const LookupContext& context,
                   std::vector<DictionaryEntry>& out, bool include_disabled_static = false) const;
   // Drops the lattice vocabulary of static layer `index`, which refers to its trie.
@@ -101,6 +132,12 @@ class DictionaryStore {
   std::array<std::unique_ptr<core::StaticLatticeVocabulary>, 5> lattice_layers_;
   std::array<Index, 3> mutable_;
   std::array<bool, 3> mutable_available_{};
+  // Keyed by the normalized reading of each form; no alias keys (user-dictionary-pos-spec 4.6).
+  FormIndex user_forms_;
+  size_t user_form_count_{};
+  size_t user_form_key_bytes_{};  // The longest key.
+  size_t user_form_limit_{kMaxUserWordForms};
+  bool user_forms_truncated_{};
   std::array<std::string, 5> static_errors_;
   std::array<bool, 8> enabled_{{true, true, false, true, true, true, true, true}};
 };

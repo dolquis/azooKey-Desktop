@@ -61,6 +61,7 @@ struct Word {
   LatticeWordClass word_class{LatticeWordClass::Independent};
   LatticeScript script{LatticeScript::Other};
   uint16_t pos{kNoLatticePos};
+  bool marked{};
 };
 
 class WordVocabulary : public ILatticeVocabulary {
@@ -71,7 +72,8 @@ class WordVocabulary : public ILatticeVocabulary {
     for (const auto& word : words_) {
       if (key.substr(0, word.reading.size()) != word.reading) continue;
       out.push_back({static_cast<uint32_t>(word.reading.size()), word.surface, word.left_id,
-                     word.right_id, word.cost, word.pos, word.word_class, word.script});
+                     word.right_id, word.cost, word.pos, word.word_class, word.script,
+                     word.marked});
     }
     return true;
   }
@@ -830,6 +832,205 @@ TEST(LatticeSearch, CancelAndDeadlineFollowSection64) {
   EXPECT_EQ(BuildLattice("あいあい", parameters, vocabularies, staged, lattice).status,
             LatticeStatus::Complete);
   EXPECT_TRUE(flag.load());
+}
+
+// user-dictionary-pos-spec section 5.2 literally: the smallest cost of every BOS-to-EOS path,
+// and the paths that hold a marked node ranked as spec section 6.3 ranks them, folded by surface.
+struct MarkedExhaustive {
+  int32_t best{};
+  std::vector<Summary> marked;
+};
+
+MarkedExhaustive EnumerateMarked(const Lattice& lattice, const ConnectionMatrix& matrix) {
+  struct Full {
+    Summary summary;
+    std::vector<uint32_t> word_bounds;
+    std::vector<std::tuple<uint16_t, uint16_t, uint16_t>> ids;
+  };
+  MarkedExhaustive result;
+  result.best = INT32_MAX;
+  std::vector<Full> marked;
+  const auto& nodes = lattice.Nodes();
+  std::vector<uint32_t> path;
+  std::function<void(uint32_t)> walk = [&](uint32_t position) {
+    if (position == lattice.Length()) {
+      Full full;
+      int32_t cost = 0;
+      uint16_t right = matrix.RightIndex(0);
+      bool holds_marked = false;
+      for (size_t i = 0; i < path.size(); ++i) {
+        const auto& node = nodes[path[i]];
+        cost += matrix.Cost(right, node.left_index) + node.cost;
+        right = node.right_index;
+        holds_marked = holds_marked || node.marked;
+        full.summary.surface.append(node.surface);
+        full.ids.emplace_back(node.left_id, node.right_id, node.pos);
+        if (i == 0) continue;
+        full.word_bounds.push_back(node.begin);
+        if (IsBoundary(nodes[path[i - 1]].word_class, node.word_class))
+          full.summary.segment_bounds.push_back(node.begin);
+      }
+      full.summary.cost = cost + matrix.Cost(right, matrix.LeftIndex(0));
+      result.best = std::min(result.best, full.summary.cost);
+      if (holds_marked) marked.push_back(std::move(full));
+      return;
+    }
+    for (const auto index : lattice.BeginningAt(position)) {
+      path.push_back(index);
+      walk(nodes[index].end);
+      path.pop_back();
+    }
+  };
+  walk(0);
+  std::sort(marked.begin(), marked.end(), [](const Full& a, const Full& b) {
+    return std::tie(a.summary.cost, a.summary.surface, a.summary.segment_bounds, a.word_bounds,
+                    a.ids) < std::tie(b.summary.cost, b.summary.surface, b.summary.segment_bounds,
+                                      b.word_bounds, b.ids);
+  });
+  std::set<std::string> seen;
+  for (const auto& full : marked)
+    if (seen.insert(full.summary.surface).second) result.marked.push_back(full.summary);
+  return result;
+}
+
+LatticeResult SearchMarked(const Lattice& lattice, size_t max_paths, LatticeLimits limits = {}) {
+  LatticeQuery query;
+  query.max_paths = max_paths;
+  query.marked_only = true;
+  query.limits = std::move(limits);
+  return SearchLattice(lattice, query);
+}
+
+// M71-B (DEV-2137, user-dictionary-pos-spec section 5.2): with the bit in the state, the best
+// path through a marked node and the smallest cost of any path match exhaustive enumeration,
+// and so do the next paths through a marked node.
+TEST(LatticeSearch, MarkedPathsMatchExhaustiveEnumeration) {
+  size_t with_marked = 0, compared = 0;
+  for (uint32_t seed = 1; seed <= 150; ++seed) {
+    Random random(seed * 104729);
+    const auto matrix = RandomMatrix(random);
+    ASSERT_TRUE(matrix->Parsed());
+    auto words = RandomWords(random);
+    for (auto& word : words) word.marked = random.Next(3) == 0;
+    WordVocabulary vocabulary(words);
+    const ILatticeVocabulary* vocabularies[] = {&vocabulary};
+    const auto reading = RandomKana(random, 2 + random.Next(4));
+    Lattice lattice;
+    ASSERT_EQ(
+        BuildLattice(reading, Parameters(*matrix, {0, 0, 100, 900}), vocabularies, {}, lattice)
+            .status,
+        LatticeStatus::Complete);
+    const auto expected = EnumerateMarked(lattice, matrix->Matrix());
+    const auto best = SearchMarked(lattice, 1);
+    ASSERT_EQ(best.status, LatticeStatus::Complete) << "seed " << seed;
+    ASSERT_TRUE(best.best_cost) << "seed " << seed;
+    EXPECT_EQ(*best.best_cost, expected.best) << "seed " << seed;
+    if (expected.marked.empty()) {
+      EXPECT_TRUE(best.paths.empty()) << "seed " << seed;
+      continue;
+    }
+    ++with_marked;
+    ASSERT_EQ(best.paths.size(), 1U) << "seed " << seed;
+    EXPECT_EQ(Summarize(best.paths[0]), expected.marked[0]) << "seed " << seed;
+    const auto nbest = SearchMarked(lattice, 4);
+    if (nbest.limited) continue;
+    ++compared;
+    const std::vector<Summary> top(
+        expected.marked.begin(),
+        expected.marked.begin() + std::min<size_t>(4, expected.marked.size()));
+    EXPECT_EQ(Summaries(nbest), top) << "seed " << seed;
+  }
+  EXPECT_GE(with_marked, 50U);
+  EXPECT_GE(compared, 40U);
+}
+
+// Section 5.2 with section 4.2's folding and section 6.4's stops.
+TEST(LatticeSearch, MarkedSearchFoldsMarksAndFollowsTheStops) {
+  TestMatrix matrix(4, [](uint32_t, uint32_t) { return int16_t{0}; });
+  const auto parameters = Parameters(matrix, {0, 0, 0, 30000});
+  // A marked word folded into the same cheaper unmarked word marks the node that survives.
+  WordVocabulary same({{"か", "蚊", 2, 2, 100},
+                       {"か", "蚊", 2, 2, 500, LatticeWordClass::Independent, LatticeScript::Other,
+                        kNoLatticePos, true}});
+  const ILatticeVocabulary* same_vocabularies[] = {&same};
+  Lattice folded;
+  ASSERT_EQ(BuildLattice("か", parameters, same_vocabularies, {}, folded).status,
+            LatticeStatus::Complete);
+  ASSERT_EQ(folded.Nodes().size(), 2U);
+  EXPECT_TRUE(folded.Nodes()[0].marked);
+  EXPECT_EQ(folded.Nodes()[0].cost, 100);
+  const auto through_folded = SearchMarked(folded, 1);
+  ASSERT_EQ(through_folded.paths.size(), 1U);
+  EXPECT_EQ(through_folded.paths[0].cost, 100);
+
+  WordVocabulary vocabulary({{"か", "蚊", 2, 2, 100},
+                             {"か", "可", 2, 2, 500, LatticeWordClass::Independent,
+                              LatticeScript::Other, kNoLatticePos, true}});
+  const ILatticeVocabulary* vocabularies[] = {&vocabulary};
+  Lattice lattice;
+  ASSERT_EQ(BuildLattice("かか", parameters, vocabularies, {}, lattice).status,
+            LatticeStatus::Complete);
+  // The plain search ignores the mark: the cheaper word on both positions.
+  const auto plain = Search(lattice, matrix, 4);
+  ASSERT_FALSE(plain.paths.empty());
+  EXPECT_EQ(plain.paths[0].Surface(), "蚊蚊");
+  EXPECT_EQ(plain.paths[0].cost, 200);
+  EXPECT_FALSE(plain.best_cost);
+  // The marked search takes the marked word once, and the cheaper one elsewhere; 可蚊 and 蚊可
+  // tie and go by their surface bytes (section 6.3).
+  const auto marked = SearchMarked(lattice, 4);
+  ASSERT_EQ(marked.status, LatticeStatus::Complete);
+  ASSERT_GE(marked.paths.size(), 2U);
+  EXPECT_EQ(marked.paths[0].Surface(), "可蚊");
+  EXPECT_EQ(marked.paths[0].cost, 600);
+  EXPECT_EQ(marked.paths[1].Surface(), "蚊可");
+  ASSERT_TRUE(marked.best_cost);
+  EXPECT_EQ(*marked.best_cost, 200);
+
+  // No marked word: no path, and still the smallest cost of any path.
+  WordVocabulary unmarked({{"か", "蚊", 2, 2, 100}, {"か", "可", 2, 2, 500}});
+  const ILatticeVocabulary* unmarked_vocabularies[] = {&unmarked};
+  Lattice plain_lattice;
+  ASSERT_EQ(BuildLattice("かか", parameters, unmarked_vocabularies, {}, plain_lattice).status,
+            LatticeStatus::Complete);
+  const auto none = SearchMarked(plain_lattice, 1);
+  EXPECT_EQ(none.status, LatticeStatus::Complete);
+  EXPECT_TRUE(none.paths.empty());
+  ASSERT_TRUE(none.best_cost);
+  EXPECT_EQ(*none.best_cost, 200);
+
+  // The reading as typed only: no constraints and no head search.
+  LatticeQuery constrained;
+  constrained.marked_only = true;
+  constrained.constraints.segment_breaks = {1};
+  EXPECT_EQ(SearchLattice(lattice, constrained).status, LatticeStatus::Rejected);
+  LatticeQuery head;
+  head.marked_only = true;
+  head.head_only = true;
+  head.constraints.word_boundaries = {1};
+  EXPECT_EQ(SearchLattice(lattice, head).status, LatticeStatus::Rejected);
+
+  // Section 6.4: a stop before the forward pass ends gives nothing, not even best_cost; after
+  // it, the forward pass's best marked path.
+  std::atomic<bool> cancel{true};
+  LatticeLimits cancelled;
+  cancelled.cancel = &cancel;
+  const auto aborted = SearchMarked(lattice, 4, cancelled);
+  EXPECT_EQ(aborted.status, LatticeStatus::Aborted);
+  EXPECT_TRUE(aborted.paths.empty());
+  EXPECT_FALSE(aborted.best_cost);
+  std::atomic<bool> flag{false};
+  LatticeLimits after_forward;
+  after_forward.cancel = &flag;
+  after_forward.on_stage = [&](LatticeStage reached) {
+    if (reached == LatticeStage::Forward) flag = true;
+  };
+  const auto truncated = SearchMarked(lattice, 4, after_forward);
+  EXPECT_EQ(truncated.status, LatticeStatus::Truncated);
+  ASSERT_EQ(truncated.paths.size(), 1U);
+  EXPECT_EQ(truncated.paths[0].cost, 600);
+  ASSERT_TRUE(truncated.best_cost);
+  EXPECT_EQ(*truncated.best_cost, 200);
 }
 
 }  // namespace

@@ -658,7 +658,7 @@ Host が §7.4 の capability を告知したときだけ出す。macOS 版の�
 | 取り込み | 自作の fixture（`msime` を UTF-16LE の BOM 付き、`google` を BOM なし UTF-8、`azookey_tsv`、CP932 の `msime`）で、§6.5 の対応表どおりに入る。§6.4 の除外の理由ごとの件数。§6.7 の各上限。`merge` と `overwrite`。CP932 は Windows だけで試す |
 | データ安全 | 保存の失敗、ロックの時間切れ、読み直しの失敗、version 3 以上のそれぞれで、ディスクの辞書が変わらない。公開中の辞書は、version 3 以上のときだけ読み直した辞書に置き換わり、ほかでは変わらない。`dry_run` が何も変えない。待ちの予算が解析の後から数えられる（予算の注入で確かめる）。privacy の方針が secure・学習不可、SafeMode のとき `blocked`。ログに語・読み・パスが出ない |
 | IPC と CLI | `AddUserWord` の `pos` と `invalid_pos`。`ImportUserDictionaryText` の要求と応答の往復。`userdict import` の既定で 5 列以下の行の結果が品詞に対応する前と同じになり、6 列目が §2.1・§4.4 で検査される。`--pos` を capability `user_dict_pos` の無い Host へ送らない |
-| dictbuild | §4.2 の語尾表の各（活用型、活用形）の組が `META.lattice` の品詞の表にあり、SudachiDict の代表の語の活用形と語尾表が一致する |
+| dictbuild | §4.2 の代表の語の SudachiDict の活用形を SudachiDict の形式で書いた fixture を `extract_sudachi.py` から lattice_core まで通し、語尾表の各形が fixture の活用形と一致し、fixture から作った `META.lattice` の品詞の表にその（品詞, 活用型, 活用形）の行がある |
 | Human Gate | Microsoft IME と Google 日本語入力の実際の書き出しファイルを取り込める（§6.1 が照合を Human Gate に委ねた形式、文字コード、改行、品詞名を実ファイルと照らし、`msime.h` の内部の品詞名が現れるかを記録する）。実機で、活用した登録語が候補に出る |
 
 試験の一覧の正典は `docs/test-inventory.md` である。利用者の実際の辞書は fixture にしない。

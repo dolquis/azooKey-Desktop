@@ -7,8 +7,15 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <vector>
 
 #include "../../learning/tests/TestByteCrypto.h"
 #include "azookey/core/DoubleArrayTrie.h"
@@ -18,6 +25,7 @@
 #include "azookey/host/SettingsStore.h"
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DictionaryStore.h"
+#include "azookey/learning/UserDictionaryPos.h"
 
 namespace {
 using namespace azookey;
@@ -829,5 +837,270 @@ TEST(DictionaryStoreLattice, RebuildsVocabulariesWhenALayerOrLatticeCoreLoadsAga
   ASSERT_TRUE(store.LoadLatticeCore(Fixture("lattice/lattice_core.azdic")));
   EXPECT_TRUE(store.LatticeConnectionError(learning::LayerId::Sudachi).empty());
   EXPECT_EQ(LatticeSurfaces(store, "てんき", 1), std::vector<std::string>{"天気"});
+}
+
+// M71-B (DEV-2137): user dictionary words with a part of speech (user-dictionary-pos-spec
+// sections 4 and 5) on the lattice_user fixture, whose rows are SudachiDict-shaped.
+learning::UserWord UserWordWithPos(std::string word, std::string ruby,
+                                   std::optional<std::string> pos) {
+  learning::UserWord user_word;
+  user_word.word = std::move(word);
+  user_word.ruby = std::move(ruby);
+  user_word.pos = std::move(pos);
+  return user_word;
+}
+
+void LoadConjugationFixture(learning::DictionaryStore& store) {
+  ASSERT_TRUE(store.LoadLatticeCore(Fixture("lattice_user/lattice_core.azdic"), true))
+      << store.LatticeError();
+  ASSERT_TRUE(
+      store.LoadStatic(learning::LayerId::Sudachi, Fixture("lattice_user/sudachi_lexicon.azdic")));
+}
+
+// Section 9 (dictbuild): the forms section 4.2 makes of the representative words are the forms
+// SudachiDict gives them, as extract_sudachi converts them, and the part-of-speech table built
+// from those rows has the row of each (part of speech, conjugation type, conjugation form).
+TEST(UserWordConjugation, FormsMatchTheSudachiFormsOfTheRepresentativeWords) {
+  core::LatticeDictionary dictionary;
+  ASSERT_TRUE(dictionary.Load(Fixture("lattice_user/lattice_core.azdic"), true))
+      << dictionary.Error();
+  struct Row {
+    std::string reading, surface, name, type, form;
+    int left{}, right{};
+  };
+  const auto split = [](std::string_view text, char separator) {
+    std::vector<std::string> fields;
+    for (size_t start = 0;;) {
+      const auto end = text.find(separator, start);
+      fields.emplace_back(text.substr(start, end == std::string_view::npos ? end : end - start));
+      if (end == std::string_view::npos) return fields;
+      start = end + 1;
+    }
+  };
+  // The connection TSV: reading, surface, left id, right id, cost, pos, conjugation, normalized
+  // form, and the six part-of-speech fields joined by ",".
+  std::map<std::string, std::vector<Row>> by_word;
+  std::ifstream connections(Fixture("lattice_user/conjugation.conn.tsv"), std::ios::binary);
+  ASSERT_TRUE(connections.is_open());
+  for (std::string line; std::getline(connections, line);) {
+    if (line.empty() || line[0] == '#' || line.rfind("reading\t", 0) == 0) continue;
+    const auto fields = split(line, '\t');
+    ASSERT_EQ(fields.size(), 9U) << line;
+    const auto pos = split(fields[8], ',');
+    ASSERT_EQ(pos.size(), 6U) << line;
+    std::string name;
+    for (size_t i = 0; i < 4; ++i) {
+      if (pos[i] == "*") continue;
+      if (!name.empty()) name += "-";
+      name += pos[i];
+    }
+    by_word[fields[7]].push_back(
+        {fields[0], fields[1], name, pos[4], pos[5], std::stoi(fields[2]), std::stoi(fields[3])});
+  }
+  struct Representative {
+    const char* word;
+    const char* ruby;
+    const char* pos;
+  };
+  const Representative words[] = {
+      {"走る", "はしる", "verb_godan_ra"},  {"笑う", "わらう", "verb_godan_wa"},
+      {"書く", "かく", "verb_godan_ka"},    {"泳ぐ", "およぐ", "verb_godan_ga"},
+      {"話す", "はなす", "verb_godan_sa"},  {"待つ", "まつ", "verb_godan_ta"},
+      {"死ぬ", "しぬ", "verb_godan_na"},    {"遊ぶ", "あそぶ", "verb_godan_ba"},
+      {"読む", "よむ", "verb_godan_ma"},    {"見る", "みる", "verb_ichidan"},
+      {"食べる", "たべる", "verb_ichidan"}, {"察する", "さっする", "verb_sahen"},
+      {"高い", "たかい", "adjective"},      {"行く", "いく", "verb_godan_ka"},
+  };
+  for (const auto& representative : words) {
+    const auto& rows = by_word[representative.word];
+    ASSERT_FALSE(rows.empty()) << representative.word;
+    const auto lattice_pos = learning::UserWordLatticePosOf(
+        representative.word, representative.ruby, representative.pos);
+    ASSERT_TRUE(lattice_pos) << representative.word;
+    using Form = std::tuple<std::string, std::string, std::string>;  // form, reading, surface
+    std::set<Form> sudachi, table;
+    for (const auto& row : rows) {
+      // Sections 2.1 and 4.3 give the word the conjugation type SudachiDict gives it.
+      EXPECT_EQ(row.type, lattice_pos->conjugation_type) << representative.word;
+      // Section 4.5: the table has the row of each form, here under the word's own part of
+      // speech (見る and 行く are 動詞-非自立可能 in SudachiDict).
+      const auto found = dictionary.ResolvePosRow(row.name, row.type, row.form);
+      ASSERT_TRUE(found) << representative.word << " " << row.form;
+      EXPECT_EQ(found->left_id, row.left) << representative.word << " " << row.form;
+      EXPECT_EQ(found->right_id, row.right) << representative.word << " " << row.form;
+      if (row.form == lattice_pos->conjugation_form) {
+        EXPECT_EQ(row.reading, representative.ruby);
+        EXPECT_EQ(row.surface, representative.word);
+        continue;
+      }
+      sudachi.emplace(row.form, row.reading, row.surface);
+    }
+    for (const auto& form :
+         learning::ExpandUserWord(representative.word, representative.ruby, representative.pos))
+      table.emplace(std::string(form.conjugation_form), form.reading, form.surface);
+    EXPECT_EQ(table, sudachi) << representative.word;
+  }
+}
+
+// Sections 4.5, 4.6 and 5.1: the forms of a conjugating word are lattice nodes, so ぐぐった
+// converts to ググった without the model, and no lookup, membership test or reverse lookup
+// sees them.
+TEST(DictionaryStoreLattice, ConjugatedUserWordsBecomeNodesOnlyForTheLattice) {
+  learning::DictionaryStore store;
+  LoadConjugationFixture(store);
+  store.SetUserWords({UserWordWithPos("ググる", "ぐぐる", std::nullopt)});
+  EXPECT_EQ(store.UserWordFormCount(), 0U);
+  EXPECT_EQ(LatticeSurfaces(store, "ぐぐった", 1), std::vector<std::string>{"ぐぐった"});
+  store.SetUserWords({UserWordWithPos("ググる", "ぐぐる", "verb_godan_ra")});
+  EXPECT_EQ(store.UserWordFormCount(), 7U);
+  EXPECT_FALSE(store.UserWordFormsTruncated());
+  EXPECT_EQ(LatticeSurfaces(store, "ぐぐった", 1), std::vector<std::string>{"ググった"});
+  EXPECT_EQ(LatticeSurfaces(store, "ぐぐろう", 1), std::vector<std::string>{"ググろう"});
+
+  for (const auto mode : {learning::LookupMode::Exact, learning::LookupMode::CommonPrefix,
+                          learning::LookupMode::PredictivePrefix}) {
+    learning::LookupContext context;
+    context.mode = mode;
+    for (const auto* reading : {"ぐぐっ", "ぐぐった", "ぐぐろう", "ぐぐ"})
+      for (const auto& entry : store.Lookup(reading, context))
+        EXPECT_EQ(entry.surface, "ググる") << reading << " " << static_cast<int>(mode);
+  }
+  learning::LookupContext predictive;
+  predictive.mode = learning::LookupMode::PredictivePrefix;
+  const auto predicted = store.Lookup("ぐぐ", predictive);
+  ASSERT_EQ(predicted.size(), 1U);
+  EXPECT_EQ(predicted.front().surface, "ググる");
+  EXPECT_TRUE(store.ContainsKnownWord("ぐぐる", "ググる"));
+  EXPECT_FALSE(store.ContainsKnownWord("ぐぐっ", "ググっ"));
+  EXPECT_FALSE(store.ContainsKnownWord("ぐぐろう", "ググろう"));
+  learning::LookupContext exact;
+  EXPECT_FALSE(store.ReverseLookup("ググっ", exact));
+  EXPECT_TRUE(store.ReverseLookup("ググる", exact));
+}
+
+// Section 4.6: the forms are built again whenever the user words or lattice_core load, follow
+// the user dictionary's switch, and section 5.2 matches them from any position of a reading.
+TEST(DictionaryStoreLattice, UserWordFormsFollowTheWordsLatticeCoreAndTheSwitch) {
+  learning::DictionaryStore store;
+  // Words published before lattice_core: built once it loads.
+  store.SetUserWords({UserWordWithPos("ググる", "ぐぐる", "verb_godan_ra")});
+  EXPECT_EQ(store.UserWordFormCount(), 0U);
+  EXPECT_FALSE(store.HasUserWordForms("ぐぐった"));
+  ASSERT_TRUE(store.LoadLatticeCore(Fixture("lattice_user/lattice_core.azdic")));
+  EXPECT_EQ(store.UserWordFormCount(), 7U);
+  EXPECT_TRUE(store.HasUserWordForms("ぐぐった"));
+  EXPECT_TRUE(store.HasUserWordForms("きょうはぐぐったよ"));
+  EXPECT_FALSE(store.HasUserWordForms("ぐぐ"));  // Shorter than every form.
+  EXPECT_FALSE(store.HasUserWordForms("てんき"));
+  EXPECT_FALSE(store.HasUserWordForms(""));
+  // The user layer published by ReplaceMutable carries its part of speech too.
+  learning::DictionaryEntry entry;
+  entry.surface = "バズる";
+  entry.reading = "ばずる";
+  entry.frequency = .4;
+  entry.pos = "verb_godan_ra";
+  store.ReplaceMutable(learning::LayerId::User, {entry});
+  EXPECT_EQ(store.UserWordFormCount(), 7U);
+  EXPECT_TRUE(store.HasUserWordForms("ばずった"));
+  EXPECT_FALSE(store.HasUserWordForms("ぐぐった"));
+  EXPECT_EQ(LatticeSurfaces(store, "ばずった", 1), std::vector<std::string>{"バズった"});
+  // A disabled user dictionary takes its forms out of the lattice and of the check.
+  store.EnableLayer(learning::LayerId::User, false);
+  EXPECT_FALSE(store.HasUserWordForms("ばずった"));
+  EXPECT_EQ(LatticeSurfaces(store, "ばずった", 1), std::vector<std::string>{"ばずった"});
+  store.EnableLayer(learning::LayerId::User, true);
+  EXPECT_TRUE(store.HasUserWordForms("ばずった"));
+  // No usable lattice_core, no forms; loading one again builds them against it.
+  EXPECT_FALSE(store.LoadLatticeCore(Fixture("lattice/core_no_cmat.azdic")));
+  EXPECT_EQ(store.UserWordFormCount(), 0U);
+  EXPECT_FALSE(store.HasUserWordForms("ばずった"));
+  ASSERT_TRUE(store.LoadLatticeCore(Fixture("lattice_user/lattice_core.azdic")));
+  EXPECT_EQ(store.UserWordFormCount(), 7U);
+  // Section 4.5: a lattice_core without the rows of 動詞-一般 makes none of the forms.
+  ASSERT_TRUE(store.LoadLatticeCore(Fixture("lattice/lattice_core.azdic")));
+  EXPECT_EQ(store.UserWordFormCount(), 0U);
+  EXPECT_FALSE(store.HasUserWordForms("ばずった"));
+}
+
+// Section 4.6: the forms are made in the ascending order of the user dictionary's keys, and
+// the ones past the limit are not made.
+TEST(DictionaryStoreLattice, UserWordFormsStopAtTheLimitInKeyOrder) {
+  EXPECT_EQ(learning::kMaxUserWordForms, 100000U);
+  learning::DictionaryStore store;
+  LoadConjugationFixture(store);
+  store.SetUserWords({UserWordWithPos("バズる", "ばずる", "verb_godan_ra"),
+                      UserWordWithPos("ググる", "ぐぐる", "verb_godan_ra")});
+  EXPECT_EQ(store.UserWordFormCount(), 14U);
+  EXPECT_FALSE(store.UserWordFormsTruncated());
+  // Exactly the limit is not over it.
+  store.SetUserWordFormLimitForTests(14);
+  EXPECT_EQ(store.UserWordFormCount(), 14U);
+  EXPECT_FALSE(store.UserWordFormsTruncated());
+  // ぐぐる comes first: all its forms, then the first form of ばずる (its 未然形).
+  store.SetUserWordFormLimitForTests(8);
+  EXPECT_EQ(store.UserWordFormCount(), 8U);
+  EXPECT_TRUE(store.UserWordFormsTruncated());
+  EXPECT_TRUE(store.HasUserWordForms("ぐぐった"));
+  EXPECT_TRUE(store.HasUserWordForms("ばずら"));
+  EXPECT_FALSE(store.HasUserWordForms("ばずった"));
+}
+
+// Section 4.5: a registered form takes the row of its part of speech (the terminal form of a
+// conjugating word), a prefix joins the next word's segment, and a noun keeps the default ids.
+// Section 5.2: the marked search finds the path through a conjugated form with the smallest
+// cost of any path beside it.
+TEST(DictionaryStoreLattice, UserWordsTakeTheRowsOfTheirPartOfSpeech) {
+  learning::DictionaryStore store;
+  LoadConjugationFixture(store);
+  core::LatticeDictionary dictionary;
+  ASSERT_TRUE(dictionary.Load(Fixture("lattice_user/lattice_core.azdic")));
+  store.SetUserWords({UserWordWithPos("ググる", "ぐぐる", "verb_godan_ra"),
+                      UserWordWithPos("超", "ちょう", "prefix"),
+                      UserWordWithPos("ピヨ", "ぴよ", std::nullopt)});
+  core::LatticeQuery query;
+  query.max_paths = 1;
+  const auto verb = store.ConvertLattice("ぐぐる", query);
+  ASSERT_EQ(verb.paths.size(), 1U);
+  ASSERT_EQ(verb.paths[0].words.size(), 1U);
+  const auto terminal = dictionary.ResolvePosRow("動詞-一般", "五段-ラ行", "終止形-一般");
+  ASSERT_TRUE(terminal);
+  // The registered form and its 連体形 have the same surface and cost; the smaller ids, those
+  // of the terminal form, come first (lattice-conversion-spec section 6.3).
+  EXPECT_EQ(verb.paths[0].words[0].left_id, terminal->left_id);
+  EXPECT_EQ(verb.paths[0].words[0].pos, terminal->pos);
+  EXPECT_EQ(dictionary.PosNames()[verb.paths[0].words[0].pos], "動詞-一般");
+  // The fixture has no 接頭辞 row: its name still makes 超 a prefix of 天気's segment.
+  const auto prefixed = store.ConvertLattice("ちょうてんき", query);
+  ASSERT_EQ(prefixed.paths.size(), 1U);
+  EXPECT_EQ(prefixed.paths[0].Surface(), "超天気");
+  EXPECT_EQ(prefixed.paths[0].segments.size(), 1U);
+  EXPECT_EQ(prefixed.paths[0].words[0].word_class, core::LatticeWordClass::Prefix);
+  const auto noun = store.ConvertLattice("ぴよ", query);
+  ASSERT_EQ(noun.paths.size(), 1U);
+  EXPECT_EQ(noun.paths[0].words[0].pos, core::kNoLatticePos);
+  EXPECT_EQ(noun.paths[0].words[0].left_id, dictionary.Parameters().unknown_left_id);
+
+  // にほんご: 日本|語 costs 4000; through にほん of ニホむ and 語, 14000; of ニホぬ, one more
+  // (the fixture's one costly connection).
+  core::LatticeQuery marked;
+  marked.max_paths = 1;
+  marked.marked_only = true;
+  store.SetUserWords({UserWordWithPos("ニホむ", "にほむ", "verb_godan_ma")});
+  const auto through_ma = store.ConvertLattice("にほんご", marked);
+  ASSERT_EQ(through_ma.paths.size(), 1U);
+  EXPECT_EQ(through_ma.paths[0].Surface(), "ニホん語");
+  EXPECT_EQ(through_ma.paths[0].cost, 14000);
+  ASSERT_TRUE(through_ma.best_cost);
+  EXPECT_EQ(*through_ma.best_cost, 4000);
+  EXPECT_EQ(LatticeSurfaces(store, "にほんご", 1), std::vector<std::string>{"日本語"});
+  store.SetUserWords({UserWordWithPos("ニホぬ", "にほぬ", "verb_godan_na")});
+  const auto through_na = store.ConvertLattice("にほんご", marked);
+  ASSERT_EQ(through_na.paths.size(), 1U);
+  EXPECT_EQ(through_na.paths[0].cost, 14001);
+  // A noun is not marked: no marked path.
+  store.SetUserWords({UserWordWithPos("ニホん", "にほん", std::nullopt)});
+  const auto unmarked = store.ConvertLattice("にほんご", marked);
+  EXPECT_TRUE(unmarked.paths.empty());
+  ASSERT_TRUE(unmarked.best_cost);
 }
 }  // namespace

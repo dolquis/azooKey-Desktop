@@ -31,6 +31,7 @@ class LatticeBuilder {
   static LatticeBuildResult Build(std::string_view reading, const LatticeParameters& parameters,
                                   std::span<const ILatticeVocabulary* const> vocabularies,
                                   const LatticeLimits& limits, Lattice& out);
+  static Lattice WithMarkBit(const Lattice& lattice);
 
  private:
   struct Candidate {
@@ -43,7 +44,8 @@ class LatticeBuilder {
 
 // Section 4.2: words of several layers with the same (reading, surface, ids, part of speech,
 // spelling) become the one with the smallest cost after penalties; the earliest on a tie.
-// Survivors keep the vocabulary order.
+// Survivors keep the vocabulary order. The survivor is marked when any word folded into it is
+// (user-dictionary-pos-spec section 5.2): it is that user dictionary word too.
 void LatticeBuilder::Fold(std::vector<Candidate>& candidates, std::vector<LatticeNode>& nodes) {
   std::vector<uint32_t> order(candidates.size());
   std::iota(order.begin(), order.end(), 0U);
@@ -57,8 +59,15 @@ void LatticeBuilder::Fold(std::vector<Candidate>& candidates, std::vector<Lattic
     return candidates[a].node.cost < candidates[b].node.cost;
   });
   std::vector<bool> keep(candidates.size(), false);
-  for (size_t i = 0; i < order.size(); ++i)
-    if (i == 0 || key(order[i - 1]) != key(order[i])) keep[order[i]] = true;
+  uint32_t survivor = 0;
+  for (size_t i = 0; i < order.size(); ++i) {
+    if (i == 0 || key(order[i - 1]) != key(order[i])) {
+      survivor = order[i];
+      keep[survivor] = true;
+    } else if (candidates[order[i]].node.marked) {
+      candidates[survivor].node.marked = true;
+    }
+  }
   for (size_t i = 0; i < candidates.size(); ++i)
     if (keep[i]) nodes.push_back(candidates[i].node);
 }
@@ -168,6 +177,7 @@ LatticeBuildResult LatticeBuilder::Build(std::string_view reading,
                               ? LatticeWordClass::Independent
                               : entry.word_class;
         node.source = source;
+        node.marked = entry.marked;
         candidates.push_back({node, entry.script});
       }
     }
@@ -192,10 +202,36 @@ LatticeBuildResult LatticeBuilder::Build(std::string_view reading,
   return result;
 }
 
+// user-dictionary-pos-spec section 5.2: the state of the forward pass gains one bit, whether the
+// path holds a marked node. Copying each node per bit keeps one forward cost per node. A copy
+// with bit 1 of an unmarked node is made only where a marked node can precede it.
+Lattice LatticeBuilder::WithMarkBit(const Lattice& lattice) {
+  Lattice out;
+  out.reading_ = lattice.reading_;
+  out.matrix_ = lattice.matrix_;
+  out.length_ = lattice.length_;
+  uint32_t first_marked_end = UINT32_MAX;
+  for (const auto& node : lattice.nodes_)
+    if (node.marked) first_marked_end = (std::min)(first_marked_end, node.end);
+  // The nodes are in begin order, and so are their copies (Index relies on it).
+  for (const auto& node : lattice.nodes_) {
+    auto copy = node;
+    copy.bit = node.marked ? 1 : 0;
+    out.nodes_.push_back(copy);
+    if (node.marked || node.begin < first_marked_end) continue;
+    copy.bit = 1;
+    out.nodes_.push_back(copy);
+  }
+  Index(out);
+  return out;
+}
+
 LatticeBuildResult BuildLattice(std::string_view reading, const LatticeParameters& parameters,
                                 std::span<const ILatticeVocabulary* const> vocabularies,
                                 const LatticeLimits& limits, Lattice& out) {
   return LatticeBuilder::Build(reading, parameters, vocabularies, limits, out);
 }
+
+Lattice WithMarkBit(const Lattice& lattice) { return LatticeBuilder::WithMarkBit(lattice); }
 
 }  // namespace azookey::core

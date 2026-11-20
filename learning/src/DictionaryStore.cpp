@@ -6,6 +6,7 @@
 #include <tuple>
 
 #include "azookey/learning/LearningDecay.h"
+#include "azookey/learning/UserDictionaryPos.h"
 
 namespace azookey::learning {
 namespace {
@@ -74,6 +75,8 @@ bool DictionaryStore::LoadLatticeCore(const std::filesystem::path& path, bool ve
   const bool loaded = dictionary->Load(path, verify);
   lattice_ = std::move(dictionary);
   for (size_t i = 0; i < static_.size(); ++i) BuildLatticeLayer(i);
+  // The forms take their ids from the part-of-speech table loaded here (spec 4.6).
+  RebuildUserWordForms();
   return loaded;
 }
 bool DictionaryStore::IsLatticeAvailable() const { return lattice_ && lattice_->IsAvailable(); }
@@ -121,6 +124,7 @@ void DictionaryStore::ReplaceMutable(LayerId layer, std::vector<DictionaryEntry>
   }
   mutable_[i - 5] = std::move(next);
   mutable_available_[i - 5] = true;
+  if (layer == LayerId::User) RebuildUserWordForms();
 }
 void DictionaryStore::SetUserWords(const std::vector<UserWord>& words) {
   std::vector<DictionaryEntry> entries;
@@ -133,6 +137,7 @@ void DictionaryStore::SetUserWords(const std::vector<UserWord>& words) {
     entry.frequency = .4;
     entry.use_user_word_score = true;
     entry.user_word_score = word.value;
+    entry.pos = word.pos.value_or("");
     entries.push_back(std::move(entry));
   }
   ReplaceMutable(LayerId::User, std::move(entries));
@@ -320,6 +325,29 @@ std::optional<DictionaryEntry> DictionaryStore::ReverseLookup(std::string_view s
 }
 
 namespace {
+bool IsContinuationByte(char byte) { return (static_cast<uint8_t>(byte) & 0xc0) == 0x80; }
+
+// user-dictionary-pos-spec section 4.5: a user dictionary word with a part of speech of section
+// 2.1 takes the ids of its row (the terminal form for one that conjugates), or of its name when
+// the table has no such row. A noun keeps the ids of a mutable-layer word (lattice spec 8.3).
+core::LatticeEntry MutableLatticeEntry(const core::LatticeDictionary& dictionary,
+                                       uint32_t key_bytes, const DictionaryEntry& entry) {
+  auto word = dictionary.MutableWord(key_bytes, entry.surface);
+  if (entry.pos.empty()) return word;
+  const auto lattice_pos = UserWordLatticePosOf(entry.surface, entry.reading, entry.pos);
+  if (!lattice_pos) return word;
+  const auto info = dictionary
+                        .ResolvePosRow(lattice_pos->name, lattice_pos->conjugation_type,
+                                       lattice_pos->conjugation_form)
+                        .value_or(dictionary.ResolvePosName(lattice_pos->name));
+  word.left_id = info.left_id;
+  word.right_id = info.right_id;
+  word.pos = info.pos;
+  word.word_class = info.word_class;
+  word.marked = lattice_pos->conjugating;
+  return word;
+}
+
 // The words of one mutable layer for the lattice (lattice-conversion-spec sections 5.3 and 8.3).
 // Alias keys match like exact keys (spec section 4.2).
 class MutableLatticeVocabulary final : public core::ILatticeVocabulary {
@@ -330,11 +358,11 @@ class MutableLatticeVocabulary final : public core::ILatticeVocabulary {
 
   bool CommonPrefix(std::string_view key, std::vector<core::LatticeEntry>& out) const override {
     for (size_t length = 1; length <= key.size(); ++length) {
-      if (length != key.size() && (static_cast<uint8_t>(key[length]) & 0xc0) == 0x80) continue;
+      if (length != key.size() && IsContinuationByte(key[length])) continue;
       const auto it = index_.find(std::string(key.substr(0, length)));
       if (it == index_.end()) continue;
       for (const auto& entry : it->second)
-        out.push_back(dictionary_.MutableWord(static_cast<uint32_t>(length), entry.surface));
+        out.push_back(MutableLatticeEntry(dictionary_, static_cast<uint32_t>(length), entry));
     }
     return true;
   }
@@ -344,6 +372,98 @@ class MutableLatticeVocabulary final : public core::ILatticeVocabulary {
   const std::map<std::string, std::vector<DictionaryEntry>>& index_;
 };
 }  // namespace
+
+// user-dictionary-pos-spec section 4.6: the conjugated forms of the user dictionary's words, which
+// only the lattice sees. Each form is marked like its registered form (section 5.2).
+class DictionaryStore::FormVocabulary final : public core::ILatticeVocabulary {
+ public:
+  explicit FormVocabulary(const DictionaryStore& store) : store_(store) {}
+
+  bool CommonPrefix(std::string_view key, std::vector<core::LatticeEntry>& out) const override {
+    const auto longest = (std::min)(key.size(), store_.user_form_key_bytes_);
+    for (size_t length = 1; length <= longest; ++length) {
+      if (length != key.size() && IsContinuationByte(key[length])) continue;
+      const auto it = store_.user_forms_.find(key.substr(0, length));
+      if (it == store_.user_forms_.end()) continue;
+      for (const auto& form : it->second) {
+        // Section 4.5: the word cost of the mutable layers, as for the registered form.
+        auto entry = store_.lattice_->MutableWord(static_cast<uint32_t>(length), form.surface);
+        entry.left_id = form.left_id;
+        entry.right_id = form.right_id;
+        entry.pos = form.pos;
+        entry.word_class = form.word_class;
+        entry.marked = true;
+        out.push_back(entry);
+      }
+    }
+    return true;
+  }
+
+ private:
+  const DictionaryStore& store_;
+};
+
+void DictionaryStore::RebuildUserWordForms() {
+  user_forms_.clear();
+  user_form_count_ = 0;
+  user_form_key_bytes_ = 0;
+  user_forms_truncated_ = false;
+  if (!IsLatticeAvailable()) return;
+  // Section 4.6: in the ascending order of the user dictionary's keys (reading, word). The
+  // exact entries are the words; the alias entries copy them.
+  std::vector<const DictionaryEntry*> words;
+  for (const auto& [key, entries] : mutable_[IndexOf(LayerId::User) - static_.size()]) {
+    (void)key;
+    for (const auto& entry : entries)
+      if (entry.kind == core::MatchKind::Exact && IsConjugatingUserDictionaryPos(entry.pos))
+        words.push_back(&entry);
+  }
+  std::sort(words.begin(), words.end(), [](const DictionaryEntry* a, const DictionaryEntry* b) {
+    return std::tie(a->reading, a->surface) < std::tie(b->reading, b->surface);
+  });
+  for (const auto* word : words) {
+    const auto lattice_pos = UserWordLatticePosOf(word->surface, word->reading, word->pos);
+    if (!lattice_pos) continue;
+    for (auto& form : ExpandUserWord(word->surface, word->reading, word->pos)) {
+      // Section 4.5: a form lattice_core has no row for is not made.
+      const auto row = lattice_->ResolvePosRow(lattice_pos->name, lattice_pos->conjugation_type,
+                                               form.conjugation_form);
+      if (!row) continue;
+      auto key = core::NormalizeReading(form.reading);
+      if (key.empty() || !core::IsValidUtf8(form.surface)) continue;
+      if (user_form_count_ == user_form_limit_) {
+        user_forms_truncated_ = true;
+        return;
+      }
+      user_form_key_bytes_ = (std::max)(user_form_key_bytes_, key.size());
+      user_forms_[std::move(key)].push_back(
+          {std::move(form.surface), row->left_id, row->right_id, row->pos, row->word_class});
+      ++user_form_count_;
+    }
+  }
+}
+
+void DictionaryStore::SetUserWordFormLimitForTests(size_t limit) {
+  user_form_limit_ = limit;
+  RebuildUserWordForms();
+}
+
+bool DictionaryStore::HasUserWordForms(std::string_view reading) const {
+  if (!enabled_[IndexOf(LayerId::User)] || user_forms_.empty() || !IsLatticeAvailable())
+    return false;
+  const auto normalized = core::NormalizeReading(reading);
+  const std::string_view key = normalized;
+  for (size_t start = 0; start < key.size(); ++start) {
+    if (IsContinuationByte(key[start])) continue;
+    const auto rest = key.substr(start);
+    const auto longest = (std::min)(rest.size(), user_form_key_bytes_);
+    for (size_t length = 1; length <= longest; ++length) {
+      if (length != rest.size() && IsContinuationByte(rest[length])) continue;
+      if (user_forms_.find(rest.substr(0, length)) != user_forms_.end()) return true;
+    }
+  }
+  return false;
+}
 
 core::LatticeResult DictionaryStore::ConvertLattice(std::string_view reading,
                                                     const core::LatticeQuery& query) const {
@@ -361,6 +481,9 @@ core::LatticeResult DictionaryStore::ConvertLattice(std::string_view reading,
     if (enabled_[static_.size() + i] && !mutable_[i].empty())
       mutable_words.emplace_back(*lattice_, mutable_[i]);
   for (const auto& words : mutable_words) vocabularies.push_back(&words);
+  // user-dictionary-pos-spec section 4.6: after the mutable layers, with the user dictionary.
+  const FormVocabulary forms(*this);
+  if (enabled_[IndexOf(LayerId::User)] && !user_forms_.empty()) vocabularies.push_back(&forms);
   return core::ConvertLattice(core::NormalizeReading(reading), *lattice_, vocabularies, query);
 }
 }  // namespace azookey::learning

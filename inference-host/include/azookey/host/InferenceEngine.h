@@ -671,6 +671,16 @@ class InferenceEngine {
   // Logs the static layers whose CONN the lattice does not use (section 3.6): `layer` only,
   // or every layer.
   void LogLatticeConnectionsLocked(std::optional<learning::LayerId> layer = std::nullopt) const;
+  // docs/user-dictionary-pos-spec.md section 5.2: the one candidate of the path through a
+  // conjugating user dictionary word on a request the model answered, whose best Model
+  // candidate scored `model_best`. nullopt without such a path, when the forward pass stopped,
+  // or when the path costs more than T above the best path of any kind.
+  std::optional<core::Candidate> UserWordPathLocked(
+      const std::string& kana, double model_best, const std::atomic<bool>* cancel,
+      std::chrono::steady_clock::time_point deadline) const;
+  // Section 4.6: a warning, without a word or reading, when the last build of the forms left
+  // some out at the limit.
+  void LogUserWordFormsLocked() const;
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide
   // whether a committed (reading, surface) pair is an unknown word worth mining.

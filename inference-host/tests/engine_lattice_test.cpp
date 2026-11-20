@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -368,6 +369,55 @@ TEST(EngineLattice, DegradationsAreLoggedWithoutTheReading) {
   std::filesystem::remove(log_path, ec);
 }
 
+// M71-B (DEV-2137): an in-memory user dictionary of one word (never loaded or saved).
+std::unique_ptr<azookey::learning::UserDictionary> UserDictionaryWith(
+    const std::string& word, const std::string& ruby, std::optional<std::string> pos) {
+  auto dictionary = std::make_unique<azookey::learning::UserDictionary>(
+      UniqueTempPath("azookey_engine_lattice_user", ".json"));
+  azookey::learning::UserWord user_word;
+  user_word.word = word;
+  user_word.ruby = ruby;
+  user_word.pos = std::move(pos);
+  dictionary->Add(user_word);
+  return dictionary;
+}
+
+constexpr std::string_view kUserWordPathDebug = "lattice-user";
+
+std::vector<Candidate> UserWordPaths(const std::vector<Candidate>& candidates) {
+  std::vector<Candidate> paths;
+  for (const auto& candidate : candidates)
+    if (candidate.debug_info == kUserWordPathDebug) paths.push_back(candidate);
+  return paths;
+}
+
+// user-dictionary-pos-spec section 5.1 on the lattice_user fixture: without the model, the forms
+// of a registered verb are lattice nodes like the other words, so ぐぐった converts to ググった,
+// and the user dictionary's list holds the registered form only (section 4.6).
+TEST(EngineLattice, ARegisteredVerbConvertsConjugatedWithoutTheModel) {
+  const auto with_pos = UserDictionaryWith("ググる", "ぐぐる", "verb_godan_ra");
+  const auto without_pos = UserDictionaryWith("ググる", "ぐぐる", std::nullopt);
+  const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice_user"));
+  engine->SetUserDictionary(with_pos.get());
+  const auto candidates = engine->QueryCandidates("ぐぐった", "", kNow);
+  const auto lattice = LatticeCandidates(candidates);
+  ASSERT_FALSE(lattice.empty());
+  EXPECT_EQ(lattice.front().surface, "ググった");
+  EXPECT_EQ(lattice.front().reading, "ぐぐった");
+  EXPECT_EQ(lattice.front().debug_info, std::string(kLatticePrefix) + "1");
+  // Section 5.1: no conjugated-word path of section 5.2 without the model.
+  EXPECT_TRUE(UserWordPaths(candidates).empty());
+  const auto page =
+      engine->ListLearningEntries(azookey::host::LearningDataStore::UserDictionary, "", 0, 100);
+  ASSERT_EQ(page.entries.size(), 1U);
+  EXPECT_EQ(page.entries[0].surface, "ググる");
+  // Without its part of speech, the word has no 連用形.
+  engine->SetUserDictionary(without_pos.get());
+  for (const auto& c : engine->QueryCandidates("ぐぐった", "", kNow))
+    EXPECT_NE(c.surface, "ググった") << c.debug_info;
+  engine->SetUserDictionary(nullptr);
+}
+
 #if !AZOOKEY_WITH_LLAMA_CPP
 // Section 3.2: a request the model converter fell back on gets the lattice; one it answered
 // does not. The minimal GGUF loads only with the mock runtime (no real llama.cpp).
@@ -454,6 +504,117 @@ TEST(EngineLattice, AFirstSegmentFollowsTheModelPathRules) {
   EXPECT_EQ(answered.front().source, CandidateSource::Model);
   EXPECT_TRUE(LatticeCandidates(answered).empty());
   EXPECT_EQ(Describe(answered), Describe(QueryFirstSegment(*engine, "にほんご", "")));
+  std::error_code ec;
+  std::filesystem::remove(model, ec);
+}
+
+// An engine over the lattice_user fixture with the mock model loaded (it answers にほんご and
+// じゅうふく, and falls back on the other readings), and the 15 ms of section 5.2 lifted so a
+// slow build does not cut the path off by time.
+std::unique_ptr<InferenceEngine> MakeModelEngine(const EngineConfig& config,
+                                                 const std::filesystem::path& model,
+                                                 bool expect_lattice = true) {
+  {
+    std::ofstream out(model, std::ios::binary);
+    out.write("GGUF\x03\x00\x00\x00", 8);
+  }
+  auto engine = MakeEngine(config, Fixture("lattice_user"), expect_lattice);
+  azookey::host::ModelLoadOptions options;
+  options.path = model.string();
+  options.mock_zenzai_candidates_for_tests = true;
+  EXPECT_TRUE(engine->LoadModelWithResult(options).ok);
+  engine->SetLatticeFallbackBudgetForTests(std::chrono::hours(1));
+  return engine;
+}
+
+// M71-B (DEV-2137, user-dictionary-pos-spec sections 5.2 and 5.3): a request the model answered
+// gets one path through a conjugated user dictionary word, just below the model's first
+// candidate. On the fixture, にほんご costs 4000 as 日本|語 and 14000 through にほん, the
+// 撥音便 of ニホむ: T (10000) above, so it is added.
+TEST(EngineLattice, AModelAnsweredRequestGetsThePathThroughAConjugatedUserWord) {
+  const auto model = UniqueTempPath("azookey_engine_lattice_user_path", ".gguf");
+  const auto dictionary = UserDictionaryWith("ニホむ", "にほむ", "verb_godan_ma");
+  const auto engine = MakeModelEngine(NoLimitConfig(), model);
+  engine->SetUserDictionary(dictionary.get());
+
+  const auto answered = engine->QueryCandidates("にほんご", "", kNow);
+  ASSERT_FALSE(answered.empty());
+  EXPECT_EQ(answered.front().source, CandidateSource::Model);
+  double model_best = 0;
+  for (const auto& c : answered)
+    if (c.source == CandidateSource::Model) model_best = (std::max)(model_best, c.score);
+  const auto paths = UserWordPaths(answered);
+  ASSERT_EQ(paths.size(), 1U) << ::testing::PrintToString(Describe(answered));
+  EXPECT_EQ(paths[0].surface, "ニホん語");
+  EXPECT_EQ(paths[0].reading, "にほんご");
+  EXPECT_EQ(paths[0].source, CandidateSource::SystemDictionary);
+  EXPECT_DOUBLE_EQ(paths[0].score, (std::max)(0.1, model_best - 0.01));
+  // Stage 2 stays off: no N-best of the lattice beside it.
+  EXPECT_TRUE(LatticeCandidates(answered).empty());
+
+  // Live conversion (and reconversion, sent as live) gets none.
+  EXPECT_TRUE(
+      UserWordPaths(engine->QueryCandidatesEx("にほんご", "", kNow, nullptr, 0, true).candidates)
+          .empty());
+  // A reading no form matches gets none: the model answers じゅうふく too.
+  const auto unrelated = engine->QueryCandidates("じゅうふく", "", kNow);
+  ASSERT_FALSE(unrelated.empty());
+  EXPECT_EQ(unrelated.front().source, CandidateSource::Model);
+  EXPECT_TRUE(UserWordPaths(unrelated).empty());
+  // A first segment's request is searched as its own reading (segment-editing-spec 5.3).
+  const auto first = QueryFirstSegment(*engine, "にほんご", "です");
+  const auto first_paths = UserWordPaths(first);
+  ASSERT_EQ(first_paths.size(), 1U);
+  EXPECT_EQ(first_paths[0].surface, "ニホん語");
+  EXPECT_EQ(first_paths[0].reading, "にほんご");
+  // A request the model fell back on gets the lattice of section 3.2 instead.
+  const auto fallen = engine->QueryCandidates("にほんごです", "", kNow);
+  EXPECT_FALSE(LatticeCandidates(fallen).empty());
+  EXPECT_TRUE(UserWordPaths(fallen).empty());
+  // The user dictionary switched off.
+  engine->EnableDictionaryLayer(azookey::learning::LayerId::User, false);
+  EXPECT_TRUE(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).empty());
+  engine->EnableDictionaryLayer(azookey::learning::LayerId::User, true);
+  EXPECT_EQ(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).size(), 1U);
+  // A spent budget stops the search before its forward pass (section 5.4).
+  engine->SetLatticeFallbackBudgetForTests(std::chrono::nanoseconds(0));
+  EXPECT_TRUE(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).empty());
+  // A canceled request returns nothing at all.
+  engine->SetLatticeFallbackBudgetForTests(std::chrono::hours(1));
+  std::atomic<bool> cancel{true};
+  EXPECT_TRUE(engine->QueryCandidates("にほんご", "", kNow, &cancel).empty());
+  engine->SetUserDictionary(nullptr);
+  std::error_code ec;
+  std::filesystem::remove(model, ec);
+}
+
+// Section 5.2's threshold: through にほん of ニホぬ the path costs one more than through ニホむ
+// (the fixture's one costly connection), 10001 above the best path, so it is not added; and
+// without lattice_core, or with a noun of the same reading, there is no path.
+TEST(EngineLattice, TheConjugatedUserWordPathStaysWithinTOfTheBestPath) {
+  const auto model = UniqueTempPath("azookey_engine_lattice_user_threshold", ".gguf");
+  const auto over = UserDictionaryWith("ニホぬ", "にほぬ", "verb_godan_na");
+  const auto noun = UserDictionaryWith("ニホん", "にほん", std::nullopt);
+  const auto at = UserDictionaryWith("ニホむ", "にほむ", "verb_godan_ma");
+  const auto engine = MakeModelEngine(NoLimitConfig(), model);
+  engine->SetUserDictionary(over.get());
+  const auto above = engine->QueryCandidates("にほんご", "", kNow);
+  ASSERT_FALSE(above.empty());
+  EXPECT_EQ(above.front().source, CandidateSource::Model);
+  EXPECT_TRUE(UserWordPaths(above).empty());
+  engine->SetUserDictionary(noun.get());
+  EXPECT_TRUE(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).empty());
+  engine->SetUserDictionary(at.get());
+  EXPECT_EQ(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).size(), 1U);
+  engine->SetUserDictionary(nullptr);
+
+  // Without lattice_core (the lattice off leaves it unloaded): no path.
+  const auto without_core = MakeModelEngine(NoLimitConfig(false), model);
+  without_core->SetUserDictionary(at.get());
+  const auto plain = without_core->QueryCandidates("にほんご", "", kNow);
+  ASSERT_FALSE(plain.empty());
+  EXPECT_TRUE(UserWordPaths(plain).empty());
+  without_core->SetUserDictionary(nullptr);
   std::error_code ec;
   std::filesystem::remove(model, ec);
 }

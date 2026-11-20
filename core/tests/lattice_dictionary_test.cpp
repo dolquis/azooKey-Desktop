@@ -152,6 +152,34 @@ TEST_F(LatticeDictionaryTest, ReadsMetaLattice) {
   EXPECT_TRUE(older.Load(Fixture("lattice_core.azdic"), true)) << older.Error();
 }
 
+// M71-B (DEV-2137, user-dictionary-pos-spec section 4.5): a row of META.lattice.pos_ids by its
+// name, conjugation type and conjugation form ("*" for a word that does not conjugate).
+TEST_F(LatticeDictionaryTest, ResolvesARowOfThePartOfSpeechTable) {
+  const auto desu = dictionary_.ResolvePosRow("助動詞", "助動詞-デス", "終止形-一般");
+  ASSERT_TRUE(desu);
+  ASSERT_NE(desu->pos, kNoLatticePos);
+  EXPECT_EQ(dictionary_.PosNames()[desu->pos], "助動詞");
+  EXPECT_EQ(desu->left_id, 60);
+  EXPECT_EQ(desu->right_id, 60);
+  EXPECT_EQ(desu->word_class, LatticeWordClass::Function);
+  const auto ii = dictionary_.ResolvePosRow("形容詞-非自立可能", "形容詞", "終止形-一般");
+  ASSERT_TRUE(ii);
+  EXPECT_EQ(ii->left_id, 40);
+  EXPECT_EQ(ii->word_class, LatticeWordClass::Function);
+  const auto today = dictionary_.ResolvePosRow("名詞-普通名詞-副詞可能", "*", "*");
+  ASSERT_TRUE(today);
+  EXPECT_EQ(today->left_id, 10);
+  EXPECT_EQ(today->word_class, LatticeWordClass::Independent);
+  // Another form, type or name has no row.
+  EXPECT_FALSE(dictionary_.ResolvePosRow("助動詞", "助動詞-デス", "連用形-一般"));
+  EXPECT_FALSE(dictionary_.ResolvePosRow("助動詞", "助動詞-タ", "終止形-一般"));
+  EXPECT_FALSE(dictionary_.ResolvePosRow("動詞-一般", "*", "*"));
+  // A dictionary rejected before its META.lattice was read has no rows.
+  LatticeDictionary broken;
+  EXPECT_FALSE(broken.Load(Fixture("lattice/core_no_cmat.azdic")));
+  EXPECT_FALSE(broken.ResolvePosRow("助動詞", "助動詞-デス", "終止形-一般"));
+}
+
 TEST_F(LatticeDictionaryTest, ConvertsASentenceWithParticles) {
   const StaticLatticeVocabulary sudachi(dictionary_, layer_);
   ASSERT_TRUE(sudachi.UsesConnections()) << sudachi.ConnectionError();

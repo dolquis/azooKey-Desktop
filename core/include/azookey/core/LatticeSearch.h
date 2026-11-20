@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -66,6 +67,10 @@ struct LatticeQuery {
   // path then holds the words before p only, and its cost adds the smallest continuation from
   // p to the sentence end.
   bool head_only{};
+  // Only paths through a marked node (LatticeEntry::marked), searched with the bit of
+  // user-dictionary-pos-spec section 5.2 in the state; the result's best_cost holds the
+  // smallest cost of any path. Constraints and head_only reject such a search.
+  bool marked_only{};
 };
 
 struct LatticeResult {
@@ -76,6 +81,8 @@ struct LatticeResult {
   // Paths in cost order, one per surface (spec sections 6.2 and 6.3).
   std::vector<LatticePath> paths;
   uint32_t rejected_entries{};
+  // A marked_only search whose forward pass ended: the smallest cost of any path, marked or not.
+  std::optional<int32_t> best_cost;
 };
 
 // Forward Viterbi and backward A* over a built lattice, with the matrix it was built with

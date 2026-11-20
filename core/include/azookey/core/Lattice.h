@@ -45,6 +45,9 @@ struct LatticeEntry {
   uint16_t pos{kNoLatticePos};
   LatticeWordClass word_class{LatticeWordClass::Independent};
   LatticeScript script{LatticeScript::Other};
+  // A conjugating user dictionary word, registered or conjugated (user-dictionary-pos-spec
+  // section 5.2). Only a marked_only search (LatticeSearch.h) reads it.
+  bool marked{};
 };
 
 // Dictionary words for the lattice (spec section 3.1).
@@ -87,6 +90,10 @@ struct LatticeNode {
   uint16_t pos{kNoLatticePos};
   LatticeWordClass word_class{LatticeWordClass::Independent};
   uint32_t source{};  // Vocabulary index, or kLatticeUnknownSource.
+  bool marked{};      // LatticeEntry::marked.
+  // In a lattice made by WithMarkBit: whether the paths through this copy of the node hold a
+  // marked node up to and including it. 0 in a built lattice.
+  uint8_t bit{};
 };
 
 // Nodes and the per-position indices of spec section 4.5. Searching only reads it.
@@ -149,5 +156,11 @@ struct LatticeBuildResult {
 LatticeBuildResult BuildLattice(std::string_view reading, const LatticeParameters& parameters,
                                 std::span<const ILatticeVocabulary* const> vocabularies,
                                 const LatticeLimits& limits, Lattice& out);
+
+// The lattice a marked_only search walks (user-dictionary-pos-spec section 5.2): a node that is
+// not marked appears with bit 0, and again with bit 1 when a marked node ends at or before its
+// beginning; a marked node appears once, with bit 1. Copies keep the order of `lattice`'s nodes,
+// which must outlive the result along with what they borrow.
+Lattice WithMarkBit(const Lattice& lattice);
 
 }  // namespace azookey::core

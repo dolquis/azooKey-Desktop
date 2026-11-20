@@ -522,7 +522,7 @@ M35 ─→ M55                    （TypoLearningStore v1 を v2 統合エンジ
 M46 ─→ M55                    （secure 中の補正・学習抑止契約）
 M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
 M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
-M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
+M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング。M24 は R2 の EP の経路。CPU EP の計測ゲートに合格すれば M24 を要しない）
 M52 + M53 ─→ M65              （モデル非経由のラティス変換。.azdic 物理層とベンチの上に載る）
 M9 / M30 / M49 ─→ M71-A ─→ M71-B（ユーザー辞書の品詞の保存と他 IME の辞書の取り込み → 活用形の展開。M71-B は M65 にも依存）
 M46 + M48 + M52 + M54 ─→ M74  （個人回帰ベンチ。学習ストアを読み取り専用で読み、端末内だけで測る）
@@ -2666,6 +2666,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **変更対象**: `reranker/`（新規ディレクトリ）、
   `reranker/TinyReranker.h`、`reranker/TinyRerankerOnnx.cpp`、
   `models/tiny_reranker.onnx`（新規アセット）、
+  ONNX Runtime の取り込み（`CMakeLists.txt` の取得と pin、MSI への `onnxruntime.dll` の同梱、
+  `THIRD_PARTY_LICENSES`。方式は `docs/neural-reranker-spec.md` §7.3）、
   `inference-host/src/Dispatcher.cpp`（rerank フェーズに統合）、
   `docs/neural-reranker-spec.md`。
 - **受け入れ条件**:
@@ -2683,23 +2685,26 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 
 - **目的**: 同音異義語など難しい候補のみ ModernBERT-Ja で文脈自然度を
   評価し、品質を底上げする。**生成には使わない**。
-- **前提**: M56（Tiny Reranker）、M24（DirectML / NPU バックエンド）。
+- **前提**: M56（Tiny Reranker と ONNX Runtime の取り込み。`docs/neural-reranker-spec.md` §7.3）、
+  M24（R2 の GPU / NPU の EP）。CPU EP が `docs/modernbert-ja-scoring-spec.md` §6.3 の計測ゲートに
+  合格した場合は、M24 を待たずに CPU EP で成り立つ。根拠は
+  [`docs/decisions/2026-11-20-onnx-runtime-for-reranker.md`](../docs/decisions/2026-11-20-onnx-runtime-for-reranker.md)。
 - **変更対象**: `reranker/ModernBertScorer.h`、
   `reranker/ModernBertScorerOnnx.cpp`、
-  `models/modernbert-ja-70m.onnx`（新規アセット）、
+  `models/modernbert-ja-70m.onnx`（新規アセット。repo と MSI には置かず、既定パスへダウンロードする。spec §6）、
   `inference-host/src/Dispatcher.cpp`（ambiguity 判定で起動制御）、
   `docs/modernbert-ja-scoring-spec.md`。
 - **受け入れ条件**:
   - M52 ベンチで homophone top1 が baseline 比 +5% 以上
   - 通常入力の p95 latency 悪化が +20ms 以内
-  - ModernBERT がロードできない環境（CPU only / モデル未配置）でも fallback で動作する
+  - ModernBERT がロードできない環境（spec §6.3 の許可した実行 EP が無い / モデル未配置）でも fallback で動作する
     （IME が止まらない）
   - M46 secure 中は完全 OFF（cache 読み書きも行わない）
   - `ambiguity_score < threshold` のリクエストでは ModernBERT が呼ばれない
     （`reason=low_ambiguity` がログに残る）
   - RSS 増分が spec §6.1 の許容上限内（200 MB 以下）。上限超過環境では `reason=rss_cap` で
     ロードせず fallback し、IME が継続動作する
-  - `modernbertEnabled=always` でも RSS / backend / secure の安全ゲートを逸脱しない
+  - `modernbertEnabled=always` でも RSS / 実行 EP / secure の安全ゲートを逸脱しない
     （上限超過時はロードしない）
   - timeout 予算切れ時は評価済み候補のみ適用し、未評価候補は ModernBERT 抜きの順位で確定する
     （spec §5.4）

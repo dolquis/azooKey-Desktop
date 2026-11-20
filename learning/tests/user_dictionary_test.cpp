@@ -7,6 +7,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <vector>
 
 #include "TestByteCrypto.h"
 #include "azookey/learning/DpapiCrypto.h"
@@ -652,4 +654,122 @@ TEST(UserDictionaryPosTest, CheckUserWordPosAppliesSection4_4) {
     EXPECT_EQ(al::CheckUserWordPos(c.word, c.ruby, c.pos), c.expected)
         << c.word << " / " << c.ruby << " / " << c.pos;
   }
+}
+
+// M71-B (DEV-2137): what a registered form looks up in lattice_core's part-of-speech table
+// (sections 2.1, 4.3 and 4.5).
+TEST(UserDictionaryPosTest, LatticePosFollowsSections2_1And4_3) {
+  struct Case {
+    const char* word;
+    const char* ruby;
+    const char* pos;
+    std::string_view name;
+    std::string_view type;
+  };
+  const Case cases[] = {
+      {"変換", "へんかん", "noun_sahen", "名詞-普通名詞-サ変可能", "*"},
+      {"静か", "しずか", "noun_adjectival", "形状詞-一般", "*"},
+      {"青空社", "あおぞらしゃ", "organization", "名詞-固有名詞-一般", "*"},
+      {"佐藤", "さとう", "surname", "名詞-固有名詞-人名-姓", "*"},
+      {"超", "ちょう", "prefix", "接頭辞", "*"},
+      {"個", "こ", "counter", "接尾辞-名詞的-助数詞", "*"},
+      {"ググる", "ぐぐる", "verb_godan_ra", "動詞-一般", "五段-ラ行"},
+      {"笑う", "わらう", "verb_godan_wa", "動詞-一般", "五段-ワア行"},
+      {"食べる", "たべる", "verb_ichidan", "動詞-一般", "下一段-バ行"},
+      {"見る", "みる", "verb_ichidan", "動詞-一般", "上一段-マ行"},
+      {"考える", "かんがえる", "verb_ichidan", "動詞-一般", "下一段-ア行"},
+      {"居る", "いる", "verb_ichidan", "動詞-一般", "上一段-ア行"},
+      {"落ちる", "おちる", "verb_ichidan", "動詞-一般", "上一段-タ行"},
+      {"察する", "さっする", "verb_sahen", "動詞-一般", "サ行変格"},
+      {"エモい", "えもい", "adjective", "形容詞-一般", "形容詞"},
+  };
+  for (const auto& c : cases) {
+    const auto lattice_pos = al::UserWordLatticePosOf(c.word, c.ruby, c.pos);
+    ASSERT_TRUE(lattice_pos) << c.word;
+    EXPECT_EQ(lattice_pos->name, c.name) << c.word;
+    EXPECT_EQ(lattice_pos->conjugation_type, c.type) << c.word;
+    const bool conjugating = c.type != "*";
+    EXPECT_EQ(lattice_pos->conjugation_form, conjugating ? "終止形-一般" : "*") << c.word;
+    EXPECT_EQ(lattice_pos->conjugating, conjugating) << c.word;
+  }
+  // Every id of the table has a name; a noun (no id, or one the table does not hold) and a word
+  // that cannot take its conjugating id (section 4.4) have none.
+  for (const auto id : al::UserDictionaryPosIds())
+    if (!al::IsConjugatingUserDictionaryPos(id))
+      EXPECT_FALSE(al::UserWordLatticePosOf("語", "ご", id)->name.empty()) << id;
+  EXPECT_FALSE(al::UserWordLatticePosOf("語", "ご", ""));
+  EXPECT_FALSE(al::UserWordLatticePosOf("語", "ご", "noun"));
+  EXPECT_FALSE(al::UserWordLatticePosOf("Google", "ぐぐる", "verb_godan_ra"));
+}
+
+// M71-B (DEV-2137): the forms of section 4.2, without the registered form.
+TEST(UserDictionaryPosTest, ExpandUserWordFollowsTheEndingTableOfSection4_2) {
+  using Form = std::tuple<std::string, std::string, std::string>;  // 活用形, reading, surface
+  const auto expand = [](std::string_view word, std::string_view ruby, std::string_view pos) {
+    std::vector<Form> forms;
+    for (const auto& form : al::ExpandUserWord(word, ruby, pos))
+      forms.emplace_back(form.conjugation_form, form.reading, form.surface);
+    return forms;
+  };
+  EXPECT_EQ(expand("ググる", "ぐぐる", "verb_godan_ra"),
+            (std::vector<Form>{{"未然形-一般", "ぐぐら", "ググら"},
+                               {"連用形-一般", "ぐぐり", "ググり"},
+                               {"連用形-促音便", "ぐぐっ", "ググっ"},
+                               {"連体形-一般", "ぐぐる", "ググる"},
+                               {"仮定形-一般", "ぐぐれ", "ググれ"},
+                               {"命令形", "ぐぐれ", "ググれ"},
+                               {"意志推量形", "ぐぐろう", "ググろう"}}));
+  // The euphonic 連用形 of each row; サ行 has none, and the 行く type takes the 促音便.
+  const auto euphonic = [&](std::string_view word, std::string_view ruby, std::string_view pos) {
+    const auto forms = expand(word, ruby, pos);
+    return forms.size() == 7 ? forms[2] : Form{};
+  };
+  EXPECT_EQ(euphonic("書く", "かく", "verb_godan_ka"), Form("連用形-イ音便", "かい", "書い"));
+  EXPECT_EQ(euphonic("泳ぐ", "およぐ", "verb_godan_ga"), Form("連用形-イ音便", "およい", "泳い"));
+  EXPECT_EQ(euphonic("待つ", "まつ", "verb_godan_ta"), Form("連用形-促音便", "まっ", "待っ"));
+  EXPECT_EQ(euphonic("死ぬ", "しぬ", "verb_godan_na"), Form("連用形-撥音便", "しん", "死ん"));
+  EXPECT_EQ(euphonic("遊ぶ", "あそぶ", "verb_godan_ba"), Form("連用形-撥音便", "あそん", "遊ん"));
+  EXPECT_EQ(euphonic("読む", "よむ", "verb_godan_ma"), Form("連用形-撥音便", "よん", "読ん"));
+  EXPECT_EQ(euphonic("笑う", "わらう", "verb_godan_wa"), Form("連用形-促音便", "わらっ", "笑っ"));
+  EXPECT_EQ(euphonic("行く", "いく", "verb_godan_ka"), Form("連用形-促音便", "いっ", "行っ"));
+  EXPECT_EQ(euphonic("出て行く", "でてゆく", "verb_godan_ka"),
+            Form("連用形-促音便", "でてゆっ", "出て行っ"));
+  EXPECT_EQ(expand("話す", "はなす", "verb_godan_sa"),
+            (std::vector<Form>{{"未然形-一般", "はなさ", "話さ"},
+                               {"連用形-一般", "はなし", "話し"},
+                               {"連体形-一般", "はなす", "話す"},
+                               {"仮定形-一般", "はなせ", "話せ"},
+                               {"命令形", "はなせ", "話せ"},
+                               {"意志推量形", "はなそう", "話そう"}}));
+  EXPECT_EQ(expand("笑う", "わらう", "verb_godan_wa")[0], Form("未然形-一般", "わらわ", "笑わ"));
+  EXPECT_EQ(expand("食べる", "たべる", "verb_ichidan"),
+            (std::vector<Form>{{"未然形-一般", "たべ", "食べ"},
+                               {"連用形-一般", "たべ", "食べ"},
+                               {"連体形-一般", "たべる", "食べる"},
+                               {"仮定形-一般", "たべれ", "食べれ"},
+                               {"命令形", "たべろ", "食べろ"},
+                               {"意志推量形", "たべよう", "食べよう"}}));
+  EXPECT_EQ(expand("察する", "さっする", "verb_sahen"),
+            (std::vector<Form>{{"未然形-一般", "さっし", "察し"},
+                               {"未然形-セ", "さっせ", "察せ"},
+                               {"連用形-一般", "さっし", "察し"},
+                               {"連体形-一般", "さっする", "察する"},
+                               {"仮定形-一般", "さっすれ", "察すれ"},
+                               {"命令形", "さっしろ", "察しろ"},
+                               {"意志推量形", "さっしよう", "察しよう"}}));
+  EXPECT_EQ(expand("エモい", "えもい", "adjective"),
+            (std::vector<Form>{{"連用形-一般", "えもく", "エモく"},
+                               {"連用形-促音便", "えもかっ", "エモかっ"},
+                               {"連体形-一般", "えもい", "エモい"},
+                               {"仮定形-一般", "えもけれ", "エモけれ"},
+                               {"意志推量形", "えもかろう", "エモかろう"},
+                               {"語幹-一般", "えも", "エモ"}}));
+  // Section 4.1 and 4.4: no forms for an id that does not conjugate, a noun, or a word that
+  // cannot take the id.
+  EXPECT_TRUE(expand("変換", "へんかん", "noun_sahen").empty());
+  EXPECT_TRUE(expand("ググる", "ぐぐる", "").empty());
+  EXPECT_TRUE(expand("Google", "ぐぐる", "verb_godan_ra").empty());
+  EXPECT_TRUE(expand("ググル", "ぐぐる", "verb_godan_ra").empty());
+  EXPECT_TRUE(expand("ぺる", "ぺる", "verb_ichidan").empty());
+  EXPECT_TRUE(expand("する", "する", "verb_sahen").empty());
 }

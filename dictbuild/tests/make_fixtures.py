@@ -7,6 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dictbuild
+import extract_sudachi
 import neologd_pack
 
 
@@ -121,6 +122,7 @@ def generate(directory: Path) -> None:
     write_neologd_pack_fixtures(directory, tsv, metadata, image, directory / "hash.azdic")
     write_connection_fixtures(directory, tsv, metadata)
     write_lattice_fixtures(directory, metadata)
+    write_lattice_user_fixtures(directory, metadata)
     (directory / "ready").write_text("ready", encoding="utf-8")
 
 
@@ -291,6 +293,145 @@ def write_lattice_fixtures(directory: Path, metadata: dict) -> None:
     }
     for name, image in broken.items():
         (out / f"{name}.azdic").write_bytes(image)
+
+
+# The representative words of user-dictionary-pos-spec section 4.2 with the forms SudachiDict
+# 20260723 gives them (grammatical facts, written out here): the dictionary form, the part of
+# speech (品詞 1-4), the conjugation type, and each form as (conjugation form, surface, reading).
+USER_DICTIONARY_FORMS = [
+    ("走る", "動詞,一般,*,*", "五段-ラ行", [
+        ("未然形-一般", "走ら", "ハシラ"), ("連用形-一般", "走り", "ハシリ"), ("連用形-促音便", "走っ", "ハシッ"),
+        ("終止形-一般", "走る", "ハシル"), ("連体形-一般", "走る", "ハシル"), ("仮定形-一般", "走れ", "ハシレ"),
+        ("命令形", "走れ", "ハシレ"), ("意志推量形", "走ろう", "ハシロウ")]),
+    ("笑う", "動詞,一般,*,*", "五段-ワア行", [
+        ("未然形-一般", "笑わ", "ワラワ"), ("連用形-一般", "笑い", "ワライ"), ("連用形-促音便", "笑っ", "ワラッ"),
+        ("終止形-一般", "笑う", "ワラウ"), ("連体形-一般", "笑う", "ワラウ"), ("仮定形-一般", "笑え", "ワラエ"),
+        ("命令形", "笑え", "ワラエ"), ("意志推量形", "笑おう", "ワラオウ")]),
+    ("書く", "動詞,一般,*,*", "五段-カ行", [
+        ("未然形-一般", "書か", "カカ"), ("連用形-一般", "書き", "カキ"), ("連用形-イ音便", "書い", "カイ"),
+        ("終止形-一般", "書く", "カク"), ("連体形-一般", "書く", "カク"), ("仮定形-一般", "書け", "カケ"),
+        ("命令形", "書け", "カケ"), ("意志推量形", "書こう", "カコウ")]),
+    ("泳ぐ", "動詞,一般,*,*", "五段-ガ行", [
+        ("未然形-一般", "泳が", "オヨガ"), ("連用形-一般", "泳ぎ", "オヨギ"), ("連用形-イ音便", "泳い", "オヨイ"),
+        ("終止形-一般", "泳ぐ", "オヨグ"), ("連体形-一般", "泳ぐ", "オヨグ"), ("仮定形-一般", "泳げ", "オヨゲ"),
+        ("命令形", "泳げ", "オヨゲ"), ("意志推量形", "泳ごう", "オヨゴウ")]),
+    ("話す", "動詞,一般,*,*", "五段-サ行", [
+        ("未然形-一般", "話さ", "ハナサ"), ("連用形-一般", "話し", "ハナシ"), ("終止形-一般", "話す", "ハナス"),
+        ("連体形-一般", "話す", "ハナス"), ("仮定形-一般", "話せ", "ハナセ"), ("命令形", "話せ", "ハナセ"),
+        ("意志推量形", "話そう", "ハナソウ")]),
+    ("待つ", "動詞,一般,*,*", "五段-タ行", [
+        ("未然形-一般", "待た", "マタ"), ("連用形-一般", "待ち", "マチ"), ("連用形-促音便", "待っ", "マッ"),
+        ("終止形-一般", "待つ", "マツ"), ("連体形-一般", "待つ", "マツ"), ("仮定形-一般", "待て", "マテ"),
+        ("命令形", "待て", "マテ"), ("意志推量形", "待とう", "マトウ")]),
+    ("死ぬ", "動詞,一般,*,*", "五段-ナ行", [
+        ("未然形-一般", "死な", "シナ"), ("連用形-一般", "死に", "シニ"), ("連用形-撥音便", "死ん", "シン"),
+        ("終止形-一般", "死ぬ", "シヌ"), ("連体形-一般", "死ぬ", "シヌ"), ("仮定形-一般", "死ね", "シネ"),
+        ("命令形", "死ね", "シネ"), ("意志推量形", "死のう", "シノウ")]),
+    ("遊ぶ", "動詞,一般,*,*", "五段-バ行", [
+        ("未然形-一般", "遊ば", "アソバ"), ("連用形-一般", "遊び", "アソビ"), ("連用形-撥音便", "遊ん", "アソン"),
+        ("終止形-一般", "遊ぶ", "アソブ"), ("連体形-一般", "遊ぶ", "アソブ"), ("仮定形-一般", "遊べ", "アソベ"),
+        ("命令形", "遊べ", "アソベ"), ("意志推量形", "遊ぼう", "アソボウ")]),
+    ("読む", "動詞,一般,*,*", "五段-マ行", [
+        ("未然形-一般", "読ま", "ヨマ"), ("連用形-一般", "読み", "ヨミ"), ("連用形-撥音便", "読ん", "ヨン"),
+        ("終止形-一般", "読む", "ヨム"), ("連体形-一般", "読む", "ヨム"), ("仮定形-一般", "読め", "ヨメ"),
+        ("命令形", "読め", "ヨメ"), ("意志推量形", "読もう", "ヨモウ")]),
+    ("見る", "動詞,非自立可能,*,*", "上一段-マ行", [
+        ("未然形-一般", "見", "ミ"), ("連用形-一般", "見", "ミ"), ("終止形-一般", "見る", "ミル"),
+        ("連体形-一般", "見る", "ミル"), ("仮定形-一般", "見れ", "ミレ"), ("命令形", "見ろ", "ミロ"),
+        ("意志推量形", "見よう", "ミヨウ")]),
+    ("食べる", "動詞,一般,*,*", "下一段-バ行", [
+        ("未然形-一般", "食べ", "タベ"), ("連用形-一般", "食べ", "タベ"), ("終止形-一般", "食べる", "タベル"),
+        ("連体形-一般", "食べる", "タベル"), ("仮定形-一般", "食べれ", "タベレ"), ("命令形", "食べろ", "タベロ"),
+        ("意志推量形", "食べよう", "タベヨウ")]),
+    ("察する", "動詞,一般,*,*", "サ行変格", [
+        ("未然形-一般", "察し", "サッシ"), ("未然形-セ", "察せ", "サッセ"), ("連用形-一般", "察し", "サッシ"),
+        ("終止形-一般", "察する", "サッスル"), ("連体形-一般", "察する", "サッスル"),
+        ("仮定形-一般", "察すれ", "サッスレ"), ("命令形", "察しろ", "サッシロ"),
+        ("意志推量形", "察しよう", "サッシヨウ")]),
+    ("高い", "形容詞,一般,*,*", "形容詞", [
+        ("連用形-一般", "高く", "タカク"), ("連用形-促音便", "高かっ", "タカカッ"), ("終止形-一般", "高い", "タカイ"),
+        ("連体形-一般", "高い", "タカイ"), ("仮定形-一般", "高けれ", "タカケレ"),
+        ("意志推量形", "高かろう", "タカカロウ"), ("語幹-一般", "高", "タカ")]),
+    ("行く", "動詞,非自立可能,*,*", "五段-カ行", [
+        ("未然形-一般", "行か", "イカ"), ("連用形-一般", "行き", "イキ"), ("連用形-促音便", "行っ", "イッ"),
+        ("終止形-一般", "行く", "イク"), ("連体形-一般", "行く", "イク"), ("仮定形-一般", "行け", "イケ"),
+        ("命令形", "行け", "イケ"), ("意志推量形", "行こう", "イコウ")]),
+    # 見る and 行く are 動詞-非自立可能 in SudachiDict; a user dictionary verb is 動詞-一般 (section
+    # 2.1). These two words give 動詞-一般 the rows of 上一段-マ行 and of the 行く type's 促音便.
+    ("試みる", "動詞,一般,*,*", "上一段-マ行", [
+        ("未然形-一般", "試み", "ココロミ"), ("連用形-一般", "試み", "ココロミ"),
+        ("終止形-一般", "試みる", "ココロミル"), ("連体形-一般", "試みる", "ココロミル"),
+        ("仮定形-一般", "試みれ", "ココロミレ"), ("命令形", "試みろ", "ココロミロ"),
+        ("意志推量形", "試みよう", "ココロミヨウ")]),
+    ("逝く", "動詞,一般,*,*", "五段-カ行", [
+        ("未然形-一般", "逝か", "イカ"), ("連用形-一般", "逝き", "イキ"), ("連用形-促音便", "逝っ", "イッ"),
+        ("終止形-一般", "逝く", "イク"), ("連体形-一般", "逝く", "イク"), ("仮定形-一般", "逝け", "イケ"),
+        ("命令形", "逝け", "イケ"), ("意志推量形", "逝こう", "イコウ")]),
+]
+
+
+def write_lattice_user_fixtures(directory: Path, metadata: dict) -> None:
+    """lattice_user/: lattice_core and a layer with conjugated verbs and an adjective (DEV-2137).
+
+    The rows have the shape of SudachiDict's raw lexicon and go through extract_sudachi, so the
+    part-of-speech table of META.lattice is made as for the bundle. Ids and costs are synthetic:
+    each part of speech with its conjugation type and form has an id of its own, so a word's ids
+    name its row of the table. Besides USER_DICTIONARY_FORMS: た after a conjugated form
+    (ぐぐった), and 日本・語 for the threshold T of user-dictionary-pos-spec section 5.2 on
+    にほんご. Every connection costs 0 but one: from 死ん (the 撥音便 of 五段-ナ行) to 語, 1.
+    """
+    out = directory / "lattice_user"
+    out.mkdir(exist_ok=True)
+    header = "# SPDX-License-Identifier: MIT; THIRD_PARTY_LICENSES; synthetic fixture\n"
+    lexicon_columns = "surface\treading\tpos\tcost\tfrequency\tcategory\tsource_id\n"
+    ids: dict[str, int] = {}
+
+    def row(surface: str, reading: str, pos: str, normalized: str, cost: int) -> list[str]:
+        """A raw lexicon row (extract_sudachi.COLUMNS columns) with the id of its part of speech."""
+        fields = pos.split(",")
+        connection = str(ids.setdefault(pos, 100 + len(ids)))
+        return [surface, connection, connection, str(cost), surface, *fields, reading, normalized,
+                "*", "A", "*", "*", "*", "*"]
+
+    rows = [row(surface, reading, f"{pos},{conjugation},{form}", word, 5000)
+            for word, pos, conjugation, forms in USER_DICTIONARY_FORMS
+            for form, surface, reading in forms]
+    rows += [
+        # The default word cost is the median of the 名詞,普通名詞,一般 rows: 4000.
+        row("語", "ゴ", "名詞,普通名詞,一般,*,*,*", "語", 4000),
+        row("天気", "テンキ", "名詞,普通名詞,一般,*,*,*", "天気", 4000),
+        # 日本|語 costs 4000 with P_node, 10000 below a user word's form にほん followed by 語.
+        row("日本", "ニホン", "名詞,固有名詞,地名,一般,*,*", "日本", -6000),
+        # Spelled in the hiragana of the reading: lattice_core only.
+        row("た", "タ", "助動詞,*,*,*,助動詞-タ,終止形-一般", "た", 1000),
+    ]
+    assert all(len(r) == extract_sudachi.COLUMNS for r in rows)
+    connections = out / "conjugation.conn.tsv"
+    connections.write_text(header + "\t".join(dictbuild.CONNECTION_COLUMNS) + "\n" + "".join(
+        "\t".join(fields) + "\n" for fields in extract_sudachi.convert_connections(rows)),
+        encoding="utf-8", newline="\n")
+
+    def lexicon(path: Path, kana_only: bool) -> None:
+        path.write_text(header + lexicon_columns + "".join(
+            f"{surface}\t{reading}\t{pos}\t{cost}\t\t{category}\tfixture\n"
+            for surface, reading, pos, cost, category in extract_sudachi.convert(rows, kana_only=kana_only)),
+            encoding="utf-8", newline="\n")
+
+    words = out / "conjugation.lex.tsv"
+    kana = out / "lattice_core.lex.tsv"
+    lexicon(words, False)
+    lexicon(kana, True)
+    matrix_ids = [0, *sorted(ids.values())]
+    penalized = (ids["動詞,一般,*,*,五段-ナ行,連用形-撥音便"], ids["名詞,普通名詞,一般,*,*,*"])
+    matrix = out / "conjugation_matrix.def"
+    matrix.write_text(f"{matrix_ids[-1] + 1} {matrix_ids[-1] + 1}\n" + "".join(
+        f"{r} {l} {1 if (r, l) == penalized else 0}\n" for r in matrix_ids for l in matrix_ids),
+        encoding="utf-8", newline="\n")
+    space = dictbuild.connection_space(matrix)
+    layer, _ = dictbuild.build([words], metadata, 1, directory, connections, space)
+    core, _ = dictbuild.build_lattice_core([kana], connections, matrix, metadata, 1, directory)
+    (out / "sudachi_lexicon.azdic").write_bytes(layer)
+    (out / "lattice_core.azdic").write_bytes(core)
 
 
 def write_neologd_pack_fixtures(directory: Path, tsv: Path, metadata: dict, other_layer: bytes,

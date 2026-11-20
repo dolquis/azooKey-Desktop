@@ -71,6 +71,11 @@ constexpr size_t kPredictionDisplayLimit = 5;
 constexpr auto kLatticeFallbackBudget = std::chrono::milliseconds(15);
 constexpr size_t kLatticeMaxPaths = 8;
 constexpr std::string_view kLatticeDebugPrefix = "lattice;rank=";
+// docs/user-dictionary-pos-spec.md section 5.2: T, how far above the best path of any kind the
+// best path through a conjugating user dictionary word may cost (half of P_unk's initial value;
+// the Human Gate DEV-2139 revisits it), and the debug_info of its candidate (section 5.3).
+constexpr int32_t kUserWordPathThreshold = 10000;
+constexpr std::string_view kUserWordPathDebug = "lattice-user";
 
 // The request's candidate limit under EngineConfig::max_candidates; 0 is no limit.
 uint32_t EffectiveMaxCandidates(uint32_t configured, uint32_t requested) {
@@ -909,6 +914,7 @@ void InferenceEngine::RefreshDictionaryLocked() {
       (!user_dict_ || indexed_user_revision_ == user_dict_->revision()))
     return;
   dictionaries_.SetUserWords(user_dict_ ? user_dict_->All() : std::vector<learning::UserWord>{});
+  LogUserWordFormsLocked();
   indexed_user_dict_ = user_dict_;
   indexed_user_revision_ = user_dict_ ? user_dict_->revision() : 0;
 }
@@ -938,6 +944,8 @@ std::vector<InferenceEngine::DictionaryLoadResult> InferenceEngine::LoadBundledD
     const bool loaded = dictionaries_.LoadLatticeCore(directory / "lattice_core.azdic");
     results.push_back({"lattice_core.azdic", loaded, dictionaries_.LatticeError()});
     LogLatticeConnectionsLocked();
+    // The user dictionary's forms were built again against it (user-dictionary-pos-spec 4.6).
+    LogUserWordFormsLocked();
   }
   return results;
 }
@@ -1000,6 +1008,37 @@ std::vector<core::Candidate> InferenceEngine::LatticeCandidatesLocked(
     candidates.push_back(std::move(candidate));
   }
   return candidates;
+}
+
+std::optional<core::Candidate> InferenceEngine::UserWordPathLocked(
+    const std::string& kana, double model_best, const std::atomic<bool>* cancel,
+    std::chrono::steady_clock::time_point deadline) const {
+  core::LatticeQuery query;
+  query.max_paths = 1;
+  query.marked_only = true;
+  query.limits.cancel = cancel;
+  query.limits.deadline = deadline;
+  const auto result = dictionaries_.ConvertLattice(kana, query);
+  // Section 5.4: nothing without a marked path or before the forward pass ended (best_cost is
+  // set once it has), nor when the path costs more than T above the best path of any kind.
+  if (result.paths.empty() || !result.best_cost ||
+      int64_t{result.paths.front().cost} - *result.best_cost > kUserWordPathThreshold)
+    return std::nullopt;
+  // Section 5.3: just below the model's first candidate, as a system dictionary candidate so
+  // DedupMergedCandidates keeps the higher score of a duplicate surface.
+  core::Candidate candidate;
+  candidate.surface = result.paths.front().Surface();
+  candidate.reading = kana;
+  candidate.score = (std::max)(0.1, model_best - 0.01);
+  candidate.source = core::CandidateSource::SystemDictionary;
+  candidate.debug_info = std::string(kUserWordPathDebug);
+  return candidate;
+}
+
+void InferenceEngine::LogUserWordFormsLocked() const {
+  if (runtime_logger_ && dictionaries_.UserWordFormsTruncated())
+    runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "user_dictionary_forms",
+                         {{"result", logging::RuntimeLogSafeText("truncated")}});
 }
 
 void InferenceEngine::EnableDictionaryLayer(learning::LayerId layer, bool enabled) {
@@ -2040,6 +2079,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   // lattice-conversion-spec section 3.2; appended after the converter's candidates.
   std::vector<core::Candidate> lattice;
   std::optional<core::LatticeStatus> lattice_status;
+  // user-dictionary-pos-spec section 5.2: the reading meets a conjugated user dictionary form,
+  // so a request the model answers may get the path through it.
+  bool user_forms_hit = false;
+  std::optional<core::Candidate> user_word_path;
   // The request's own deadline (section 3.2): a lattice never runs past it.
   const std::optional<std::chrono::steady_clock::time_point> request_deadline =
       mixed ? mixed->deadline : std::nullopt;
@@ -2083,6 +2126,15 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
           kana, remaining_reading,
           LatticePathCount(EffectiveMaxCandidates(config.max_candidates, max_candidates), live),
           cancel, request_deadline, lattice_status.emplace());
+    }
+    // Not for live conversion (and so not for reconversion) or another reading (DEV-2101), not
+    // with the lattice switched off (lattice_core then counts as unusable), and only up to 64
+    // code points. A first segment's request is searched as its own reading
+    // (segment-editing-spec section 5.3: only stage 1 reads the remaining reading).
+    if (lattice_allowed && config.lattice.enabled && using_model_converter && !live) {
+      const auto length = CountCodepoints(kana);
+      user_forms_hit =
+          length && *length <= core::kMaxLatticeReading && dictionaries_.HasUserWordForms(kana);
     }
   }
   if (auto_word_store && config.dictionary.auto_words_enabled) {
@@ -2235,6 +2287,25 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                                       LatticePathCount(effective_max_candidates, live), cancel,
                                       deadline, lattice_status.emplace());
   }
+  // user-dictionary-pos-spec section 5.2: the model answered (it neither fell back nor threw),
+  // so the path through a conjugating user dictionary word is added under the same timing as a
+  // fallen-back lattice (15 ms from here, within the request's deadline and under its cancel),
+  // below the model's best candidate (section 5.3). Without a Model candidate there is none.
+  if (user_forms_hit && !model_fell_back && request_time_left()) {
+    std::optional<double> model_best;
+    for (const auto& candidate : converted)
+      if (candidate.source == core::CandidateSource::Model)
+        model_best = model_best ? (std::max)(*model_best, candidate.score) : candidate.score;
+    if (model_best) {
+      auto deadline =
+          std::chrono::steady_clock::now() +
+          std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(
+              lattice_fallback_budget_ns_.load(std::memory_order_relaxed)));
+      if (request_deadline) deadline = (std::min)(deadline, *request_deadline);
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      user_word_path = UserWordPathLocked(kana, *model_best, cancel, deadline);
+    }
+  }
   // Section 3.6: each degradation of the request, by its result only (never the reading or a
   // surface). A canceled request returns nothing, so its cut-off is not one.
   const char* lattice_result = nullptr;
@@ -2268,6 +2339,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   // zenzai-inference-spec section 7.1 step 5: the lattice's N-best follows the converter's.
   merged.insert(merged.end(), std::make_move_iterator(lattice.begin()),
                 std::make_move_iterator(lattice.end()));
+  // user-dictionary-pos-spec section 5.3: before DedupMergedCandidates, like the lattice's.
+  if (user_word_path) merged.push_back(std::move(*user_word_path));
   DedupMergedCandidates(merged);
 
   if (canceled()) return {};

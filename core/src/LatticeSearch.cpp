@@ -24,6 +24,11 @@ constexpr uint64_t kTakesPerPath = 64;
 
 // What the previous word contributes to a segment boundary (spec sections 6.1 and 7.3).
 enum class Previous : uint8_t { Other, Prefix, Unknown };
+// The state a group of nodes leaves behind: its Previous (under constraints) in the low bits,
+// and for a marked_only search whether its paths hold a marked node (user-dictionary-pos-spec
+// section 5.2). A search without either keeps 0.
+constexpr uint8_t kPreviousMask = 3;
+constexpr uint8_t kMarkBit = 4;
 
 Previous PreviousOf(LatticeWordClass word_class) {
   if (word_class == LatticeWordClass::Prefix) return Previous::Prefix;
@@ -52,10 +57,11 @@ class Searcher {
 
  private:
   // Nodes that end at one position with one right id (and, under constraints, one previous
-  // kind), ordered by forward cost. They share every continuation.
+  // kind; in a marked_only search, one bit), ordered by forward cost. They share every
+  // continuation.
   struct Group {
     uint16_t right_index{};
-    Previous kind{};
+    uint8_t kind{};    // Previous and kMarkBit.
     uint32_t first{};  // Into group_nodes_.
     uint32_t count{};
   };
@@ -81,13 +87,16 @@ class Searcher {
     int32_t cost{};
   };
 
-  bool Allowed(Previous previous, LatticeWordClass next, uint32_t position) const;
-  uint32_t ClassKey(LatticeWordClass word_class) const;
+  bool Allowed(uint8_t kind, const LatticeNode& next, uint32_t position) const;
+  // What decides which groups may precede `node`: its left id, its class under constraints, and
+  // its bit and mark in a marked_only search.
+  uint32_t ListKey(const LatticeNode& node) const;
   int32_t EndCost(uint16_t right_index) const;
   bool Continuations(LatticeResult& result);
   void BuildGroups(uint32_t position);
   bool Forward(LatticeResult& result);
-  uint32_t ListFor(uint32_t position, uint16_t left_index, LatticeWordClass word_class, bool end);
+  // The predecessors of `next` at `position`, or of the sentence end when `next` is null.
+  uint32_t ListFor(uint32_t position, const LatticeNode* next);
   void Push(uint32_t parent, uint32_t list, uint32_t row, uint32_t column, int32_t carried);
   Chain ChainOf(uint32_t item) const;
   Chain ViterbiChain() const;
@@ -107,6 +116,10 @@ class Searcher {
   uint16_t start_right_{};
   uint16_t end_left_{};
   bool constrained_{};
+  // A marked_only search over a WithMarkBit lattice (user-dictionary-pos-spec section 5.2).
+  bool marked_{};
+  // marked_only: the smallest cost of any path, whatever its bit.
+  int32_t unconstrained_cost_{kUnreachable};
   std::vector<Rule> rules_;
   std::vector<int32_t> forward_;
   std::vector<uint32_t> back_;
@@ -126,15 +139,21 @@ class Searcher {
   bool failed_{};
 };
 
-bool Searcher::Allowed(Previous previous, LatticeWordClass next, uint32_t position) const {
+bool Searcher::Allowed(uint8_t kind, const LatticeNode& next, uint32_t position) const {
+  // A copy with bit 1 follows a marked path or is marked itself; one with bit 0 neither.
+  if (marked_ && next.bit != (((kind & kMarkBit) != 0 || next.marked) ? 1 : 0)) return false;
   if (!constrained_ || rules_[position] == Rule::None) return true;
   if (rules_[position] == Rule::Conflict) return false;
-  const bool boundary = IsSegmentBoundary(previous, next);
+  const bool boundary =
+      IsSegmentBoundary(static_cast<Previous>(kind & kPreviousMask), next.word_class);
   return rules_[position] == Rule::Break ? boundary : !boundary;
 }
 
-uint32_t Searcher::ClassKey(LatticeWordClass word_class) const {
-  return constrained_ ? static_cast<uint32_t>(word_class) : 0;
+uint32_t Searcher::ListKey(const LatticeNode& node) const {
+  uint32_t key = uint32_t{node.left_index} << 4;
+  if (constrained_) key |= static_cast<uint32_t>(node.word_class);
+  if (marked_) key |= (node.marked ? 4U : 0U) | (node.bit ? 8U : 0U);
+  return key;
 }
 
 // What follows the last word of a path that ends where the search ends: the sentence end, or
@@ -189,7 +208,10 @@ void Searcher::BuildGroups(uint32_t position) {
   for (const auto index : lattice_.EndingAt(position))
     if (forward_[index] != kUnreachable) ending.push_back(index);
   const auto kind = [&](uint32_t index) {
-    return constrained_ ? PreviousOf(nodes_[index].word_class) : Previous::Other;
+    const auto& node = nodes_[index];
+    return static_cast<uint8_t>(
+        (constrained_ ? static_cast<uint8_t>(PreviousOf(node.word_class)) : 0) |
+        (node.bit ? kMarkBit : 0));
   };
   std::sort(ending.begin(), ending.end(), [&](uint32_t a, uint32_t b) {
     return std::tuple(nodes_[a].right_index, kind(a), forward_[a], a) <
@@ -235,15 +257,17 @@ bool Searcher::Forward(LatticeResult& result) {
       int32_t best = kUnreachable;
       uint32_t from = UINT32_MAX;
       if (position == 0) {
+        // The sentence start holds no marked node: a first word's copy has its own mark as bit.
+        if (marked_ && node.bit != (node.marked ? 1 : 0)) continue;
         best = matrix_.Cost(start_right_, node.left_index);
       } else {
-        const auto key = (uint32_t{node.left_index} << 2) | ClassKey(node.word_class);
+        const auto key = ListKey(node);
         auto found = incoming.find(key);
         if (found == incoming.end()) {
           std::pair<int32_t, uint32_t> value{kUnreachable, UINT32_MAX};
           for (auto g = group_begin_[position]; g < group_end_[position]; ++g) {
             const auto& group = groups_[g];
-            if (!Allowed(group.kind, node.word_class, position)) continue;
+            if (!Allowed(group.kind, node, position)) continue;
             const auto first = group_nodes_[group.first];
             const auto cost = forward_[first] + matrix_.Cost(group.right_index, node.left_index);
             if (cost < value.first) value = {cost, first};
@@ -263,6 +287,9 @@ bool Searcher::Forward(LatticeResult& result) {
     const auto end = EndCost(groups_[g].right_index);
     if (end == kUnreachable) continue;
     const auto cost = forward_[first] + end;
+    unconstrained_cost_ = (std::min)(unconstrained_cost_, cost);
+    // user-dictionary-pos-spec section 5.2: a marked_only search ends only with bit 1.
+    if (marked_ && (groups_[g].kind & kMarkBit) == 0) continue;
     if (cost < best_cost_) {
       best_cost_ = cost;
       best_end_ = first;
@@ -271,19 +298,18 @@ bool Searcher::Forward(LatticeResult& result) {
   return true;
 }
 
-uint32_t Searcher::ListFor(uint32_t position, uint16_t left_index, LatticeWordClass word_class,
-                           bool end) {
-  const uint64_t key =
-      end ? UINT64_MAX
-          : (uint64_t{position} << 32) | (uint64_t{left_index} << 2) | ClassKey(word_class);
+uint32_t Searcher::ListFor(uint32_t position, const LatticeNode* next) {
+  const uint64_t key = next ? (uint64_t{position} << 32) | ListKey(*next) : UINT64_MAX;
   const auto found = list_index_.find(key);
   if (found != list_index_.end()) return found->second;
   std::vector<Row> rows;
   for (auto g = group_begin_[position]; g < group_end_[position]; ++g) {
     const auto& group = groups_[g];
-    if (!end && !Allowed(group.kind, word_class, position)) continue;
-    const auto connect =
-        end ? EndCost(group.right_index) : int32_t{matrix_.Cost(group.right_index, left_index)};
+    if (next ? !Allowed(group.kind, *next, position)
+             : marked_ && (group.kind & kMarkBit) == 0)  // Section 5.2: the end takes bit 1.
+      continue;
+    const auto connect = next ? int32_t{matrix_.Cost(group.right_index, next->left_index)}
+                              : EndCost(group.right_index);
     if (connect == kUnreachable) continue;
     rows.push_back({forward_[group_nodes_[group.first]] + connect, connect, g});
   }
@@ -395,7 +421,7 @@ void Searcher::Backward(LatticeResult& result) {
   const uint64_t paths = std::min<uint64_t>(query_.max_paths, uint64_t{1} << 20);
   const uint64_t take_limit = kTakesPerPath * paths;
   const uint64_t expansion_limit = take_limit * (uint64_t{length_} + 1);
-  const auto end_list = ListFor(length_, end_left_, LatticeWordClass::Independent, true);
+  const auto end_list = ListFor(length_, nullptr);
   if (!lists_[end_list].empty()) Push(kNoItem, end_list, 0, 0, 0);
   std::vector<Completed> group;
   uint64_t takes = 0, expansions = 0;
@@ -441,7 +467,7 @@ void Searcher::Backward(LatticeResult& result) {
       group.push_back({index, item.priority});
       continue;
     }
-    const auto list = ListFor(node.begin, node.left_index, node.word_class, false);
+    const auto list = ListFor(node.begin, &node);
     if (!lists_[list].empty()) Push(index, list, 0, 0, node.cost + item.tail);
   }
 }
@@ -475,14 +501,17 @@ LatticeResult Searcher::Run() {
   // Section 7.3: the head of the reading is searched with one word boundary and nothing else.
   const bool head_shape = constraints.word_boundaries.size() == 1 &&
                           constraints.segment_breaks.empty() && constraints.segment_joins.empty();
+  // user-dictionary-pos-spec section 5.2 searches the reading as typed, without constraints.
+  const bool marked_shape = !query_.marked_only || (constraints.Empty() && !query_.head_only);
   if (!mark(constraints.segment_joins, Rule::Join) ||
       !mark(constraints.segment_breaks, Rule::Break) || !boundaries_inside ||
-      (query_.head_only && !head_shape)) {
+      (query_.head_only && !head_shape) || !marked_shape) {
     result.status = LatticeStatus::Rejected;
     return result;
   }
   // Word boundaries rule no transition out, so they add no word class to the state (7.3).
   constrained_ = !constraints.segment_breaks.empty() || !constraints.segment_joins.empty();
+  marked_ = query_.marked_only;
   if (query_.max_paths == 0) return result;
   full_length_ = length_;
   if (query_.head_only) {
@@ -490,6 +519,7 @@ LatticeResult Searcher::Run() {
     if (!Continuations(result)) return result;
   }
   if (!Forward(result)) return result;
+  if (marked_ && unconstrained_cost_ != kUnreachable) result.best_cost = unconstrained_cost_;
   if (query_.limits.on_stage) query_.limits.on_stage(LatticeStage::Forward);
   if (best_end_ == UINT32_MAX) return result;
   Backward(result);
@@ -513,6 +543,11 @@ LatticeResult SearchLattice(const Lattice& lattice, const LatticeQuery& query) {
     LatticeResult result;
     result.status = lattice.Matrix() ? LatticeStatus::Unavailable : LatticeStatus::Rejected;
     return result;
+  }
+  if (query.marked_only) {
+    // The copies borrow what `lattice` borrows, which outlives the search.
+    const auto marked = WithMarkBit(lattice);
+    return Searcher(marked, *marked.Matrix(), query).Run();
   }
   return Searcher(lattice, *lattice.Matrix(), query).Run();
 }

@@ -58,6 +58,16 @@ bool Integer(const json::Value& value, int64_t low, int64_t high, int64_t& out) 
   return true;
 }
 
+std::string PosRowKey(std::string_view name, std::string_view conjugation_type,
+                      std::string_view conjugation_form) {
+  std::string key(name);
+  key.push_back(',');
+  key.append(conjugation_type);
+  key.push_back(',');
+  key.append(conjugation_form);
+  return key;
+}
+
 bool Int16Value(const json::Value* value, int32_t& out) {
   int64_t number = 0;
   if (!value || !Integer(*value, INT16_MIN, INT16_MAX, number)) return false;
@@ -97,6 +107,7 @@ bool LatticeDictionary::Load(const std::filesystem::path& path, bool verify) noe
     pos_names_.clear();
     pos_index_.clear();
     pos_name_ids_.clear();
+    pos_rows_.clear();
     connection_space_.clear();
     tables_ready_ = false;
     available_ = false;
@@ -163,6 +174,9 @@ bool LatticeDictionary::ParseLattice(std::string_view metadata) {
         !Integer(row.AsArray()[3], 0, UINT16_MAX, left) ||
         !Integer(row.AsArray()[4], 0, UINT16_MAX, right) || !has_ids(left, right))
       return Fail("lattice_core META.lattice.pos_ids is invalid");
+    pos_rows_.emplace(PosRowKey(pos_names_[static_cast<size_t>(name)], row.AsArray()[1].AsString(),
+                                row.AsArray()[2].AsString()),
+                      std::pair{static_cast<uint16_t>(left), static_cast<uint16_t>(right)});
   }
 
   const auto* name_ids = member("pos_name_ids");
@@ -238,6 +252,18 @@ LatticePosInfo LatticeDictionary::ResolvePosName(std::string_view name) const {
     info.left_id = ids->first;
     info.right_id = ids->second;
   }
+  return info;
+}
+
+std::optional<LatticePosInfo> LatticeDictionary::ResolvePosRow(
+    std::string_view name, std::string_view conjugation_type,
+    std::string_view conjugation_form) const {
+  const auto row = pos_rows_.find(PosRowKey(name, conjugation_type, conjugation_form));
+  if (row == pos_rows_.end()) return std::nullopt;
+  // A row's name is in pos_names, so the index and the class come from it.
+  auto info = ResolvePosName(name);
+  info.left_id = row->second.first;
+  info.right_id = row->second.second;
   return info;
 }
 

@@ -61,6 +61,12 @@ class LatticeDictionary {
   // "名詞-普通名詞-一般" (spec section 8.3). Names without representative ids get those of
   // 名詞-普通名詞-一般; names outside pos_names have no index.
   LatticePosInfo ResolvePosName(std::string_view name) const;
+  // The row of META.lattice.pos_ids for a part-of-speech name, 活用型 and 活用形 ("*" and "*"
+  // for a word that does not conjugate): the name's index and class with the row's ids
+  // (user-dictionary-pos-spec section 4.5). nullopt when the table has no such row.
+  std::optional<LatticePosInfo> ResolvePosRow(std::string_view name,
+                                              std::string_view conjugation_type,
+                                              std::string_view conjugation_form) const;
   // A mutable-layer word (spec sections 5.3 and 8.3): no part of speech, the ids of
   // 名詞-普通名詞-一般, the default word cost, and the katakana spelling taken from the surface.
   LatticeEntry MutableWord(uint32_t key_bytes, std::string_view surface) const;
@@ -76,6 +82,8 @@ class LatticeDictionary {
   std::vector<std::string> pos_names_;
   std::map<std::string, uint16_t, std::less<>> pos_index_;
   std::vector<std::optional<std::pair<uint16_t, uint16_t>>> pos_name_ids_;
+  // META.lattice.pos_ids by "name,活用型,活用形" (none of the three holds a comma).
+  std::map<std::string, std::pair<uint16_t, uint16_t>, std::less<>> pos_rows_;
   std::pair<uint16_t, uint16_t> noun_ids_{};
   int32_t score_scale_{};
   int16_t default_word_cost_{};

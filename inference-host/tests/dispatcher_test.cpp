@@ -1936,6 +1936,25 @@ TEST_F(MixedInlineDispatchTest, TypoCorrectionStaysOffForAMixedComposition) {
   std::remove(typo_path.c_str());
 }
 
+// M66 (segment-editing-spec section 5.3): the TIP sends no raw_romaji with a
+// first segment's request (section 5.1), but the Host accepts one that is also
+// an M63 split. It is converted as typed, as the split alone is; the remaining
+// reading reaches only the lattice, which this engine (no lattice_core) lacks.
+TEST_F(MixedInlineDispatchTest, AFirstSegmentThatIsAlsoASplitConvertsAsTheSplit) {
+  const auto describe = [](const std::vector<ipc::CandidateField>& candidates) {
+    std::vector<std::string> described;
+    for (const auto& c : candidates)
+      described.push_back(c.surface + "|" + c.reading + "|" + std::to_string(c.segments.size()));
+    return described;
+  };
+  const auto split = Query(1451, Request(kSentenceKana, kSentenceRaw, true));
+  ASSERT_FALSE(split.empty());
+  EXPECT_EQ(split[0].surface, "今日はGitHubにpushした");
+  auto first_segment = Request(kSentenceKana, kSentenceRaw, true);
+  first_segment.remaining_reading = "です";
+  EXPECT_EQ(describe(Query(1452, first_segment)), describe(split));
+}
+
 // Section 8.3 item 3 for a split of one J segment (DEV-1820): the list of M63
 // off with the readable word turned English right after its first candidate.
 // (No fixture: the mock falls back to the kana as is.)
@@ -5069,7 +5088,8 @@ TEST_F(DispatcherTest, FirstSegmentRequestIsNeverCorrected) {
 }
 
 // Without a typo store there is nothing to correct, and the field leaves the
-// candidates as they are.
+// candidates as they are: this engine loads no lattice_core, the only reader of
+// the remaining reading (TheRemainingReadingReachesTheEngine below has one).
 TEST_F(DispatcherTest, FirstSegmentRequestWithoutATypoStoreConvertsLikeAnyOther) {
   uint64_t id = 7200;
   const auto surfaces = [&](const std::string& remaining) {
@@ -5090,6 +5110,49 @@ TEST_F(DispatcherTest, FirstSegmentRequestWithoutATypoStoreConvertsLikeAnyOther)
   const auto whole = surfaces("");
   EXPECT_FALSE(whole.empty());
   EXPECT_EQ(surfaces("は"), whole);
+}
+
+// M66 (segment-editing-spec section 10): the remaining reading reaches the engine, whose lattice
+// (lattice fixture, no model) costs the first segment's paths with it: お京 trails お今日 by
+// 4000 instead of 3000 (C = 10000), so its score falls from 0.7 to 0.6.
+TEST(FirstSegmentDispatchTest, TheRemainingReadingReachesTheEngine) {
+  azookey::host::EngineConfig config;
+  config.max_candidates = 0;
+  config.lattice.enabled = true;
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
+                                        config);
+  const auto loaded =
+      engine.LoadBundledDictionaryLayers(std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "lattice");
+  ASSERT_FALSE(loaded.empty());
+  ASSERT_TRUE(loaded.back().loaded) << loaded.back().error;
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+
+  uint64_t id = 7300;
+  const auto score = [&](const std::string& remaining) {
+    ipc::QueryCandidatesRequest request;
+    request.reading = "おきょう";
+    request.remaining_reading = remaining;
+    ipc::Envelope env;
+    env.version = 1;
+    env.request_id = ++id;
+    env.type = ipc::MessageType::QueryCandidates;
+    env.payload_json = ipc::BuildQueryCandidatesRequest(request);
+    const auto response = dispatcher.Dispatch(env);
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    if (parsed)
+      for (const auto& candidate : parsed->candidates)
+        if (candidate.surface == "お京") {
+          EXPECT_EQ(candidate.reading, "おきょう");
+          return candidate.score;
+        }
+    return -1.0;
+  };
+  EXPECT_DOUBLE_EQ(score(""), 0.7);
+  EXPECT_DOUBLE_EQ(score("はいいてんきです"), 0.6);
 }
 
 // M55 (typo-correction-learning-spec section 12.13): a requested

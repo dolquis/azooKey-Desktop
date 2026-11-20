@@ -83,6 +83,8 @@ class Searcher {
 
   bool Allowed(Previous previous, LatticeWordClass next, uint32_t position) const;
   uint32_t ClassKey(LatticeWordClass word_class) const;
+  int32_t EndCost(uint16_t right_index) const;
+  bool Continuations(LatticeResult& result);
   void BuildGroups(uint32_t position);
   bool Forward(LatticeResult& result);
   uint32_t ListFor(uint32_t position, uint16_t left_index, LatticeWordClass word_class, bool end);
@@ -97,7 +99,11 @@ class Searcher {
   const std::vector<LatticeNode>& nodes_;
   const ConnectionMatrix& matrix_;
   const LatticeQuery& query_;
-  uint32_t length_{};
+  uint32_t length_{};  // The searched reading: p for a head_only search.
+  uint32_t full_length_{};
+  // head_only: B(r) of spec section 7.3 by CMAT right index, the smallest cost from the end of a
+  // word with right id r through the rest of the reading to the sentence end.
+  std::unordered_map<uint16_t, int32_t> continuation_;
   uint16_t start_right_{};
   uint16_t end_left_{};
   bool constrained_{};
@@ -131,6 +137,52 @@ uint32_t Searcher::ClassKey(LatticeWordClass word_class) const {
   return constrained_ ? static_cast<uint32_t>(word_class) : 0;
 }
 
+// What follows the last word of a path that ends where the search ends: the sentence end, or
+// for a head_only search B(r) in its place (spec section 7.3).
+int32_t Searcher::EndCost(uint16_t right_index) const {
+  if (!query_.head_only) return matrix_.Cost(right_index, end_left_);
+  const auto found = continuation_.find(right_index);
+  return found == continuation_.end() ? kUnreachable : found->second;
+}
+
+// Section 7.3: B(r) for the right ids of the words that end at p, by a backward pass over the
+// rest [p, n) of the reading. The rest has no constraint, so each node beginning at p or later
+// takes part, and only the smallest continuation per left id matters to what precedes it.
+bool Searcher::Continuations(LatticeResult& result) {
+  using Lefts = std::unordered_map<uint16_t, int32_t>;
+  std::vector<Lefts> beginning(full_length_ + 1);
+  for (auto position = full_length_; position-- > length_;) {
+    if (query_.limits.Stopped()) {
+      result.status = LatticeStatus::Aborted;
+      return false;
+    }
+    auto& lefts = beginning[position];
+    for (const auto index : lattice_.BeginningAt(position)) {
+      const auto& node = nodes_[index];
+      int32_t rest = kUnreachable;
+      if (node.end == full_length_) {
+        rest = matrix_.Cost(node.right_index, end_left_);
+      } else {
+        for (const auto& [left, cost] : beginning[node.end])
+          rest = (std::min)(rest, matrix_.Cost(node.right_index, left) + cost);
+      }
+      if (rest == kUnreachable) continue;
+      const auto total = node.cost + rest;
+      const auto [slot, inserted] = lefts.emplace(node.left_index, total);
+      if (!inserted) slot->second = (std::min)(slot->second, total);
+    }
+  }
+  for (const auto index : lattice_.EndingAt(length_)) {
+    const auto right = nodes_[index].right_index;
+    if (continuation_.count(right)) continue;
+    int32_t best = kUnreachable;
+    for (const auto& [left, cost] : beginning[length_])
+      best = (std::min)(best, matrix_.Cost(right, left) + cost);
+    continuation_.emplace(right, best);
+  }
+  return true;
+}
+
 void Searcher::BuildGroups(uint32_t position) {
   group_begin_[position] = static_cast<uint32_t>(groups_.size());
   std::vector<uint32_t> ending;
@@ -162,10 +214,13 @@ bool Searcher::Forward(LatticeResult& result) {
   back_.assign(nodes_.size(), UINT32_MAX);
   group_begin_.assign(length_ + 1, 0);
   group_end_.assign(length_ + 1, 0);
+  // Section 7.3: a node across a segment break or a word boundary takes no part.
   std::vector<bool> spans_break(nodes_.size(), false);
-  for (const auto position : query_.constraints.segment_breaks)
-    for (uint32_t i = 0; i < nodes_.size(); ++i)
-      if (nodes_[i].begin < position && position < nodes_[i].end) spans_break[i] = true;
+  for (const auto* positions :
+       {&query_.constraints.segment_breaks, &query_.constraints.word_boundaries})
+    for (const auto position : *positions)
+      for (uint32_t i = 0; i < nodes_.size(); ++i)
+        if (nodes_[i].begin < position && position < nodes_[i].end) spans_break[i] = true;
   std::unordered_map<uint32_t, std::pair<int32_t, uint32_t>> incoming;
   for (uint32_t position = 0; position < length_; ++position) {
     if (query_.limits.Stopped()) {
@@ -205,7 +260,9 @@ bool Searcher::Forward(LatticeResult& result) {
   BuildGroups(length_);
   for (auto g = group_begin_[length_]; g < group_end_[length_]; ++g) {
     const auto first = group_nodes_[groups_[g].first];
-    const auto cost = forward_[first] + matrix_.Cost(groups_[g].right_index, end_left_);
+    const auto end = EndCost(groups_[g].right_index);
+    if (end == kUnreachable) continue;
+    const auto cost = forward_[first] + end;
     if (cost < best_cost_) {
       best_cost_ = cost;
       best_end_ = first;
@@ -225,7 +282,9 @@ uint32_t Searcher::ListFor(uint32_t position, uint16_t left_index, LatticeWordCl
   for (auto g = group_begin_[position]; g < group_end_[position]; ++g) {
     const auto& group = groups_[g];
     if (!end && !Allowed(group.kind, word_class, position)) continue;
-    const auto connect = int32_t{matrix_.Cost(group.right_index, left_index)};
+    const auto connect =
+        end ? EndCost(group.right_index) : int32_t{matrix_.Cost(group.right_index, left_index)};
+    if (connect == kUnreachable) continue;
     rows.push_back({forward_[group_nodes_[group.first]] + connect, connect, g});
   }
   std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
@@ -409,13 +468,27 @@ LatticeResult Searcher::Run() {
     }
     return true;
   };
-  if (!mark(query_.constraints.segment_joins, Rule::Join) ||
-      !mark(query_.constraints.segment_breaks, Rule::Break)) {
+  const auto& constraints = query_.constraints;
+  const bool boundaries_inside =
+      std::all_of(constraints.word_boundaries.begin(), constraints.word_boundaries.end(),
+                  [&](uint32_t position) { return position > 0 && position < length_; });
+  // Section 7.3: the head of the reading is searched with one word boundary and nothing else.
+  const bool head_shape = constraints.word_boundaries.size() == 1 &&
+                          constraints.segment_breaks.empty() && constraints.segment_joins.empty();
+  if (!mark(constraints.segment_joins, Rule::Join) ||
+      !mark(constraints.segment_breaks, Rule::Break) || !boundaries_inside ||
+      (query_.head_only && !head_shape)) {
     result.status = LatticeStatus::Rejected;
     return result;
   }
-  constrained_ = !query_.constraints.Empty();
+  // Word boundaries rule no transition out, so they add no word class to the state (7.3).
+  constrained_ = !constraints.segment_breaks.empty() || !constraints.segment_joins.empty();
   if (query_.max_paths == 0) return result;
+  full_length_ = length_;
+  if (query_.head_only) {
+    length_ = constraints.word_boundaries.front();
+    if (!Continuations(result)) return result;
+  }
   if (!Forward(result)) return result;
   if (query_.limits.on_stage) query_.limits.on_stage(LatticeStage::Forward);
   if (best_end_ == UINT32_MAX) return result;

@@ -159,11 +159,11 @@ Exhaustive Enumerate(const Lattice& lattice, const ConnectionMatrix& matrix,
         if ((breaks.count(node.begin) && !boundary) || (joins.count(node.begin) && boundary))
           return;
       }
-      for (const auto position_break : breaks) {
-        if (std::find(full.word_bounds.begin(), full.word_bounds.end(), position_break) ==
-            full.word_bounds.end())
-          return;
-      }
+      for (const auto* positions : {&constraints.segment_breaks, &constraints.word_boundaries})
+        for (const auto required : *positions)
+          if (std::find(full.word_bounds.begin(), full.word_bounds.end(), required) ==
+              full.word_bounds.end())
+            return;
       full.summary.cost = cost + matrix.Cost(right, matrix.LeftIndex(0));
       all.push_back(std::move(full));
       return;
@@ -186,6 +186,62 @@ Exhaustive Enumerate(const Lattice& lattice, const ConnectionMatrix& matrix,
   for (const auto& full : all)
     if (seen.insert(full.summary.surface).second) result.ranked.push_back(full.summary);
   return result;
+}
+
+// Spec section 11 (M66) literally: every BOS-to-EOS path with a word boundary at `head_end`,
+// costed in full without B(r), ranked by the section 6.3 order of its head [0, head_end) and
+// folded by the head's surface, so each head surface keeps its smallest full cost.
+std::vector<Summary> EnumerateHeads(const Lattice& lattice, const ConnectionMatrix& matrix,
+                                    uint32_t head_end) {
+  struct Head {
+    Summary summary;
+    std::vector<uint32_t> word_bounds;
+    std::vector<std::tuple<uint16_t, uint16_t, uint16_t>> ids;
+  };
+  std::vector<Head> all;
+  const auto& nodes = lattice.Nodes();
+  std::vector<uint32_t> path;
+  std::function<void(uint32_t)> walk = [&](uint32_t position) {
+    if (position == lattice.Length()) {
+      Head head;
+      int32_t cost = 0;
+      uint16_t right = matrix.RightIndex(0);
+      bool crossed = true;
+      for (size_t i = 0; i < path.size(); ++i) {
+        const auto& node = nodes[path[i]];
+        cost += matrix.Cost(right, node.left_index) + node.cost;
+        right = node.right_index;
+        if (node.begin == head_end) crossed = false;
+        if (node.end > head_end) continue;
+        head.summary.surface.append(node.surface);
+        head.ids.emplace_back(node.left_id, node.right_id, node.pos);
+        if (i == 0) continue;
+        head.word_bounds.push_back(node.begin);
+        if (IsBoundary(nodes[path[i - 1]].word_class, node.word_class))
+          head.summary.segment_bounds.push_back(node.begin);
+      }
+      if (crossed) return;  // A word spans head_end.
+      head.summary.cost = cost + matrix.Cost(right, matrix.LeftIndex(0));
+      all.push_back(std::move(head));
+      return;
+    }
+    for (const auto index : lattice.BeginningAt(position)) {
+      path.push_back(index);
+      walk(nodes[index].end);
+      path.pop_back();
+    }
+  };
+  walk(0);
+  std::sort(all.begin(), all.end(), [](const Head& a, const Head& b) {
+    return std::tie(a.summary.cost, a.summary.surface, a.summary.segment_bounds, a.word_bounds,
+                    a.ids) < std::tie(b.summary.cost, b.summary.surface, b.summary.segment_bounds,
+                                      b.word_bounds, b.ids);
+  });
+  std::vector<Summary> ranked;
+  std::set<std::string> seen;
+  for (const auto& head : all)
+    if (seen.insert(head.summary.surface).second) ranked.push_back(head.summary);
+  return ranked;
 }
 
 // xorshift32: the same sequence on every standard library.
@@ -315,6 +371,193 @@ TEST(LatticeSearch, ConstraintsMatchExhaustiveEnumeration) {
     }
   }
   EXPECT_GE(compared, 100U);
+}
+
+// M66 (spec sections 7.3 and 11): a word boundary drops the paths without one there, and the
+// head candidates of one word boundary p are the full enumeration's smallest cost per head
+// surface, in cost order.
+TEST(LatticeSearch, WordBoundaryAndHeadCandidatesMatchExhaustiveEnumeration) {
+  size_t compared = 0;
+  for (uint32_t seed = 1; seed <= 120; ++seed) {
+    Random random(seed * 104729);
+    const auto matrix = RandomMatrix(random);
+    WordVocabulary vocabulary(RandomWords(random));
+    const ILatticeVocabulary* vocabularies[] = {&vocabulary};
+    const auto length = 3 + random.Next(4);
+    const auto reading = RandomKana(random, length);
+    Lattice lattice;
+    ASSERT_EQ(
+        BuildLattice(reading, Parameters(*matrix, {0, 0, 100, 900}), vocabularies, {}, lattice)
+            .status,
+        LatticeStatus::Complete);
+    const auto head_end = 1 + random.Next(length - 1);
+    LatticeConstraints constraints;
+    constraints.word_boundaries = {head_end};
+
+    const auto full = Search(lattice, *matrix, 4, constraints);
+    ASSERT_EQ(full.status, LatticeStatus::Complete);
+    for (const auto& path : full.paths)
+      EXPECT_TRUE(std::any_of(path.words.begin(), path.words.end(),
+                              [&](const LatticeWord& word) { return word.begin == head_end; }))
+          << "seed " << seed;
+
+    LatticeQuery query;
+    query.max_paths = 4;
+    query.constraints = constraints;
+    query.head_only = true;
+    const auto heads = SearchLattice(lattice, query);
+    ASSERT_EQ(heads.status, LatticeStatus::Complete);
+    ASSERT_FALSE(heads.paths.empty()) << "seed " << seed;
+    for (const auto& path : heads.paths) {
+      ASSERT_FALSE(path.words.empty());
+      EXPECT_EQ(path.words.back().end, head_end) << "seed " << seed;
+      EXPECT_EQ(path.segments.back().end, head_end) << "seed " << seed;
+    }
+    // A word boundary with a segment break and a segment join: the break and the join rule the
+    // transitions, and the word boundary still only drops the nodes across it.
+    LatticeConstraints mixed = constraints;
+    const auto break_at = 1 + random.Next(length - 1);
+    const auto join_at = 1 + random.Next(length - 1);
+    mixed.segment_breaks = {break_at};
+    if (join_at != break_at) mixed.segment_joins = {join_at};
+    const auto combined = Search(lattice, *matrix, 4, mixed);
+    ASSERT_EQ(combined.status, LatticeStatus::Complete);
+    if (!combined.limited) {
+      const auto expected_mixed = Enumerate(lattice, matrix->Matrix(), mixed);
+      EXPECT_EQ(Summaries(combined),
+                std::vector<Summary>(expected_mixed.ranked.begin(),
+                                     expected_mixed.ranked.begin() +
+                                         std::min<size_t>(4, expected_mixed.ranked.size())))
+          << "seed " << seed;
+    }
+    if (full.limited || heads.limited) continue;
+    ++compared;
+    const auto expected_full = Enumerate(lattice, matrix->Matrix(), constraints);
+    EXPECT_EQ(Summaries(full),
+              std::vector<Summary>(
+                  expected_full.ranked.begin(),
+                  expected_full.ranked.begin() + std::min<size_t>(4, expected_full.ranked.size())))
+        << "seed " << seed;
+    const auto expected_heads = EnumerateHeads(lattice, matrix->Matrix(), head_end);
+    EXPECT_EQ(
+        Summaries(heads),
+        std::vector<Summary>(expected_heads.begin(),
+                             expected_heads.begin() + std::min<size_t>(4, expected_heads.size())))
+        << "seed " << seed;
+  }
+  EXPECT_GE(compared, 100U);
+}
+
+// Section 7.3: the rest of the reading is folded into B(r), so its paths take nothing out of
+// the 64 x N limit and N head candidates come out where the whole search stops early.
+TEST(LatticeSearch, HeadCandidatesFillNPastSixtyFourTimesNPathsOfTheRest) {
+  TestMatrix matrix(300, [](uint32_t, uint32_t) { return int16_t{0}; });
+  std::vector<Word> words = {
+      {"あ", "A", 1, 1, 0}, {"あ", "B", 2, 2, 1000}, {"あ", "C", 3, 3, 2000}};
+  // 200 paths of the rest, each cheaper than B: 3 x 64 = 192 takes cannot get past them.
+  for (uint16_t id = 10; id < 210; ++id) words.push_back({"い", "X", id, id, int16_t(id - 9)});
+  WordVocabulary vocabulary(words);
+  const ILatticeVocabulary* vocabularies[] = {&vocabulary};
+  Lattice lattice;
+  ASSERT_EQ(
+      BuildLattice("あい", Parameters(matrix, {0, 0, 0, 30000}), vocabularies, {}, lattice).status,
+      LatticeStatus::Complete);
+  // Precondition: the whole search stops at the limit with one surface.
+  const auto whole = Search(lattice, matrix, 3);
+  ASSERT_TRUE(whole.limited);
+  ASSERT_EQ(whole.paths.size(), 1U);
+
+  LatticeQuery query;
+  query.max_paths = 3;
+  query.constraints.word_boundaries = {1};
+  query.head_only = true;
+  const auto heads = SearchLattice(lattice, query);
+  EXPECT_EQ(heads.status, LatticeStatus::Complete);
+  EXPECT_FALSE(heads.limited);
+  // Each cost adds B = 1, the cheapest X (section 3.4 ranks by these costs).
+  EXPECT_EQ(Summaries(heads),
+            (std::vector<Summary>{{1, "A", {}}, {1001, "B", {}}, {2001, "C", {}}}));
+}
+
+// Section 7.3: positions outside 1..n-1 are rejected, and a head search needs one word
+// boundary and no other constraint. A stop before the forward pass gives nothing (6.4).
+TEST(LatticeSearch, HeadSearchRejectsOtherConstraintsAndStopsBeforeTheForwardPass) {
+  TestMatrix matrix(4, [](uint32_t, uint32_t) { return int16_t{0}; });
+  WordVocabulary vocabulary({{"あ", "A", 2, 2}, {"い", "I", 2, 2}, {"あい", "AI", 2, 2}});
+  const ILatticeVocabulary* vocabularies[] = {&vocabulary};
+  Lattice lattice;
+  ASSERT_EQ(
+      BuildLattice("あいあ", Parameters(matrix, NoPenalties()), vocabularies, {}, lattice).status,
+      LatticeStatus::Complete);
+  const auto search = [&](LatticeConstraints constraints, bool head_only) {
+    LatticeQuery query;
+    query.constraints = std::move(constraints);
+    query.head_only = head_only;
+    return SearchLattice(lattice, query);
+  };
+  EXPECT_EQ(search({{}, {}, {0}}, false).status, LatticeStatus::Rejected);
+  EXPECT_EQ(search({{}, {}, {3}}, false).status, LatticeStatus::Rejected);
+  EXPECT_EQ(search({}, true).status, LatticeStatus::Rejected);
+  EXPECT_EQ(search({{}, {}, {1, 2}}, true).status, LatticeStatus::Rejected);
+  EXPECT_EQ(search({{2}, {}, {1}}, true).status, LatticeStatus::Rejected);
+  EXPECT_EQ(search({{}, {2}, {1}}, true).status, LatticeStatus::Rejected);
+  // A word boundary at 1 keeps あい out of the head: A only (and the unknown-word あ).
+  const auto heads = search({{}, {}, {1}}, true);
+  ASSERT_EQ(heads.status, LatticeStatus::Complete);
+  ASSERT_FALSE(heads.paths.empty());
+  for (const auto& path : heads.paths) EXPECT_EQ(path.words.back().end, 1U);
+  EXPECT_EQ(heads.paths.front().Surface(), "A");
+
+  std::atomic<bool> cancel{true};
+  LatticeQuery stopped;
+  stopped.constraints.word_boundaries = {1};
+  stopped.head_only = true;
+  stopped.limits.cancel = &cancel;
+  const auto aborted = SearchLattice(lattice, stopped);
+  EXPECT_EQ(aborted.status, LatticeStatus::Aborted);
+  EXPECT_TRUE(aborted.paths.empty());
+}
+
+// Section 6.4 for a head search: a stop after the forward pass gives its best head path, whose
+// cost includes B(r) like the paths of a search that runs to the end.
+TEST(LatticeSearch, HeadSearchStoppedAfterTheForwardPassGivesItsBestHeadPath) {
+  TestMatrix matrix(4, [](uint32_t right, uint32_t left) {
+    return static_cast<int16_t>((right * 3 + left) % 4);
+  });
+  WordVocabulary vocabulary({{"あ", "A", 2, 2, 10},
+                             {"あ", "B", 3, 3, 20},
+                             {"い", "I", 2, 3, 10},
+                             {"あい", "AI", 3, 2, 30}});
+  const ILatticeVocabulary* vocabularies[] = {&vocabulary};
+  Lattice lattice;
+  ASSERT_EQ(BuildLattice("あいあい", Parameters(matrix, {0, 0, 10, 200}), vocabularies, {}, lattice)
+                .status,
+            LatticeStatus::Complete);
+  const auto head_query = [](const std::atomic<bool>* cancel) {
+    LatticeQuery query;
+    query.max_paths = 4;
+    query.constraints.word_boundaries = {2};
+    query.head_only = true;
+    query.limits.cancel = cancel;
+    return query;
+  };
+  const auto full = SearchLattice(lattice, head_query(nullptr));
+  ASSERT_EQ(full.status, LatticeStatus::Complete);
+  ASSERT_GE(full.paths.size(), 2U);
+  const auto expected = EnumerateHeads(lattice, matrix.Matrix(), 2);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_EQ(full.paths[0].cost, expected[0].cost);
+
+  std::atomic<bool> flag{false};
+  auto stopped = head_query(&flag);
+  stopped.limits.on_stage = [&](LatticeStage reached) {
+    if (reached == LatticeStage::Forward) flag = true;
+  };
+  const auto truncated = SearchLattice(lattice, stopped);
+  EXPECT_EQ(truncated.status, LatticeStatus::Truncated);
+  ASSERT_EQ(truncated.paths.size(), 1U);
+  EXPECT_EQ(truncated.paths[0].cost, expected[0].cost);
+  EXPECT_EQ(truncated.paths[0].words.back().end, 2U);
 }
 
 // Section 6.3: equal costs are ordered by surface bytes; one surface keeps its smallest

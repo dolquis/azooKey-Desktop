@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <iterator>
 #include <string>
+#include <utility>
 
 #include "LearningPaneModel.h"
 #include "ModelPaneModel.h"
@@ -55,7 +56,8 @@ controls::Grid TableRow(const std::vector<winrt::hstring>& cells, bool header,
                         xaml::UIElement const& action) {
   controls::Grid grid;
   grid.ColumnSpacing(12);
-  // Reading, surface, last used, tags. The weight is an internal number and is not shown.
+  // Reading, surface, last used, tags (or the part of speech on the user dictionary tab). The
+  // weight is an internal number and is not shown.
   static constexpr double kStar[] = {1.2, 1.5, 0.0, 1.0};
   static constexpr double kFixed[] = {0.0, 0.0, 96.0, 0.0};
   constexpr size_t kColumns = std::size(kStar);
@@ -166,6 +168,15 @@ void LearningPane::Build(controls::StackPanel panel,
         if (const auto self = weak.lock()) self->AddUserWord();
       });
   add_row.Children().Append(add_word_box_);
+  add_pos_combo_ = controls::ComboBox();
+  add_pos_combo_.Header(winrt::box_value(resources.GetString(L"Learning_UserDictAddPos")));
+  for (const auto& option : kUserDictPosOptions) {
+    add_pos_combo_.Items().Append(winrt::box_value(Str(resources, std::string(option.resource))));
+  }
+  add_pos_combo_.SelectedIndex(0);
+  add_pos_combo_.Visibility(xaml::Visibility::Collapsed);
+  SetId(add_pos_combo_, L"LearningUserDictAddPosCombo");
+  add_row.Children().Append(add_pos_combo_);
   add_button_ = controls::Button();
   add_button_.Content(winrt::box_value(resources.GetString(L"Learning_UserDictAddButton")));
   add_button_.VerticalAlignment(xaml::VerticalAlignment::Bottom);
@@ -176,6 +187,16 @@ void LearningPane::Build(controls::StackPanel panel,
   add_row.Children().Append(add_button_);
   add_section_.Children().Append(add_row);
   add_section_.Children().Append(Block(resources.GetString(L"Learning_UserDictAddNote"), true));
+  // The Host reads the chosen file (ImportUserDictionaryText); the settings app only passes it on.
+  user_dict_import_button_ = controls::Button();
+  user_dict_import_button_.Content(
+      winrt::box_value(resources.GetString(L"Learning_UserDictImportButton")));
+  user_dict_import_button_.Visibility(xaml::Visibility::Collapsed);
+  SetId(user_dict_import_button_, L"LearningUserDictImportButton");
+  user_dict_import_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
+    if (const auto self = weak.lock()) self->ImportUserDictText();
+  });
+  add_section_.Children().Append(user_dict_import_button_);
   entries_section_.Children().Append(add_section_);
 
   controls::StackPanel search_row;
@@ -330,6 +351,43 @@ void LearningPane::OnShown() {
   const auto kind = LearningTabKindAt(static_cast<size_t>(tab_index_));
   if (kind == LearningTabKind::Persona && host_.persona_shown) host_.persona_shown();
   if (!loaded_once_ && !busy_ && kind == LearningTabKind::Store) LoadPage();
+  if (IsUserDictTab()) ProbeUserDictFeatures();
+}
+
+bool LearningPane::IsUserDictTab() const {
+  return tab_index_ >= 0 && tab_index_ < static_cast<int>(kLearningStoreTabs.size()) &&
+         kLearningStoreTabs[static_cast<size_t>(tab_index_)].id == "user_dict";
+}
+
+winrt::fire_and_forget LearningPane::ProbeUserDictFeatures() {
+  const auto self = shared_from_this();
+  // Asked each time the tab is shown, so a Host that was replaced or started since is followed.
+  if (user_dict_probe_in_flight_) co_return;
+  user_dict_probe_in_flight_ = true;
+  const auto dispatcher = dispatcher_;
+  try {
+    co_await winrt::resume_background();
+    const auto result = RequestHostCapabilities(DefaultSettingsIpcOptions());
+    co_await ResumeForeground(dispatcher);
+    user_dict_probe_in_flight_ = false;
+    // A Host that is not running, or did not answer, is asked again on the next showing; the
+    // listing beside this reports the failure itself.
+    if (result.status != HostCallStatus::Ok) co_return;
+    user_dict_features_ = UserDictHostFeaturesFrom(*result.response);
+    ApplyUserDictFeatures();
+  } catch (...) {
+    // Not RecoverFromFailure: that would clear the busy state of the listing running beside this.
+    dispatcher.TryEnqueue([self] { self->user_dict_probe_in_flight_ = false; });
+  }
+}
+
+void LearningPane::ApplyUserDictFeatures() {
+  add_pos_combo_.Visibility(user_dict_features_.pos ? xaml::Visibility::Visible
+                                                    : xaml::Visibility::Collapsed);
+  user_dict_import_button_.Visibility(
+      user_dict_features_.text_import ? xaml::Visibility::Visible : xaml::Visibility::Collapsed);
+  // The fourth column becomes the part of speech once the Host advertises it.
+  if (IsUserDictTab()) RenderEntries();
 }
 
 void LearningPane::OpenStoreTab(std::string_view store) {
@@ -365,6 +423,7 @@ void LearningPane::SelectTab(int index) {
   entries_.clear();
   RenderEntries();
   LoadPage();
+  if (IsUserDictTab()) ProbeUserDictFeatures();
 }
 
 void LearningPane::RecoverFromFailure() {
@@ -386,6 +445,7 @@ void LearningPane::SetBusy(bool busy) {
   search_button_.IsEnabled(!busy);
   reset_button_.IsEnabled(!busy);
   add_button_.IsEnabled(!busy);
+  user_dict_import_button_.IsEnabled(!busy);
   export_button_.IsEnabled(!busy);
   import_button_.IsEnabled(!busy);
   if (busy) {
@@ -469,10 +529,14 @@ winrt::fire_and_forget LearningPane::LoadPage(bool keep_status) {
 void LearningPane::RenderEntries() {
   ResourceLoader resources;
   entries_panel_.Children().Clear();
+  // User dictionary entries carry no tags; with a Host that lists the part of speech, the fourth
+  // column shows it instead (user-dictionary-pos-spec section 8).
+  const bool show_pos = IsUserDictTab() && user_dict_features_.pos;
   if (!entries_.empty()) {
     entries_panel_.Children().Append(TableRow(
         {resources.GetString(L"Learning_Col_Reading"), resources.GetString(L"Learning_Col_Surface"),
-         resources.GetString(L"Learning_Col_LastUsed"), resources.GetString(L"Learning_Col_Tags")},
+         resources.GetString(L"Learning_Col_LastUsed"),
+         resources.GetString(show_pos ? L"Learning_Col_Pos" : L"Learning_Col_Tags")},
         true, nullptr));
   }
   for (const auto& entry : entries_) {
@@ -485,7 +549,8 @@ void LearningPane::RenderEntries() {
     entries_panel_.Children().Append(
         TableRow({winrt::to_hstring(entry.reading), winrt::to_hstring(entry.surface),
                   winrt::to_hstring(FormatLearningDate(entry.last_updated_epoch_sec)),
-                  winrt::to_hstring(JoinLearningTags(entry.tags))},
+                  show_pos ? Str(resources, UserDictEntryPosResource(entry))
+                           : winrt::to_hstring(JoinLearningTags(entry.tags))},
                  false, forget_button));
   }
   UpdatePager();
@@ -493,11 +558,17 @@ void LearningPane::RenderEntries() {
 
 winrt::Windows::Foundation::IAsyncOperation<bool> LearningPane::Confirm(
     winrt::hstring title, winrt::hstring message, winrt::hstring primary_text) {
+  co_return co_await Ask(std::move(title), winrt::box_value(message), std::move(primary_text));
+}
+
+winrt::Windows::Foundation::IAsyncOperation<bool> LearningPane::Ask(
+    winrt::hstring title, winrt::Windows::Foundation::IInspectable content,
+    winrt::hstring primary_text) {
   ResourceLoader resources;
   controls::ContentDialog dialog;
   dialog.XamlRoot(host_.xaml_root());
   dialog.Title(winrt::box_value(title));
-  dialog.Content(winrt::box_value(message));
+  dialog.Content(content);
   dialog.PrimaryButtonText(primary_text);
   dialog.CloseButtonText(resources.GetString(L"Learning_CancelButton"));
   dialog.DefaultButton(controls::ContentDialogButton::Close);
@@ -572,9 +643,8 @@ winrt::fire_and_forget LearningPane::AddUserWord() {
     }
     SetBusy(true);
     status_bar_.IsOpen(false);
-    azookey::ipc::AddUserWordRequest request;
-    request.ruby = input.reading;
-    request.word = input.word;
+    const auto request = MakeAddUserWordRequest(
+        input, static_cast<size_t>(add_pos_combo_.SelectedIndex()), user_dict_features_.pos);
     co_await winrt::resume_background();
     const auto result = RequestAddUserWord(DefaultSettingsIpcOptions(), request);
     co_await ResumeForeground(dispatcher);
@@ -597,6 +667,7 @@ winrt::fire_and_forget LearningPane::AddUserWord() {
                winrt::to_hstring(input.reading) + L" / " + winrt::to_hstring(input.word));
     add_reading_box_.Text(L"");
     add_word_box_.Text(L"");
+    add_pos_combo_.SelectedIndex(0);
     // Show the word: list what matches its reading from the first page.
     query_ = input.reading;
     search_box_.Text(winrt::to_hstring(input.reading));
@@ -814,6 +885,183 @@ winrt::fire_and_forget LearningPane::Import() {
     backup_result_.Text(summary);
     ShowStatus(controls::InfoBarSeverity::Success, after.GetString(L"Learning_ImportDoneTitle"),
                after.GetString(L"Learning_ImportDone"));
+  } catch (...) {
+    RecoverFromFailure();
+  }
+}
+
+namespace {
+
+// "label: count" lines of an import's counts, one per line.
+std::wstring CountLinesText(const ResourceLoader& resources,
+                            const azookey::ipc::UserDictionaryTextImportCounts& counts,
+                            bool preview) {
+  std::wstring text;
+  for (const auto& line : UserDictImportCountLines(counts, preview)) {
+    if (!text.empty()) text += L"\n";
+    text += std::wstring(Str(resources, line.resource)) + L": " + std::to_wstring(line.count);
+  }
+  return text;
+}
+
+}  // namespace
+
+winrt::fire_and_forget LearningPane::ImportUserDictText() {
+  const auto self = shared_from_this();
+  if (busy_ || user_dict_import_in_flight_ || !IsUserDictTab() || !user_dict_features_.text_import)
+    co_return;
+  // A second click while the picker or a dialog is open does not start a second import.
+  user_dict_import_in_flight_ = true;
+  struct ClearInFlight {
+    LearningPane* pane;
+    ~ClearInFlight() { pane->user_dict_import_in_flight_ = false; }
+  } clear_in_flight{this};
+  const auto dispatcher = dispatcher_;
+  try {
+    ResourceLoader resources;
+    // 1. The file. Any extension is accepted; the Host decides the format from the content.
+    winrt::Windows::Storage::Pickers::FileOpenPicker picker;
+    winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(host_.window_handle()));
+    picker.FileTypeFilter().Append(L".txt");
+    picker.FileTypeFilter().Append(L".tsv");
+    picker.FileTypeFilter().Append(L"*");
+    const auto file = co_await picker.PickSingleFileAsync();
+    if (!file) co_return;
+    const auto path = winrt::to_string(file.Path());
+
+    // 2. The format, "自動" by default.
+    controls::ComboBox format_combo;
+    format_combo.Header(
+        winrt::box_value(resources.GetString(L"Learning_UserDictImportFormatHeader")));
+    for (const auto format : kUserDictImportFormats) {
+      format_combo.Items().Append(
+          winrt::box_value(Str(resources, UserDictImportFormatResource(format))));
+    }
+    format_combo.SelectedIndex(0);
+    SetId(format_combo, L"LearningUserDictImportFormatCombo");
+    controls::StackPanel format_body;
+    format_body.Spacing(8);
+    format_body.Children().Append(Block(file.Path(), true));
+    format_body.Children().Append(format_combo);
+    if (!co_await Ask(resources.GetString(L"Learning_UserDictImportFormatTitle"), format_body,
+                      resources.GetString(L"Learning_UserDictImportPreviewButton"))) {
+      co_return;
+    }
+    const auto format_index = static_cast<size_t>(format_combo.SelectedIndex());
+
+    // 3. The preview (dry_run), which changes nothing.
+    SetBusy(true);
+    status_bar_.IsOpen(false);
+    const auto preview_request = MakeUserDictImportRequest(path, format_index, 0, /*dry_run=*/true);
+    co_await winrt::resume_background();
+    const auto preview =
+        RequestImportUserDictionaryText(DefaultSettingsIpcOptions(), preview_request);
+    co_await ResumeForeground(dispatcher);
+
+    SetBusy(false);
+    ResourceLoader after;
+    if (preview.status != HostCallStatus::Ok) {
+      ShowStatus(controls::InfoBarSeverity::Error,
+                 after.GetString(L"Learning_UserDictImportProblemTitle"),
+                 Str(after, HostCallStatusResource(preview.status)));
+      co_return;
+    }
+    if (!preview.response->ok) {
+      ShowStatus(controls::InfoBarSeverity::Error,
+                 after.GetString(L"Learning_UserDictImportProblemTitle"),
+                 Str(after, UserDictImportErrorResource(preview.response->error.value_or(""))));
+      co_return;
+    }
+
+    // 4. The counts, and the policy for words that already exist ("既存の語を残す" by default).
+    std::wstring summary;
+    if (preview.response->format) {
+      summary += std::wstring(after.GetString(L"Learning_UserDictImportDetectedFormat")) + L": " +
+                 std::wstring(Str(after, UserDictImportFormatResource(*preview.response->format)));
+    }
+    if (preview.response->encoding) {
+      if (!summary.empty()) summary += L"\n";
+      summary +=
+          std::wstring(after.GetString(L"Learning_UserDictImportDetectedEncoding")) + L": " +
+          std::wstring(Str(after, UserDictImportEncodingResource(*preview.response->encoding)));
+    }
+    if (preview.response->counts) {
+      if (!summary.empty()) summary += L"\n";
+      summary += CountLinesText(after, *preview.response->counts, /*preview=*/true);
+    }
+    controls::ComboBox conflict_combo;
+    conflict_combo.Header(
+        winrt::box_value(after.GetString(L"Learning_UserDictImportConflictHeader")));
+    for (const auto option : kUserDictImportConflicts) {
+      conflict_combo.Items().Append(
+          winrt::box_value(Str(after, "UserDictImportConflict_" + std::string(option))));
+    }
+    conflict_combo.SelectedIndex(0);
+    SetId(conflict_combo, L"LearningUserDictImportConflictCombo");
+    controls::StackPanel preview_body;
+    preview_body.Spacing(8);
+    preview_body.Children().Append(Block(winrt::hstring(summary)));
+    preview_body.Children().Append(conflict_combo);
+    if (!co_await Ask(after.GetString(L"Learning_UserDictImportPreviewTitle"), preview_body,
+                      after.GetString(L"Learning_UserDictImportNextButton"))) {
+      co_return;
+    }
+    // The import reads the file as the preview did: the format it detected, not "auto" again.
+    const auto request = MakeUserDictImportRequest(
+        path, UserDictImportFormatIndex(preview.response->format, format_index),
+        static_cast<size_t>(conflict_combo.SelectedIndex()), /*dry_run=*/false);
+
+    // 5. Confirm, then import.
+    auto message = after.GetString(L"Learning_UserDictImportConfirmMessage") + L"\n" + file.Path() +
+                   L"\n" + Str(after, "UserDictImportConflict_" + request.conflict_resolution);
+    if (request.conflict_resolution == "overwrite") {
+      message = message + L"\n" + after.GetString(L"Learning_UserDictImportOverwriteWarning");
+    }
+    if (!co_await Confirm(after.GetString(L"Learning_UserDictImportConfirmTitle"), message,
+                          after.GetString(L"Learning_UserDictImportRunButton"))) {
+      co_return;
+    }
+    SetBusy(true);
+    co_await winrt::resume_background();
+    const auto result = RequestImportUserDictionaryText(DefaultSettingsIpcOptions(), request);
+    co_await ResumeForeground(dispatcher);
+
+    SetBusy(false);
+    ResourceLoader done;
+    if (UserDictImportMayFinishLater(result.status)) {
+      // The request may have reached the Host, which may still finish the import (section 8):
+      // say so, and list the dictionary again to show what is there now.
+      ShowStatus(controls::InfoBarSeverity::Warning,
+                 done.GetString(L"Learning_UserDictImportTimeoutTitle"),
+                 done.GetString(L"Learning_UserDictImportTimeoutMessage"));
+      query_.clear();
+      search_box_.Text(L"");
+      offset_ = 0;
+      LoadPage(/*keep_status=*/true);
+      co_return;
+    }
+    if (result.status != HostCallStatus::Ok) {
+      ShowStatus(controls::InfoBarSeverity::Error,
+                 done.GetString(L"Learning_UserDictImportProblemTitle"),
+                 Str(done, HostCallStatusResource(result.status)));
+      co_return;
+    }
+    if (!result.response->ok) {
+      ShowStatus(controls::InfoBarSeverity::Error,
+                 done.GetString(L"Learning_UserDictImportProblemTitle"),
+                 Str(done, UserDictImportErrorResource(result.response->error.value_or(""))));
+      co_return;
+    }
+    ShowStatus(
+        controls::InfoBarSeverity::Success, done.GetString(L"Learning_UserDictImportDoneTitle"),
+        winrt::hstring(CountLinesText(
+            done, result.response->counts.value_or(azookey::ipc::UserDictionaryTextImportCounts{}),
+            /*preview=*/false)));
+    // List the whole dictionary again from the first page.
+    query_.clear();
+    search_box_.Text(L"");
+    offset_ = 0;
+    LoadPage(/*keep_status=*/true);
   } catch (...) {
     RecoverFromFailure();
   }

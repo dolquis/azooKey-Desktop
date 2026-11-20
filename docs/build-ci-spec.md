@@ -201,6 +201,8 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
    **供給源を固定し SHA256 等でハッシュ pin** する。先行実装 fkunn1326/azooKey-Windows が
    CI で個人 gist / 個人 fork の成果物をチェックサム無しで取得しているのは**反面教師**とし、
    自分側は採らない（サプライチェーン耐性）。
+4. 既定の configure に欠かせず、ネットワーク取得を opt-in にできない依存（SQLite。
+   `typo-correction-learning-spec.md` §12.8）→ ソースを third_party の下に commit し、版と取得元の hash を記録する
 
 ### 3.2 依存ごとの導入手段
 
@@ -212,6 +214,7 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
 | WIL | header-only | submodule または `FetchContent`（オプトイン） | 採用（M43 の範囲。§9） |
 | nlohmann-json | header-only | 任意・保留 | `ipc-persistence-hardening-spec.md` §6、`build-ci-spec.md` §11 参照（即時導入しない） |
 | spdlog | 要ビルド | 任意・保留 | `observability-spec.md` §7、`build-ci-spec.md` §11 参照（自前ロガーを優先評価） |
+| SQLite | 要ビルド（amalgamation の C ソース） | amalgamation を third_party の下に commit し、静的リンク。既定の configure をネットワークなしで成功させるため、§3.1 の 2 の `FetchContent` ではなく §3.1 の 4 による | 採用（M55 の typo v2 ストア。`typo-correction-learning-spec.md` §12.8） |
 | miniz | 要ビルド（C ソース 2 ファイル） | 導入しない | M49 の ZIP backup は STORE 方式だけの自前実装で足りるため採用しない（`docs/learning-data-management-spec.md` §7） |
 
 ### 3.3 vcpkg.json の扱い
@@ -233,12 +236,13 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
 | llama.cpp | `CMakeLists.txt` の `AZOOKEY_LLAMA_CPP_GIT_TAG` | フル SHA |
 | WIL | `CMakeLists.txt` の `AZOOKEY_WIL_GIT_TAG` | フル SHA |
 | GoogleTest | `CMakeLists.txt` の `FetchContent_Declare(googletest)` | リリースタグ |
+| SQLite | third_party/sqlite/ の版の記録（`typo-correction-learning-spec.md` §12.8） | 版と取得元 zip の SHA256 |
 | prebuilt バイナリ / GGUF モデル | 各取得経路（§3.1 の 3） | SHA256 |
 
 **GoogleTest も本手順の対象**である。テスト専用の依存でも、更新を思いつきで
 行えば CI が壊れた原因の切り分けが難しくなる。
 
-pin 値の正典は `CMakeLists.txt` と各取得経路であり、本 spec や README へ**転記
+pin 値の正典は `CMakeLists.txt` と各取得経路（SQLite は third_party/sqlite/ の版の記録）であり、本 spec や README へ**転記
 しない**。転記すると二重管理になり、片側が必ず古くなる。
 
 #### 更新 cadence

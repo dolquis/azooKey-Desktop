@@ -366,7 +366,7 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 
 | 形式 ID | 出どころ | 構造 |
 |---|---|---|
-| `msime` | Microsoft IME の辞書ツールの一覧の出力 | 1 行目が `!Microsoft IME` で始まる（大文字と小文字を区別しない）。`!` で始まる行は注釈。データ行は TAB 区切りで、読み・語句・品詞・コメント（任意）の順 |
+| `msime` | Microsoft IME の辞書ツールの一覧の出力 | 最初の空でない行が `!Microsoft IME` で始まる（大文字と小文字を区別しない）。`!` で始まる行は注釈。データ行は TAB 区切りで、読み・語句・品詞・コメント（任意）の順 |
 | `google` | Google 日本語入力の辞書ツールの書き出し | ヘッダを持たない。`#` で始まる行は注釈。データ行は TAB 区切りで、読み・単語・品詞・コメントの順。コメントが空でも 4 列目の区切りを持つ |
 | `azookey_tsv` | `userdict import` の TSV（§7.5） | 読み・語・`cid`・`mid`・`weight`・品詞 ID の 2〜6 列。3 列目以降は空でよい |
 
@@ -403,7 +403,7 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 3. 同じ行が `azookey_tsv` の 1 行として読めれば `azookey_tsv`。
 4. どれでもなければ `unknown_format` で失敗する。
 
-`format` を明示したときは判定しない。ただし `msime` を明示して 1 行目が `!Microsoft IME` で始まらなければ
+`format` を明示したときは判定しない。ただし `msime` を明示して最初の空でない行が `!Microsoft IME` で始まらなければ
 `unknown_format` で失敗する。どの `format` でも、手順 1 の Gboard と ATOK のヘッダで始まるファイルは `unknown_format` で
 失敗する。ことえり（引用符で囲む CSV）は TAB を含まないので、`auto` では手順 4 の `unknown_format` になる。
 
@@ -503,13 +503,14 @@ Google 日本語入力は `user_pos.def` の利用者向けの品詞の名前。
 1. `source_path` を検査する。絶対パスで `..` を含まないこと、ファイル名に `:` を含まないこと、UNC・デバイス名前空間・
    予約デバイス名でないこと、シンボリックリンクでない通常のファイルであることを求める（規則は
    `docs/learning-data-management-spec.md` §5 の `source_path` と同じ。拡張子は問わない）。違反は `invalid_path`、
-   ファイルが無ければ `source_missing`（backup の import と同じ名前）とする。
+   ファイルが無ければ `source_missing`（backup の import と同じ名前）とする。通常のファイルとして開けない・読めないときも `invalid_path` とする。
 2. どのロックも取らずに、ファイルを読み、文字コードと形式を決め、全行を解析・正規化・検証する。ここで失敗したら、
    何も変えずに失敗を返す。元のファイルは変えず、隔離もしない。読み込んだ平文のバッファは、解析の後に
    `learning::SecureErase` で消す。
 3. `dry_run` なら、状態のロックの中で、公開中の辞書のキーの集合と、その辞書が version 3 以上か・読み込みの失敗で保存を
    止めているかだけを複写する。version 3 以上なら `dictionary_too_new`、保存を止めていれば `store_unavailable` で失敗する
-   （確定のときと同じ判定）。そうでなければロックの外で比べて件数を数え、何も変えずに返す。変換の問い合わせを止める区間を
+   （確定のときと同じ判定）。そうでなければロックの外で比べて件数を数え、取り込んだ後の語数が §6.7 の上限を超えるなら
+   `too_many_words` で失敗し、超えなければ何も変えずに返す。変換の問い合わせを止める区間を
    短くするためである。下見の件数は確定のときの件数と違いうる（その間に他の編集が入りうる）。
 4. `AddUserWord` と同じ順と同じ区間でロックを取る（`docs/learning-data-management-spec.md` §4.5）。ユーザー辞書の writer の
    mutex、ユーザー辞書のファイルロックの順に取り、どちらも手順 7 の公開まで持つ。状態のロックは、公開中の辞書を複写する
@@ -532,7 +533,9 @@ Google 日本語入力は `user_pos.def` の利用者向けの品詞の名前。
   import と同じく §8 の対象とする。
 - Host は 1 回の取り込みを RuntimeLogger の `persistent_edit`（`docs/learning-data-management-spec.md` §13）に、
   `op` を `user_dict_import` として記録する。項目は同 §13 の項目と、件数（`added`、`replaced`、`kept`、
-  `duplicates_in_file`、除いた行の合計）である。語、読み、パスは記録しない。
+  `duplicates_in_file`、除いた行の合計）である。語、読み、パスは記録しない。`total_ms` は待ちの予算と同じく解析を終えた時刻から
+  数え、受信から解析を終えるまでの時間は `parse_ms` に記録する。`dry_run` と、ロックを取る前に終わった取り込み（`blocked`、パスの検査や解析での失敗など）は記録しない。
+  ロックを取って保存を試みた取り込みは、失敗（`busy`・`save_failed` など）も記録する。
 
 ## 7. IPC と CLI
 
@@ -607,6 +610,7 @@ Host は両方を Handshake の capabilities に載せる。設定アプリは�
   `pos_mismatch` として skip に数える。品詞に対応する前の CLI は 6 列の行を skip していたので、変わるのは 6 列の行だけである。
 - `--input-format` が `msime`・`google`・`auto` のときは、解析、文字コード、正規化、上限を §6.2〜§6.7 に従う。
   JSON の報告は既存の `imported` と `skipped` に、§7.2 の `counts` を足す。
+- `imported` は、どの `--input-format` でも、足すか置き換えた語の数である。`--conflict merge`・`keep_both` で既存を残した語は数えない。
 
 同じ `azookey_tsv` でも、IPC と CLI では次のとおり扱いが違う。CLI は既存のスクリプトの結果を保つことを優先する。
 

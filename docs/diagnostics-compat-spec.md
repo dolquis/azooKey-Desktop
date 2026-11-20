@@ -72,7 +72,7 @@ Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ラン
 | D-007 | モデルパス | 設定上のモデル（R1=`.gguf` ファイル / R2=ONNX GenAI ディレクトリ）が存在するか | モデル選択 UI（M45）へ誘導 |
 | D-008 | モデル検証 | 形式別検証（R1=GGUF magic / version、R2=`genai_config.json` + 参照 ONNX） | 破損モデル扱い |
 | D-009 | fallback 状態 | Zenzai / SimpleConverter / degraded を表示 | モデルロード再試行。`safe_mode` は `safeMode.enabled=false` に変更し、Host を再起動するか `UpdateConfig` を送る（`host-availability-spec.md` §8.5.3） |
-| D-010 | learning store | 読み込み可能か、破損していないか、v2 と暗号化 M7 の併存 | 保存による M7 cleanup の再試行、破損時はバックアップ後に初期化 |
+| D-010 | learning store（M55 の typo v2 ストアを含む） | 読み込み可能か、破損していないか、v2 と暗号化 M7 の併存、typo v2 を破損から作り直したか | 保存による M7 cleanup の再試行、破損時はバックアップ後に初期化（typo v2 は Host が起動時に作り直し済みで、修復は要らない） |
 | D-011 | user dict | JSON 読み込み可能か | バックアップ後に修復 |
 | D-012 | settings | schema validation 成功 | 不正値のリセット |
 | D-013 | logs | `%LOCALAPPDATA%\azooKey\logs\` 書き込み可能 | ディレクトリ作成 |
@@ -110,7 +110,7 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-007 | `model.enabled=false`（Zenzai 無効 = 該当なし）、または enabled かつ `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | enabled だがパス未設定（Zenzai ON だがモデル未選択） | enabled かつ設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
 | D-008 | `model.enabled=false`、またはモデル未選択（`model.selectedPath` 空 = 検証対象なし。該当なしとし、未選択の warning は D-007 が担う）、または enabled かつ**選択済み**モデルが `valid` **かつ loaded**（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled かつ選択済みモデルが `valid` だが未ロード（fallback 動作中）、または Host の実効ランタイムが `mock`（§12.6 `engine`） | enabled かつ**選択済み**モデルの形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
 | D-009 | `fallback_state == healthy`、または（`safe_mode` でない）`model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化）。Host に到達できず `QueryDiagnostics` を得られない場合は、`model.enabled` なら `degraded_simple`、そうでなければ `healthy` とみなす（`host-availability-spec.md` §8.5.1） | `safe_mode`（`model.enabled` に関わらず最優先） | ✗（復旧は D-005 / D-008 修復経由。`safe_mode` の解除は `host-availability-spec.md` §8.5.3） |
-| D-010 | 読み込み成功・schema 妥当（空 / 新規を含む）かつ暗号化 M7 の cleanup 待ちでない | 旧 schema だが migration 可能、または可読な v2 と `learning.tsv.enc` が併存 | 読み込み不可 / 破損 / cleanup 対象の存在確認不可 | ✗（バックアップ後の初期化は手動確認） |
+| D-010 | 読み込み成功・schema 妥当（空 / 新規を含む）かつ暗号化 M7 の cleanup 待ちでない | 旧 schema だが migration 可能、または可読な v2 と `learning.tsv.enc` が併存、または typo v2 をその起動で破損から作り直した（`.corrupt-*` へ退避した。`typo-correction-learning-spec.md` §12.8。warning は作り直した起動の間だけ出し、`.corrupt-*` の残りの扱いは DEV-2173 で決める） | 読み込み不可 / 破損 / cleanup 対象の存在確認不可 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功、または `settings.json` が無い（既定値で動作） | 本節の登録済み旧形式に一致し、登録された移行経路で移行できる | 読み込み不可、JSON 不正、または validation 失敗（旧ベンチマーク履歴の例外を含む） | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | ディレクトリ未作成、または書き込み不可 | ✓ ディレクトリ作成 |
@@ -327,7 +327,7 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 - Magic Conversion の prompt
 - 変換前後の全文
 - ユーザー辞書の実データ
-- 学習 TSV / typo_corrections.tsv / auto_words.tsv の本文
+- 学習 TSV / typo_corrections.tsv / typo v2 ストア（`typo_learning.v2.db`）/ auto_words.tsv の本文
 
 必要な場合でも、**件数・サイズ・hash・mtime のみ**を記録する。
 `settings.redacted.json` は API key 等の機密 field を `***redacted***`

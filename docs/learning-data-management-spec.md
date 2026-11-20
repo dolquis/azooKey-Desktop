@@ -41,7 +41,8 @@ canonical_for: ["学習データ可視化とバックアップ"]
 | `learning.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.tsv` | M7 | M34 で `.enc` |
 | `learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv`（M54 の v2 形式。暗号化された移行元 `learning.tsv.enc` は v2 保存・読み戻し検証後に削除する） | M54 | M34 と同じ `.enc` |
 | `user_dict.json` | `%LOCALAPPDATA%\azooKey\data\user_dict.json` | M9 | M34 で `.enc` |
-| `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv` | M35 / M55 | M34 で `.enc` |
+| `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv` | M35 | M34 で `.enc` |
+| `typo_learning.v2.db` | `%LOCALAPPDATA%\azooKey\data\typo_learning.v2.db`（M55 の v2 形式。SQLite の DB 全体を暗号化して保存する。移行した v1 は `typo_corrections.v1.tsv.bak.enc` として残す。`docs/typo-correction-learning-spec.md` §12.8） | M55 | M34 と同じ `.enc` |
 | `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\data\auto_words.tsv` | M36-A | M34 で `.enc` |
 | `english_learning.tsv` | `%LOCALAPPDATA%\azooKey\data\english_learning.tsv` | M60（英単語候補の確定。`docs/inline-english-candidate-spec.md` §5） | `learning.tsv` と同じ `.enc` |
 | `english_learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\english_learning.v2.tsv`（`learning.v2.tsv` と同じ v2 形式。移行と M7 形式の削除の規則も同じ） | M60 | `learning.tsv` と同じ `.enc` |
@@ -173,6 +174,8 @@ Response（host → settings-app）:
 - **id**: ストア名、チャネル、読み、表記をそれぞれ長さ付きで連結した文字列の
   SHA-256 の先頭 16 桁（小文字 16 進）。キーから決まるので、Host の再起動後も変わらず、
   採番状態を保存しない。
+- **typo の entry**: M55 の v2 ストアの読みの組とパターンの `channel`・読み・表記の写し方は
+  `docs/typo-correction-learning-spec.md` §12.8「学習の削除」に従う。
 
 ### 4.2 ForgetLearningEntry
 
@@ -210,7 +213,7 @@ Response:
 | ストア | 忘却 |
 |---|---|
 | `learning` | 組の全 app 行の weight と回数を 0 にする。次の保存でファイルから除く。再観測時は新規として扱い、過去の回数を引き継がない |
-| `typo` | ペアを削除する |
+| `typo` | ペアを削除する。v2 で消す行と v1 の退避の扱いは `docs/typo-correction-learning-spec.md` §12.8「学習の削除」 |
 | `user_dict` | 単語を削除する |
 | `auto_word` | 状態を `rejected` にする。削除すると同じ語を再び候補として提案するため、行は残す |
 
@@ -372,7 +375,7 @@ counts のキーは archive の item 名（§5.1）である。
 |---|---|
 | `learning` | かなと英語の学習チャネルの全行と、M7 ファイル（§4.2）の全行 |
 | `user_dict` | ユーザー辞書の全単語 |
-| `typo` | タイプミス補正の全ペア |
+| `typo` | タイプミス補正の全ペア。v2 で消す表と v1 の退避は `docs/typo-correction-learning-spec.md` §12.8「学習の削除」 |
 | `auto_word` | 新語候補の全行。`rejected` も消えるので、断った語も再び候補になりうる。確定から派生して英単語辞書に入った語（追加語の journal、overlay、コンパクション済みの base、退避した journal。`docs/inline-english-candidate-spec.md` §4.8） |
 
 リセットは途中で失敗しても半端に消えない。Host は複写を空にして保存し、成功時だけ公開する。
@@ -860,6 +863,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `learning.v2.tsv.enc`（v2 移行前は `learning.tsv.enc` を読むだけ） | Host のみ | Host、`lookup` CLI、`azookey_bench --personal-eval`（`LoadReadOnly` でロックを取らずに読み、書き換えない。`docs/conversion-quality-benchmark-spec.md` §15.2） | Host 内で直列化（debounce flush、`docs/user-learning-enhancement-spec.md` §3.1.1）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
 | `english_learning.v2.tsv.enc`（v2 移行前は `english_learning.tsv.enc` を読むだけ） | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
 | `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/host-availability-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
+| `typo_learning.v2.db.enc`（v2 移行前は `typo_corrections.tsv.enc`。移行後の `typo_corrections.v1.tsv.bak.enc` を含む） | Host のみ（`docs/typo-correction-learning-spec.md` §12.8） | Host | Host 内で直列化し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace（`WriteProtectedText`。論理パスは `docs/typo-correction-learning-spec.md` §12.8「パス」） |
 | `auto_words.tsv.enc` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | `AcquireExclusiveFileLockForPath` + atomic replace。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
 
 拡張子 `.enc` のない旧平文ファイルは移行元であり、移行時は `.bak` を保全する。

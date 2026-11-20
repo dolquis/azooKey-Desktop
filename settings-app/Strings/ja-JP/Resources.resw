@@ -557,6 +557,96 @@
   <data name="LearningUserDictError_invalid_request" xml:space="preserve"><value>要求が不正です。</value></data>
   <data name="LearningUserDictError_not_authenticated" xml:space="preserve"><value>変換エンジンとの認証が済んでいません。</value></data>
   <data name="LearningUserDictError_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
+  <data name="LearningUserDictError_invalid_pos" xml:space="preserve"><value>選んだ品詞と語の末尾が合いません。品詞か、読みと語を見直してください。</value></data>
+  <data name="LearningUserDictError_dictionary_too_new" xml:space="preserve"><value>ユーザー辞書は新しい版の azooKey が書いたものなので、変更しません。</value></data>
+  <data name="Learning_UserDictAddPos" xml:space="preserve"><value>品詞</value></data>
+  <data name="Learning_Col_Pos" xml:space="preserve"><value>品詞</value></data>
+  <data name="UserDictPos_noun" xml:space="preserve"><value>名詞</value></data>
+  <data name="UserDictPos_noun_sahen" xml:space="preserve"><value>サ変名詞</value></data>
+  <data name="UserDictPos_noun_adjectival" xml:space="preserve"><value>形容動詞</value></data>
+  <data name="UserDictPos_proper_noun" xml:space="preserve"><value>固有名詞</value></data>
+  <data name="UserDictPos_person_name" xml:space="preserve"><value>人名</value></data>
+  <data name="UserDictPos_surname" xml:space="preserve"><value>姓</value></data>
+  <data name="UserDictPos_given_name" xml:space="preserve"><value>名</value></data>
+  <data name="UserDictPos_place_name" xml:space="preserve"><value>地名</value></data>
+  <data name="UserDictPos_organization" xml:space="preserve"><value>組織名</value></data>
+  <data name="UserDictPos_adverb" xml:space="preserve"><value>副詞</value></data>
+  <data name="UserDictPos_adnominal" xml:space="preserve"><value>連体詞</value></data>
+  <data name="UserDictPos_conjunction" xml:space="preserve"><value>接続詞</value></data>
+  <data name="UserDictPos_interjection" xml:space="preserve"><value>感動詞</value></data>
+  <data name="UserDictPos_prefix" xml:space="preserve"><value>接頭辞</value></data>
+  <data name="UserDictPos_suffix" xml:space="preserve"><value>接尾辞</value></data>
+  <data name="UserDictPos_counter" xml:space="preserve"><value>助数詞</value></data>
+  <data name="UserDictPos_symbol" xml:space="preserve"><value>記号・顔文字</value></data>
+  <data name="UserDictPos_verb_godan_ka" xml:space="preserve"><value>動詞（カ行五段）</value></data>
+  <data name="UserDictPos_verb_godan_ga" xml:space="preserve"><value>動詞（ガ行五段）</value></data>
+  <data name="UserDictPos_verb_godan_sa" xml:space="preserve"><value>動詞（サ行五段）</value></data>
+  <data name="UserDictPos_verb_godan_ta" xml:space="preserve"><value>動詞（タ行五段）</value></data>
+  <data name="UserDictPos_verb_godan_na" xml:space="preserve"><value>動詞（ナ行五段）</value></data>
+  <data name="UserDictPos_verb_godan_ba" xml:space="preserve"><value>動詞（バ行五段）</value></data>
+  <data name="UserDictPos_verb_godan_ma" xml:space="preserve"><value>動詞（マ行五段）</value></data>
+  <data name="UserDictPos_verb_godan_ra" xml:space="preserve"><value>動詞（ラ行五段）</value></data>
+  <data name="UserDictPos_verb_godan_wa" xml:space="preserve"><value>動詞（ワ行五段）</value></data>
+  <data name="UserDictPos_verb_ichidan" xml:space="preserve"><value>動詞（一段）</value></data>
+  <data name="UserDictPos_verb_sahen" xml:space="preserve"><value>動詞（サ変・〜する）</value></data>
+  <data name="UserDictPos_adjective" xml:space="preserve"><value>形容詞</value></data>
+  <data name="Learning_UserDictImportButton" xml:space="preserve"><value>ほかの IME の辞書を取り込む…</value></data>
+  <data name="Learning_UserDictImportFormatTitle" xml:space="preserve"><value>辞書の形式を選んでください</value></data>
+  <data name="Learning_UserDictImportFormatHeader" xml:space="preserve"><value>形式</value></data>
+  <data name="Learning_UserDictImportPreviewButton" xml:space="preserve"><value>下見する</value></data>
+  <data name="Learning_UserDictImportPreviewTitle" xml:space="preserve"><value>取り込みの下見</value></data>
+  <data name="Learning_UserDictImportDetectedFormat" xml:space="preserve"><value>形式</value></data>
+  <data name="Learning_UserDictImportDetectedEncoding" xml:space="preserve"><value>文字コード</value></data>
+  <data name="Learning_UserDictImportConflictHeader" xml:space="preserve"><value>既存の語と重なったとき</value></data>
+  <data name="Learning_UserDictImportNextButton" xml:space="preserve"><value>次へ</value></data>
+  <data name="Learning_UserDictImportConfirmTitle" xml:space="preserve"><value>ほかの IME の辞書を取り込みますか？</value></data>
+  <data name="Learning_UserDictImportConfirmMessage" xml:space="preserve"><value>次のファイルの語をユーザー辞書に取り込みます。</value></data>
+  <data name="Learning_UserDictImportOverwriteWarning" xml:space="preserve"><value>既存と重なった語は、取り込んだ語で置き換えます。元に戻せません。</value></data>
+  <data name="Learning_UserDictImportRunButton" xml:space="preserve"><value>取り込む</value></data>
+  <data name="Learning_UserDictImportDoneTitle" xml:space="preserve"><value>ほかの IME の辞書を取り込みました</value></data>
+  <data name="Learning_UserDictImportProblemTitle" xml:space="preserve"><value>辞書を取り込めませんでした</value></data>
+  <data name="Learning_UserDictImportTimeoutTitle" xml:space="preserve"><value>取り込みの結果を確かめられませんでした</value></data>
+  <data name="Learning_UserDictImportTimeoutMessage" xml:space="preserve"><value>取り込みは後から終わることがあります。しばらくしてから一覧で確かめてください。</value></data>
+  <data name="UserDictImportFormat_auto" xml:space="preserve"><value>自動</value></data>
+  <data name="UserDictImportFormat_msime" xml:space="preserve"><value>Microsoft IME</value></data>
+  <data name="UserDictImportFormat_google" xml:space="preserve"><value>Google 日本語入力</value></data>
+  <data name="UserDictImportFormat_azookey_tsv" xml:space="preserve"><value>azooKey TSV</value></data>
+  <data name="UserDictImportFormat_other" xml:space="preserve"><value>不明</value></data>
+  <data name="UserDictImportEncoding_utf_8" xml:space="preserve"><value>UTF-8</value></data>
+  <data name="UserDictImportEncoding_utf_16le" xml:space="preserve"><value>UTF-16LE</value></data>
+  <data name="UserDictImportEncoding_utf_16be" xml:space="preserve"><value>UTF-16BE</value></data>
+  <data name="UserDictImportEncoding_cp932" xml:space="preserve"><value>Shift_JIS（CP932）</value></data>
+  <data name="UserDictImportEncoding_other" xml:space="preserve"><value>不明</value></data>
+  <data name="UserDictImportConflict_merge" xml:space="preserve"><value>既存の語を残す</value></data>
+  <data name="UserDictImportConflict_overwrite" xml:space="preserve"><value>取り込んだ語で置き換える</value></data>
+  <data name="UserDictImportCount_added" xml:space="preserve"><value>新しい語</value></data>
+  <data name="UserDictImportCount_existing" xml:space="preserve"><value>既存と重なる語</value></data>
+  <data name="UserDictImportCount_kept" xml:space="preserve"><value>既存を残した語</value></data>
+  <data name="UserDictImportCount_replaced" xml:space="preserve"><value>置き換えた語</value></data>
+  <data name="UserDictImportCount_malformed" xml:space="preserve"><value>対象外の行（形式が正しくない）</value></data>
+  <data name="UserDictImportCount_too_long" xml:space="preserve"><value>対象外の行（読みか語が長すぎる）</value></data>
+  <data name="UserDictImportCount_unsupported_pos" xml:space="preserve"><value>対象外の行（対応していない品詞）</value></data>
+  <data name="UserDictImportCount_pos_mismatch" xml:space="preserve"><value>対象外の行（品詞と語の末尾が合わない）</value></data>
+  <data name="UserDictImportCount_duplicates_in_file" xml:space="preserve"><value>ファイルの中で重複した行</value></data>
+  <data name="UserDictImportError_invalid_request" xml:space="preserve"><value>要求が不正です。</value></data>
+  <data name="UserDictImportError_not_authenticated" xml:space="preserve"><value>変換エンジンとの認証が済んでいません。</value></data>
+  <data name="UserDictImportError_blocked" xml:space="preserve"><value>プライバシーの設定か、セーフモードのため、ほかの IME の辞書を取り込めません。</value></data>
+  <data name="UserDictImportError_invalid_path" xml:space="preserve"><value>ファイルの場所が正しくないか、ファイルを開けませんでした。</value></data>
+  <data name="UserDictImportError_source_missing" xml:space="preserve"><value>取り込むファイルが見つかりません。</value></data>
+  <data name="UserDictImportError_too_large" xml:space="preserve"><value>ファイルが大きすぎます。16 MiB、200,000 行までのファイルを取り込めます。</value></data>
+  <data name="UserDictImportError_unsupported_encoding" xml:space="preserve"><value>このファイルの文字コードには対応していません。対応している形式は Microsoft IME、Google 日本語入力、azooKey TSV で、文字コードは UTF-8、BOM 付きの UTF-16、Shift_JIS です。</value></data>
+  <data name="UserDictImportError_bad_encoding" xml:space="preserve"><value>ファイルの文字コードを読み取れませんでした。対応している形式は Microsoft IME、Google 日本語入力、azooKey TSV で、文字コードは UTF-8、BOM 付きの UTF-16、Shift_JIS です。</value></data>
+  <data name="UserDictImportError_unknown_format" xml:space="preserve"><value>辞書の形式を判別できませんでした。対応している形式は Microsoft IME、Google 日本語入力、azooKey TSV で、文字コードは UTF-8、BOM 付きの UTF-16、Shift_JIS です。</value></data>
+  <data name="UserDictImportError_no_entries" xml:space="preserve"><value>取り込める語がありませんでした。</value></data>
+  <data name="UserDictImportError_too_many_words" xml:space="preserve"><value>取り込むとユーザー辞書の語数が上限の 100,000 語を超えます。</value></data>
+  <data name="UserDictImportError_busy" xml:space="preserve"><value>ユーザー辞書を別の操作が使っています。少し待ってからもう一度試してください。</value></data>
+  <data name="UserDictImportError_lock_failed" xml:space="preserve"><value>ユーザー辞書のファイルをロックできませんでした。少し待ってからもう一度試してください。</value></data>
+  <data name="UserDictImportError_load_failed" xml:space="preserve"><value>ユーザー辞書のファイルを読み込めませんでした。</value></data>
+  <data name="UserDictImportError_store_unavailable" xml:space="preserve"><value>ユーザー辞書を読み込めていないため、変更できません。</value></data>
+  <data name="UserDictImportError_dictionary_too_new" xml:space="preserve"><value>ユーザー辞書は新しい版の azooKey が書いたものなので、変更しません。</value></data>
+  <data name="UserDictImportError_save_failed" xml:space="preserve"><value>ユーザー辞書を保存できませんでした。</value></data>
+  <data name="UserDictImportError_unavailable" xml:space="preserve"><value>変換エンジンがユーザー辞書を開いていません。</value></data>
+  <data name="UserDictImportError_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
   <data name="ProfilesNavigationItem.Content" xml:space="preserve"><value>アプリ別</value></data>
   <data name="Setting_profilesByApp" xml:space="preserve"><value>アプリ別のプロファイル</value></data>
   <data name="Profiles_Title" xml:space="preserve"><value>アプリ別</value></data>

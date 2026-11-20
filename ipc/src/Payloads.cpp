@@ -2019,6 +2019,90 @@ std::optional<ImportLearningDataResponse> ParseImportLearningDataResponse(const 
   return p;
 }
 
+// -------- ImportUserDictionaryText --------
+
+std::string BuildImportUserDictionaryTextRequest(const ImportUserDictionaryTextRequest& p) {
+  j::Object o;
+  o.emplace("source_path", j::Value(p.source_path));
+  o.emplace("format", j::Value(p.format));
+  o.emplace("conflict_resolution", j::Value(p.conflict_resolution));
+  o.emplace("dry_run", j::Value(p.dry_run));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ImportUserDictionaryTextRequest> ParseImportUserDictionaryTextRequest(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto source_path = ReadNonEmptyString(*v, "source_path");
+  if (!source_path) return std::nullopt;
+  ImportUserDictionaryTextRequest p;
+  p.source_path = std::move(*source_path);
+  if (!ReadOptionalString(*v, "format", p.format) ||
+      !ReadOptionalString(*v, "conflict_resolution", p.conflict_resolution) ||
+      !ReadOptionalBool(*v, "dry_run", p.dry_run))
+    return std::nullopt;
+  // Unknown values must not fall through to a real format or policy.
+  if (p.format != "auto" && p.format != "msime" && p.format != "google" &&
+      p.format != "azookey_tsv")
+    return std::nullopt;
+  if (!IsKnownConflictResolution(p.conflict_resolution)) return std::nullopt;
+  return p;
+}
+
+std::string BuildImportUserDictionaryTextResponse(const ImportUserDictionaryTextResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  if (p.format) o.emplace("format", j::Value(*p.format));
+  if (p.encoding) o.emplace("encoding", j::Value(*p.encoding));
+  if (p.counts) {
+    j::Object skipped;
+    skipped.emplace("malformed", j::Value(p.counts->malformed));
+    skipped.emplace("too_long", j::Value(p.counts->too_long));
+    skipped.emplace("unsupported_pos", j::Value(p.counts->unsupported_pos));
+    skipped.emplace("pos_mismatch", j::Value(p.counts->pos_mismatch));
+    j::Object counts;
+    counts.emplace("added", j::Value(p.counts->added));
+    counts.emplace("replaced", j::Value(p.counts->replaced));
+    counts.emplace("kept", j::Value(p.counts->kept));
+    counts.emplace("duplicates_in_file", j::Value(p.counts->duplicates_in_file));
+    counts.emplace("skipped", j::Value(std::move(skipped)));
+    o.emplace("counts", j::Value(std::move(counts)));
+  }
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ImportUserDictionaryTextResponse> ParseImportUserDictionaryTextResponse(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  ImportUserDictionaryTextResponse p;
+  p.ok = *ok;
+  p.error = v->GetString("error");
+  p.format = v->GetString("format");
+  p.encoding = v->GetString("encoding");
+  if (const auto* counts = v->FindObject("counts")) {
+    const j::Value counts_value(*counts);
+    UserDictionaryTextImportCounts c;
+    c.added = counts_value.GetUInt("added").value_or(0);
+    c.replaced = counts_value.GetUInt("replaced").value_or(0);
+    c.kept = counts_value.GetUInt("kept").value_or(0);
+    c.duplicates_in_file = counts_value.GetUInt("duplicates_in_file").value_or(0);
+    if (const auto* skipped = counts_value.FindObject("skipped")) {
+      const j::Value skipped_value(*skipped);
+      c.malformed = skipped_value.GetUInt("malformed").value_or(0);
+      c.too_long = skipped_value.GetUInt("too_long").value_or(0);
+      c.unsupported_pos = skipped_value.GetUInt("unsupported_pos").value_or(0);
+      c.pos_mismatch = skipped_value.GetUInt("pos_mismatch").value_or(0);
+    }
+    p.counts = c;
+  }
+  return p;
+}
+
 // -------- ResetLearningStore --------
 
 std::string BuildResetLearningStoreRequest(const ResetLearningStoreRequest& p) {

@@ -209,6 +209,9 @@ int main(int argc, char** argv) {
   size_t window_count = 200;
   int iterations = 30;
   std::map<size_t, double> max_p95;  // By reading length; checked with N = 16.
+  // --head: also search each window for the candidates of its first `head` code points
+  // (spec section 7.3, M66). 0 leaves the output as without the option.
+  size_t head = 0;
   try {
     const auto args = azookey::bench::Utf8CommandLineArguments(argc, argv);
     for (size_t i = 1; i < args.size(); i += 2) {
@@ -226,13 +229,15 @@ int main(int argc, char** argv) {
         max_p95[16] = std::stod(value);
       else if (args[i] == "--max-p95-ms-32")
         max_p95[32] = std::stod(value);
+      else if (args[i] == "--head")
+        head = static_cast<size_t>(std::stoul(value));
       else
         throw std::invalid_argument("unknown option: " + args[i]);
     }
     if (dict_dir.empty() || window_count == 0 || iterations < 1)
       throw std::invalid_argument(
           "usage: azookey_lattice_bench --dict-dir DIR [--eval FILE] [--windows N]"
-          " [--iterations N] [--max-p95-ms-16 MS] [--max-p95-ms-32 MS]");
+          " [--iterations N] [--max-p95-ms-16 MS] [--max-p95-ms-32 MS] [--head CP]");
 
     const auto rss_before = ResidentMb();
     core::LatticeDictionary dictionary;
@@ -274,37 +279,49 @@ int main(int argc, char** argv) {
       // 64 code points, the longest reading with a lattice, has no budget of its own (spec 3.2).
       for (const size_t length : {size_t{16}, size_t{32}, size_t{64}}) {
         const auto windows = Windows(codepoints, length, window_count);
-        core::LatticeQuery query;
-        query.max_paths = max_paths;
-        for (const auto& window : windows)  // Warm-up: page the dictionaries in.
-          (void)core::ConvertLattice(window, dictionary, vocabularies, query);
-        std::vector<double> times;
-        std::map<std::string, size_t> statuses;
-        size_t paths = 0, limited = 0;
-        for (int round = 0; round < iterations; ++round) {
-          for (const auto& window : windows) {
-            start = Clock::now();
-            const auto result = core::ConvertLattice(window, dictionary, vocabularies, query);
-            times.push_back(Ms(start, Clock::now()));
-            ++statuses[StatusName(result.status)];
-            paths += result.paths.size();
-            limited += result.limited ? 1 : 0;
+        // With --head, the same windows again as a first segment and its remaining reading
+        // (segment-editing-spec section 5.3). The budgets gate the whole-reading search only.
+        for (const bool head_only : {false, true}) {
+          if (head_only && (head == 0 || head >= length)) continue;
+          core::LatticeQuery query;
+          query.max_paths = max_paths;
+          if (head_only) {
+            query.constraints.word_boundaries = {static_cast<uint32_t>(head)};
+            query.head_only = true;
           }
-        }
-        const auto p95 = Percentile(times, 95);
-        std::cout << "lattice_build_search length=" << length << " n=" << max_paths
-                  << " count=" << times.size() << " p50_ms=" << Percentile(times, 50)
-                  << " p95_ms=" << p95 << " p99_ms=" << Percentile(times, 99)
-                  << " max_ms=" << *std::max_element(times.begin(), times.end())
-                  << " mean_paths=" << static_cast<double>(paths) / times.size()
-                  << " limited=" << limited;
-        for (const auto& [status, count] : statuses) std::cout << ' ' << status << '=' << count;
-        std::cout << '\n';
-        const auto budget = max_p95.find(length);
-        if (max_paths == 16 && budget != max_p95.end() && p95 > budget->second) {
-          std::cout << "over_budget length=" << length << " p95_ms=" << p95
-                    << " max_p95_ms=" << budget->second << '\n';
-          within_budget = false;
+          for (const auto& window : windows)  // Warm-up: page the dictionaries in.
+            (void)core::ConvertLattice(window, dictionary, vocabularies, query);
+          std::vector<double> times;
+          std::map<std::string, size_t> statuses;
+          size_t paths = 0, limited = 0;
+          for (int round = 0; round < iterations; ++round) {
+            for (const auto& window : windows) {
+              start = Clock::now();
+              const auto result = core::ConvertLattice(window, dictionary, vocabularies, query);
+              times.push_back(Ms(start, Clock::now()));
+              ++statuses[StatusName(result.status)];
+              paths += result.paths.size();
+              limited += result.limited ? 1 : 0;
+            }
+          }
+          const auto p95 = Percentile(times, 95);
+          std::cout << (head_only ? "lattice_head_search" : "lattice_build_search")
+                    << " length=" << length;
+          if (head_only) std::cout << " head=" << head;
+          std::cout << " n=" << max_paths << " count=" << times.size()
+                    << " p50_ms=" << Percentile(times, 50) << " p95_ms=" << p95
+                    << " p99_ms=" << Percentile(times, 99)
+                    << " max_ms=" << *std::max_element(times.begin(), times.end())
+                    << " mean_paths=" << static_cast<double>(paths) / times.size()
+                    << " limited=" << limited;
+          for (const auto& [status, count] : statuses) std::cout << ' ' << status << '=' << count;
+          std::cout << '\n';
+          const auto budget = max_p95.find(length);
+          if (!head_only && max_paths == 16 && budget != max_p95.end() && p95 > budget->second) {
+            std::cout << "over_budget length=" << length << " p95_ms=" << p95
+                      << " max_p95_ms=" << budget->second << '\n';
+            within_budget = false;
+          }
         }
       }
     }

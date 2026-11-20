@@ -644,8 +644,10 @@ JIS 配列と US 配列の違い（`@` `:` `"` `(` などの位置）は表を�
   1. 絵文字検索の `:` トリガ（`docs/candidate-rewriter-spec.md` §11）。
   2. カッコ補完が有効なアプリのカッコ（`docs/bracket-pairing-spec.md` §3.1）。ただし、未確定の `n` の後の `'` は
      4 へ譲る。
-  3. カスタムローマ字表（`inputStyle = custom`）が続けられる文字。
+  3. 表駆動の入力方式（`inputStyle` が `custom` か `azik`。`docs/input-style-spec.md` §5）の表が続けられる文字。
   4. `n` の後のアポストロフィ（下記）。
+- かな入力（`inputStyle = kanaJis`）の表のキーは、上の処理順とこの表より先に、表のかなを読みに足す
+  （`docs/input-style-spec.md` §4.1）。
 - 一括変換（`docs/romaji-batch-conversion-spec.md`）の raw 入力には打鍵した ASCII の文字を保持し、
   かな preview と変換の読みでは表の全角文字にする（句読点と同じ）。raw romaji preview の表示で全角にするのは
   下の `、。？！` だけで、他の記号は打鍵した ASCII のまま見せる。全角化はローマ字表を通した後の文字列に掛けるので、
@@ -770,7 +772,9 @@ legacy と同じく先頭文節だけを対象にする（下の項目）。
   大文字にせず小文字とし、読みに取り込んだ数字はそのまま、記号は §3.5 の表を逆に引いて打鍵した ASCII に戻す
   （`dai3kai` → `dai3kai`、`Kakko[` → `kakko[`）。legacy は数字・記号を含む読みでも打鍵どおりの綴りを出すので、
   この場合の大小（`Kakko[` → legacy は `Kakko[`）とヘボン式に直る綴り（`si` → `shi`）は legacy との差である。
-  カスタムローマ字表の composition では、§4.1 の判定が一致しても生ローマ字を使わずヘボン式にする。ヘボン式で
+  表駆動の入力方式（カスタムローマ字表と AZIK。`docs/input-style-spec.md` §5）の composition では、§4.1 の判定が
+  一致しても生ローマ字を使わずヘボン式にする。かな入力の composition には生ローマ字が無いので、同じくヘボン式に
+  する（同 §6）。ヘボン式で
   綴れない並び（`ふぁ` のような表に無い拗音、末尾の `っ`）を含むときは、数字・記号で区切られたかなの連続ごと
   かな 1 文字ずつ綴り、小書きのかなと `っ` には `x` を前置する（`ふぁ` → `fuxa`、`がっこうふぁん` →
   `gaxtukoufuxan`）。

@@ -1683,8 +1683,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
       補正（`docs/typo-correction-learning-spec.md`）の信号でもある。英単語と打ち間違いのどちらとして
       扱うかは、分割を先に行い英語区間を補正の対象から外す（spec §12）。
     - **カスタムローマ字テーブル**: `inputStyle=custom` の表は TIP にだけあるため、Host が生ローマ字から
-      かなを再計算できない（`docs/inline-english-candidate-spec.md` §4.1.1 と同じ制約）。カスタム表が
-      有効な composition では M63 は働かない（spec §5）。
+      かなを再計算できない（`docs/inline-english-candidate-spec.md` §4.1.1 と同じ制約）。`inputStyle` が
+      `default` でない composition（カスタム表、AZIK、かな入力）では M63 は働かない（spec §5）。
     - **Backspace と編集**: 生ローマ字とかなの対応は、Backspace・読みの補正・Unicode 入力で崩れる。
       M60 §4.1 と同じく、対応が崩れたときは自動英字化を止めて通常の変換へ戻す。
     - **辞書のライセンス**: 同梱する英単語辞書は再配布可能な出典に限る（`docs/licensing-policy.md`）。

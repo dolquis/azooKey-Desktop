@@ -43,7 +43,7 @@ AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御�
 
 | モード | 学習 | 予測 | LLM / 外部 API | ログ | 用途 |
 |---|---|---|---|---|---|
-| `normal` | ON | ON | 設定に従う | 通常 | 普段使い |
+| `normal` | ON | ON | 設定に従う（外部 AI は `privacy.externalAiConsent` の同意が要る。§5.2） | 通常 | 普段使い |
 | `private` | OFF | ON | local のみ | 最小 | 学習させたくない入力 |
 | `secure` | OFF | OFF | OFF | エラーのみ | パスワード / 秘密情報 |
 | `offline` | ON | ON | local のみ | 通常 | ネットワーク禁止 |

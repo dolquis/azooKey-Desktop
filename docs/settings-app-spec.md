@@ -95,7 +95,7 @@ Microsoft Learn の事実は
 | 群 | ペイン | 内容 |
 |---|---|---|
 | 設定 | 入力 | 入力方式（`convertKeysAction` / `fullWidthSpace` / `inputScopeSwitching` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点（`punctuationConversion` と動的句読点）/ ローマ字の一括変換 |
-| 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ カッコ補完（カッコの字形を決める `inputMode` を含む）/ `maxCandidates` |
+| 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ 同音異義語の注記（`homophoneNotes`）/ カッコ補完（カッコの字形を決める `inputMode` を含む）/ `maxCandidates` |
 | 設定 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 / 「学習」ペインのユーザー辞書タブを開くボタン |
 | 設定 | AI 変換 | `model.enabled` / `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択（「選択を外す」で空の未選択に戻す。§3.7）/ `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6）/ `model.backendPreference` / `powerProfile` / `inferenceThreads` / `maxContextLength` |
 | 設定 | AI サービス | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` / `privacy.externalAiConsent`（OpenAI の節の先頭） |
@@ -351,6 +351,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `inlineEnglish*` の 6 キーと `fullWidthEnglishCandidate` | bool / integer / number / string（パス） | 各キーの schema 既定 | 候補 | M60 | 即時 | `inline-english-candidate-spec.md` |
 | `mixedEnglishAutoConversion` | bool | `false` | 候補 | M63 | 即時 | `mixed-english-auto-conversion-spec.md` §14 |
 | `numberRewriter` / `katakanaRewriter` / `dateTimeRewriter` / `calculatorRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 候補 | M62 | 即時 | `candidate-rewriter-spec.md` |
+| `homophoneNotes` | bool | `false` | 候補 | M73 | 即時（`false` から `true` に変えた次の問い合わせで注記データを読む） | `homophone-notes-spec.md` §6 |
 | `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書（`typoCorrectionMode` は `typoCorrection` を含む実効値を示す） | M35 | 即時 | `typo-correction-learning-spec.md`（§8・§12.14） |
 | `typoCorrection` | object | 下位キーの既定に従う | 辞書（`learnPersonalPatterns` だけ。ほかの下位キーは保存時保持。`typoCorrection.mode` は辞書ペインで `typoCorrectionMode` を変えたときに一緒に書く） | M55 | 即時 | `typo-correction-learning-spec.md` §12.14 |
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
@@ -538,6 +539,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `powerProfile` / `inferenceThreads` / `maxCandidates` / `maxContextLength` / 実験フラグ | — | M30（`powerProfile` / `inferenceThreads` / `maxContextLength` は AI 変換ペイン、`maxCandidates` は候補ペイン、実験フラグは詳細ペイン） |
 | `inputMode` / `convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン。`inputMode` は候補ペイン） |
 | `inputScopeSwitching` | — | M67（入力ペインとアプリ別の編集ダイアログ） |
+| `homophoneNotes` | — | M73（候補ペイン） |
 | 句読点・バッチ変換・インライン英単語候補・候補リライター・カッコ補完の各キー | — | M30（句読点・バッチ変換は入力ペイン、インライン英単語候補・候補リライター・カッコ補完は候補ペイン） |
 | `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
 | `openAiApiKey` | — | M34（AI サービスペイン。鍵は `sideload-packaging-spec` §9 DPAPI） |

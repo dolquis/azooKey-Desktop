@@ -459,6 +459,7 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
     "emojiTriggerMinQueryLength": 2,
     "symbolDataPath": "C:/data/symbol.tsv",
     "emojiDataPath": "C:/data/emoji.tsv",
+    "homophoneNotes": true,
     "inferenceThreads": 6,
     "maxCandidates": 12,
     "maxContextLength": 20,
@@ -504,6 +505,8 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   EXPECT_EQ(root.at("emojiTriggerMinQueryLength").AsNumber(), 2.0);
   EXPECT_EQ(root.at("symbolDataPath").AsString(), "C:/data/symbol.tsv");
   EXPECT_EQ(root.at("emojiDataPath").AsString(), "C:/data/emoji.tsv");
+  ASSERT_TRUE(root.contains("homophoneNotes"));
+  EXPECT_TRUE(root.at("homophoneNotes").AsBool());
   EXPECT_EQ(root.at("inferenceThreads").AsNumber(), 6.0);
   EXPECT_EQ(root.at("maxCandidates").AsNumber(), 12.0);
   EXPECT_EQ(root.at("maxContextLength").AsNumber(), 20.0);
@@ -555,6 +558,31 @@ TEST(SettingsDocumentTest, InputStylesSurviveAnUnrelatedSaveAndOtherValuesAreDro
       EXPECT_EQ(root.at("inputStyle").AsString(), style);
     } else {
       EXPECT_FALSE(root.contains("inputStyle"));
+    }
+    std::filesystem::remove_all(dir);
+  }
+}
+
+// M73 (docs/homophone-notes-spec.md §6): a boolean survives an unrelated save;
+// any other value is dropped, which reads as the default false.
+TEST(SettingsDocumentTest, HomophoneNotesSurvivesAnUnrelatedSaveAndOtherValuesAreDropped) {
+  for (const auto& [value, kept] : {std::pair{"true", true}, std::pair{"false", true},
+                                    std::pair{"\"true\"", false}, std::pair{"1", false}}) {
+    SCOPED_TRACE(value);
+    const auto dir = TestDir("azookey_settings_document_homophone_notes");
+    const auto path = dir / "settings.json";
+    WriteText(path, std::string(R"({"homophoneNotes":)") + value + "}");
+    azookey::settings::EditableSettings settings;
+    const auto saved = azookey::settings::SaveSettingsDocument(path, settings);
+    ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed && parsed->IsObject());
+    const auto& root = parsed->AsObject();
+    if (kept) {
+      ASSERT_TRUE(root.contains("homophoneNotes"));
+      EXPECT_EQ(root.at("homophoneNotes").AsBool(), std::string(value) == "true");
+    } else {
+      EXPECT_FALSE(root.contains("homophoneNotes"));
     }
     std::filesystem::remove_all(dir);
   }

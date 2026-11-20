@@ -79,6 +79,7 @@
   "emojiMaxCandidates": 12,
   "emojiTriggerMinQueryLength": 1,
   "emojiDataPath": "",
+  "homophoneNotes": false,
   "typoCorrectionMode": "suggest",
   "typoMinCount": 3,
   "typoCorrection": {

@@ -342,6 +342,7 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.emoji_trigger_min_query_length = ReadClampedInt32(
       object, "emojiTriggerMinQueryLength", settings.emoji_trigger_min_query_length, 1, 8);
   settings.emoji_data_path = ReadString(object, "emojiDataPath", settings.emoji_data_path);
+  settings.homophone_notes = ReadBool(object, "homophoneNotes", settings.homophone_notes);
 
   if (const auto* model = ReadObject(object, "model")) {
     // docs/model-management-spec.md section 5.2: model.* wins, but a root key
@@ -464,6 +465,8 @@ void SettingsStore::PublishPrivacyPolicy() {
   // typo correction off stops ObserveTypo before the engine config follows.
   const auto& typo = settings_.typo_correction;
   typo_learning_ = typo.learn_personal_patterns && typo.enabled && typo.mode != "off";
+  // Every change of settings_ passes here, so the flag follows each load.
+  homophone_notes_.store(settings_.homophone_notes, std::memory_order_release);
 }
 
 SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {

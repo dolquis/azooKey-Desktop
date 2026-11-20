@@ -23,6 +23,7 @@
 原典の全ファイルは同梱しない。テスト用の抜粋にも同じ表記を適用する。
 SudachiDict は配布物の静的辞書層の原典であり、生成手順は同節に記す。
 `data/english-words.tsv` の 3 出典は「英単語辞書」節に記す。
+`data/homophone-notes.tsv` の出典は「japanese-usage-dictionary」節に記す。
 `core/src/` の内蔵ローマ字表と AZIK の表は「AzooKeyKanaKanjiConverter」節に記す。
 
 ### Mozc（記号・絵文字）
@@ -635,6 +636,47 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 SPDX-License-Identifier: MIT
+
+### japanese-usage-dictionary（同音異義語の注記 `data/homophone-notes.tsv`）
+
+- Source: https://github.com/hiroyuki-komatsu/japanese-usage-dictionary （tag `2025-01-25`。
+  archive `2025-01-25.zip` の SHA-256 `140f24f71f7d78d5eb5b93a9c079f44f23728dca5ab16bf857fe8a3fa1bf20ed`。
+  Mozc の `src/MODULE.bazel` が同じ archive を同じ値で固定する）
+- License: BSD-2-Clause
+- Copyright: Copyright (c) 2011, Hiroyuki Komatsu, Shoji Ogura, Tsuyoshi Horo
+- Derived path: `data/homophone-notes.tsv`（MSI では `<インストール先>\data\homophone-notes.tsv`）
+- Input: `usage_dict.txt`
+- Derived: yes。品詞の列を落とし、語釈を `docs/homophone-notes-spec.md` §3.3 の規則で短くした注記に
+  置き換えた派生データである。原典のファイルはそのまま同梱しない。
+  再生成は `python scripts/homophone_notes_porter.py --fetch`。
+- Notes: 語釈の元（既存の辞書から写したものか、著作権者が書き下ろしたものか）は原典の README と
+  LICENSE に書かれていない（`docs/homophone-notes-spec.md` §2）。
+
+Copyright (c) 2011, Hiroyuki Komatsu, Shoji Ogura, Tsuyoshi Horo
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are
+permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above
+   copyright notice, this list of conditions and the
+   following disclaimer.
+
+ * Redistributions in binary form must reproduce the above
+   copyright notice, this list of conditions and the
+   following disclaimer in the documentation and/or other
+   materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+SPDX-License-Identifier: BSD-2-Clause
 
 ## 同梱するプロジェクト自作データ
 

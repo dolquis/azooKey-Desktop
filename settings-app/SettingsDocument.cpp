@@ -255,7 +255,7 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "inlineEnglishCandidates" || key == "mixedEnglishAutoConversion" ||
                key == "inlineEnglishCaseVariants" || key == "fullWidthEnglishCandidate" ||
                key == "inlineEnglishDictionary" || key == "emojiRewriter" ||
-               key == "emojiTriggerSearch" || key == "bracketPairing" ||
+               key == "emojiTriggerSearch" || key == "homophoneNotes" || key == "bracketPairing" ||
                key == "bracketSkipOverClosing" || key == "bracketBackspaceDeletesPair" ||
                key == "bracketPairingInAlnumMode" || key == "bracketSymmetricQuotePairing" ||
                key == "bracketWrapSelection") {

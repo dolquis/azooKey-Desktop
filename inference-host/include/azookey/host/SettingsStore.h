@@ -162,6 +162,8 @@ struct RuntimeSettings {
   int32_t emoji_max_candidates{12};
   int32_t emoji_trigger_min_query_length{1};
   std::string emoji_data_path;
+  // M73 (docs/homophone-notes-spec.md section 6).
+  bool homophone_notes{false};
   // M55 typoCorrection.*, which absorbs the M35 root typoCorrectionMode.
   RuntimeTypoCorrectionSettings typo_correction;
   // M35 typoMinCount.
@@ -202,6 +204,9 @@ class SettingsStore {
   // Hold through the learning operation. Reload publishes under this same lock,
   // independently of model loading and the caller's config serialization lock.
   PrivacyGuard LockPrivacyPolicy() const;
+  // RuntimeSettings::homophone_notes as of the last load, readable from any
+  // query without the caller's config lock (homophone-notes-spec section 6).
+  bool homophone_notes_enabled() const { return homophone_notes_.load(std::memory_order_acquire); }
 
   SettingsLoadResult Load();
   SettingsLoadResult Reload();
@@ -240,6 +245,7 @@ class SettingsStore {
   core::PrivacyPolicy privacy_policy_{false, false, true};
   bool privacy_mode_secure_{false};
   bool typo_learning_{true};
+  std::atomic<bool> homophone_notes_{false};
   RuntimeSettings settings_;
   SettingsLoadResult last_result_;
   std::mutex peeked_mutex_;

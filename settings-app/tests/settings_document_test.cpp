@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -531,6 +532,32 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   EXPECT_EQ(root.at("logLevel").AsString(), "debug");
   EXPECT_FALSE(saved.warnings.empty());
   std::filesystem::remove_all(dir);
+}
+
+// M70 (docs/input-style-spec.md §2): an input style survives an unrelated save;
+// a value outside the four is dropped, which reads as default.
+TEST(SettingsDocumentTest, InputStylesSurviveAnUnrelatedSaveAndOtherValuesAreDropped) {
+  for (const auto& [style, kept] :
+       {std::pair{"azik", true}, std::pair{"kanaJis", true}, std::pair{"custom", true},
+        std::pair{"default", true}, std::pair{"kanaUs", false}}) {
+    SCOPED_TRACE(style);
+    const auto dir = TestDir("azookey_settings_document_input_style");
+    const auto path = dir / "settings.json";
+    WriteText(path, std::string(R"({"inputStyle":")") + style + R"("})");
+    azookey::settings::EditableSettings settings;
+    const auto saved = azookey::settings::SaveSettingsDocument(path, settings);
+    ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed && parsed->IsObject());
+    const auto& root = parsed->AsObject();
+    if (kept) {
+      ASSERT_TRUE(root.contains("inputStyle"));
+      EXPECT_EQ(root.at("inputStyle").AsString(), style);
+    } else {
+      EXPECT_FALSE(root.contains("inputStyle"));
+    }
+    std::filesystem::remove_all(dir);
+  }
 }
 
 TEST(SettingsDocumentTest, SavesModelSettingsWithoutDroppingTipBracketConfiguration) {

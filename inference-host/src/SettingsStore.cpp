@@ -251,8 +251,8 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       ReadBool(object, "llmMagicConversion", settings.llm_magic_conversion);
   settings.log_level =
       ReadEnum(object, "logLevel", settings.log_level, {"error", "warn", "info", "debug"});
-  settings.input_style =
-      ReadEnum(object, "inputStyle", settings.input_style, {"default", "custom"});
+  settings.input_style = ReadEnum(object, "inputStyle", settings.input_style,
+                                  {"default", "azik", "kanaJis", "custom"});
   settings.custom_romaji_table_path =
       ReadString(object, "customRomajiTablePath", settings.custom_romaji_table_path);
   settings.prediction_enabled = ReadBool(object, "predictionEnabled", settings.prediction_enabled);

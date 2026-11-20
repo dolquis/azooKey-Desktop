@@ -176,6 +176,26 @@ TEST(SettingsFieldsTest, ConditionsReferToSwitchesAndTheirValues) {
   }
 }
 
+// M70 (docs/input-style-spec.md §2): four input styles, and the custom table's
+// path only while the custom style is chosen (settings-app-spec §3.2).
+TEST(SettingsFieldsTest, InputStylesOfferFourStylesAndThePathOnlyForCustom) {
+  const auto* style = azookey::settings::FindSettingField("inputStyle");
+  ASSERT_NE(style, nullptr);
+  EXPECT_EQ(style->options,
+            (std::vector<std::string_view>{"default", "azik", "kanaJis", "custom"}));
+  const auto* path = azookey::settings::FindSettingField("customRomajiTablePath");
+  ASSERT_NE(path, nullptr);
+  azookey::settings::SettingValues values;
+  EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*path, values));
+  for (const char* other : {"default", "azik", "kanaJis"}) {
+    SCOPED_TRACE(other);
+    values["inputStyle"] = std::string(other);
+    EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*path, values));
+  }
+  values["inputStyle"] = std::string("custom");
+  EXPECT_TRUE(azookey::settings::IsSettingFieldActive(*path, values));
+}
+
 TEST(SettingsFieldsTest, PrivacyAxesAreActiveOnlyInCustomMode) {
   const auto* axis = azookey::settings::FindSettingField("privacy.custom.learning");
   ASSERT_NE(axis, nullptr);

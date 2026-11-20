@@ -358,9 +358,9 @@ std::shared_ptr<const core::CustomRomajiTable> TipLocalSettings::RomajiSnapshot(
   return romaji_table_;
 }
 
-TipInputStyleSettings TipLocalSettings::InputStyleSnapshot() const {
+TipInputStyle TipLocalSettings::InputStyleSnapshot() const {
   const std::lock_guard lock(mutex_);
-  return {input_style_, romaji_table_};
+  return input_style_;
 }
 
 void TipLocalSettings::Reload() noexcept {

@@ -22484,6 +22484,37 @@ TEST(TsfTipKanaInputTest, AStyleChangeAppliesFromTheNextInput) {
   EXPECT_EQ(h.service.preedit_kana_, "た");
 }
 
+// Spec §2: a key typed over the window commits it and starts the next input,
+// which takes the current setting, on the core path as on the TIP's own.
+TEST(TsfTipKanaInputTest, AStyleChangeAppliesToTheKeyTypedOverTheWindow) {
+  for (const bool legacy : {false, true}) {
+    {
+      SCOPED_TRACE(::testing::Message() << "kana to romaji, legacy " << legacy);
+      DocumentPreeditHarness h;
+      OpenKanaWindow(h, legacy);
+      h.service.set_input_style_for_test(TipInputStyle::Default);
+      ASSERT_TRUE(TypeKanaKey(h, {'T', 0x14}));
+      ASSERT_TRUE(TypeKanaKey(h, {'A', 0x1E}));
+      EXPECT_EQ(h.service.preedit_kana_, "た");
+      EXPECT_EQ(h.context.document->text, L"蚊た");
+    }
+    {
+      SCOPED_TRACE(::testing::Message() << "romaji to kana, legacy " << legacy);
+      DocumentPreeditHarness h;
+      ConfigureTypoHarness(h, legacy);
+      TypeTypoRomaji(h, "KA");
+      ASSERT_TRUE(h.Press(VK_SPACE));
+      AnswerWindow(h);
+      ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+      h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+      ASSERT_TRUE(TypeKanaKey(h, kKanaNi));
+      EXPECT_EQ(h.service.preedit_kana_, "かに");
+      EXPECT_EQ(h.context.document->text, L"蚊かに");
+    }
+  }
+}
+
 // M70 AZIK (docs/input-style-spec.md §3, §5): the built-in table on the
 // table-driven path, with the exclusions of a custom table.
 TEST(TsfTipAzikTest, KeysGoThroughTheTableWithoutTheRomajiSpecialCases) {

@@ -360,13 +360,11 @@ TEST_F(LocalSettingsTest, InputStyleReadsAzikAndKanaJisAndDefaultsOtherValues) {
     reader.Stop();
     Write(json);
     ASSERT_TRUE(reader.Start(path));
-    const auto snapshot = reader.InputStyleSnapshot();
-    EXPECT_EQ(snapshot.style, style);
+    EXPECT_EQ(reader.InputStyleSnapshot(), style);
     if (style == TipInputStyle::Azik)
-      EXPECT_EQ(snapshot.table, azookey::core::BuiltinAzikTable());
+      EXPECT_EQ(reader.RomajiSnapshot(), azookey::core::BuiltinAzikTable());
     else
-      EXPECT_FALSE(snapshot.table);
-    EXPECT_EQ(reader.RomajiSnapshot(), snapshot.table);
+      EXPECT_FALSE(reader.RomajiSnapshot());
   }
 }
 
@@ -378,12 +376,12 @@ TEST_F(LocalSettingsTest, CustomRomajiKeepsTheCaseOfItsRules) {
   }
   Write(R"({"inputStyle":"custom"})");
   ASSERT_TRUE(reader.Start(path));
-  const auto snapshot = reader.InputStyleSnapshot();
-  EXPECT_EQ(snapshot.style, azookey::tsf::TipInputStyle::Custom);
-  ASSERT_TRUE(snapshot.table);
-  ASSERT_TRUE(snapshot.table->contains("KA"));
-  EXPECT_EQ(snapshot.table->at("KA").output, "カ");
-  EXPECT_EQ(snapshot.table->at("ka").output, "か");
+  EXPECT_EQ(reader.InputStyleSnapshot(), azookey::tsf::TipInputStyle::Custom);
+  const auto table = reader.RomajiSnapshot();
+  ASSERT_TRUE(table);
+  ASSERT_TRUE(table->contains("KA"));
+  EXPECT_EQ(table->at("KA").output, "カ");
+  EXPECT_EQ(table->at("ka").output, "か");
 }
 
 TEST_F(LocalSettingsTest, RewriterChangesReachExistingTipWithoutHandshake) {

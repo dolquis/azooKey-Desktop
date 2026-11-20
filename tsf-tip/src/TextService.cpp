@@ -3206,9 +3206,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
 
     // Input-style-spec §4.1: a key of the kana table is decided here, ahead of
-    // the key map, the emoji entry, bracket pairing and the symbol table.
-    const auto kana_key =
-        TypesKana() ? LookupKanaKey(wParam, lParam, modifiers) : std::optional<KanaKey>{};
+    // the key map, the emoji entry, bracket pairing and the symbol table. Over
+    // the candidate window the key starts the next input (spec §2).
+    const auto kana_key = TypesKana(candidate_ui_.IsShowing())
+                              ? LookupKanaKey(wParam, lParam, modifiers)
+                              : std::optional<KanaKey>{};
     const auto kana = kana_key ? std::optional(kana_key->kana) : std::nullopt;
     if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
@@ -3451,8 +3453,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     ReprobeInputScopeFieldBeforeKey(context);
     // Input-style-spec §2: a composition keeps the style it started with; a key
     // typed without input takes the current setting.
-    if (!HasCompositionInput())
-      composition_input_style_ = local_settings_.InputStyleSnapshot().style;
+    if (!HasCompositionInput()) composition_input_style_ = local_settings_.InputStyleSnapshot();
     // Spec §3.7: a space whose lock was not granted is inserted again once,
     // before this key, which is then handled as usual. The probe does it, as
     // it finishes Unicode input, so a key the app takes lands after the space.
@@ -3730,9 +3731,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     // Input-style-spec §4.1: a key of the kana table is decided here, as the
     // probe decides it, ahead of the key map, the emoji entry, bracket pairing
-    // and the symbol table.
-    const auto kana_key =
-        TypesKana() ? LookupKanaKey(wParam, lParam, modifiers) : std::optional<KanaKey>{};
+    // and the symbol table. Over the candidate window the key starts the next
+    // input (spec §2).
+    const auto kana_key = TypesKana(candidate_ui_.IsShowing())
+                              ? LookupKanaKey(wParam, lParam, modifiers)
+                              : std::optional<KanaKey>{};
     const auto kana = kana_key ? std::optional(kana_key->kana) : std::nullopt;
     if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
@@ -3854,6 +3857,28 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       retyping_after_commit_ = true;
       return OnKeyDown(context, wParam, lParam, eaten);
     };
+    // Input-style-spec §2: a character typed over the window starts the next
+    // input, which takes the current setting. When that is not the style the
+    // composition started with, the window commits what it shows (as typing
+    // over it does, segment-editing-spec §4) and the key is typed again
+    // without input, on the core path as on the TIP's own.
+    auto commit_shown_then_retype = [&]() -> HRESULT {
+      if (!core_input_active_ || input_state_.kind() != core::InputStateKind::Selecting)
+        return commit_selection_then_retype();
+      const HRESULT commit_hr = ApplyInputStateResult(context, CommitShownSegmentResult());
+      if (FAILED(commit_hr)) return commit_hr;
+      *eaten = TRUE;
+      if (committing_) {
+        HoldRetryWaitingKey(context, wParam, lParam);
+        return S_OK;
+      }
+      commit_undo_target_.reset();
+      if (retyped) return S_OK;
+      typo_test_key_context_ = context;
+      typo_test_key_ = wParam;
+      retyping_after_commit_ = true;
+      return OnKeyDown(context, wParam, lParam, eaten);
+    };
 
     const HRESULT corrected_hr = ApplyPendingCorrectedReading(context);
     if (FAILED(corrected_hr)) return corrected_hr;
@@ -3905,6 +3930,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (custom_input && !key_event)
       key_event = core::UserActionEvent{UserAction::Input, 0, modifiers, 0};
     const bool is_input = IsActionKey(key_event, UserAction::Input);
+    if (cand_visible && is_input &&
+        local_settings_.InputStyleSnapshot() != composition_input_style_)
+      return commit_shown_then_retype();
     const bool kana_style = InputStyleForKey() == TipInputStyle::KanaJis;
     if (is_input && !has_preedit && batch_raw_romaji_.empty()) {
       // Capture the latest immutable table only when a new input begins.
@@ -5435,8 +5463,10 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
   if (open_close == OpenCloseKeyAction::Open) return WindowWaitKey::Pass;
   if (open_close != OpenCloseKeyAction::None) return WindowWaitKey::Drop;
   // A kana key types its kana, or chooses a candidate, whatever the layout
-  // makes of it (input-style-spec §4.4).
-  if (TypesKana() && LookupKanaKey(key, key_data, modifiers)) return WindowWaitKey::Hold;
+  // makes of it (input-style-spec §4.4). It is replayed over the window, where
+  // it starts the next input (spec §2).
+  if (TypesKana(/*next_input=*/true) && LookupKanaKey(key, key_data, modifiers))
+    return WindowWaitKey::Hold;
   // Segment-editing-spec §5.2: the first segment's wait also holds ← → Ctrl+B
   // Ctrl+F, which a resized segment takes. A resize runs at once unless keys
   // wait before it; Space's wait holds it for the window (§4).
@@ -5604,7 +5634,7 @@ bool TextService::HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, L
                            local_settings_.ConvertKeysActionSnapshot()) != OpenCloseKeyAction::None)
     return false;
   // A kana key starts the next input whatever its VK (input-style-spec §4.4).
-  if (local_settings_.InputStyleSnapshot().style == TipInputStyle::KanaJis &&
+  if (local_settings_.InputStyleSnapshot() == TipInputStyle::KanaJis &&
       LookupKanaKey(key, key_data, modifiers))
     return true;
   const auto idle = MapTipKey(key, modifiers, /*has_preedit=*/false, /*cand_visible=*/false,
@@ -12280,13 +12310,14 @@ bool TextService::HasCompositionInput() const {
 }
 
 TipInputStyle TextService::InputStyleForKey() const {
-  return HasCompositionInput() ? composition_input_style_
-                               : local_settings_.InputStyleSnapshot().style;
+  return HasCompositionInput() ? composition_input_style_ : local_settings_.InputStyleSnapshot();
 }
 
-bool TextService::TypesKana() const {
+bool TextService::TypesKana(bool next_input) const {
+  const TipInputStyle style =
+      next_input ? local_settings_.InputStyleSnapshot() : InputStyleForKey();
   return emoji_mode_ == EmojiMode::Inactive && !UnicodeInputActive() &&
-         InputStyleForKey() == TipInputStyle::KanaJis;
+         style == TipInputStyle::KanaJis;
 }
 
 std::string TextService::MixedEnglishRawRomajiFor(const std::string& reading, bool secure) const {

@@ -52,13 +52,6 @@ struct TipPredictionSetting {
 // inputStyle (docs/input-style-spec.md §2). Absent, not a string or another
 // value: Default.
 enum class TipInputStyle { Default, Azik, KanaJis, Custom };
-struct TipInputStyleSettings {
-  TipInputStyle style{TipInputStyle::Default};
-  // The table of a table-driven style (spec §5): the built-in AZIK table, or
-  // the custom TSV. Null for the built-in romaji table, which a custom style
-  // also uses when its TSV cannot be read.
-  std::shared_ptr<const core::CustomRomajiTable> table;
-};
 
 // Owns a cancellable directory watch. The worker never touches TSF/COM objects.
 class TipLocalSettings final {
@@ -96,9 +89,11 @@ class TipLocalSettings final {
   bool InlineEnglishCandidatesSnapshot() const;
   // mixedEnglishAutoConversion (M63). An absent or unreadable value is false.
   bool MixedEnglishAutoConversionSnapshot() const;
+  // The table of a table-driven style (input-style-spec §5): the built-in AZIK
+  // table, or the custom TSV. Null for the built-in romaji table, which a
+  // custom style also uses when its TSV cannot be read.
   std::shared_ptr<const core::CustomRomajiTable> RomajiSnapshot() const;
-  // The style and its table, read under one lock.
-  TipInputStyleSettings InputStyleSnapshot() const;
+  TipInputStyle InputStyleSnapshot() const;
 
 #ifdef AZOOKEY_TSF_TESTING
   void SetForTest(const core::BracketSettings& settings);

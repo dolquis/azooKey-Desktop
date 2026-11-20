@@ -1317,7 +1317,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     const bool weighs_alt_readings = !parsed->live && !parsed->secure &&
                                      !parsed->alt_readings.empty() && !IsInlineSplit(split) &&
                                      !first_segment;
-    const auto* conversion = IsInlineSplit(split) || first_segment ? &as_typed : nullptr;
+    // The lattice alone reads the remaining reading (segment-editing-spec section 5.3).
+    MixedConversionOptions first_segment_options = as_typed;
+    first_segment_options.remaining_reading = parsed->remaining_reading;
+    const auto* conversion = first_segment          ? &first_segment_options
+                             : IsInlineSplit(split) ? &as_typed
+                                                    : nullptr;
     auto queried = weighs_alt_readings
                        ? engine_->QueryAmbiguousCandidatesEx(
                              parsed->reading, parsed->alt_readings, parsed->left_context, NowSec(),

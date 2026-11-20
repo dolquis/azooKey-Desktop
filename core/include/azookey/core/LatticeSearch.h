@@ -18,8 +18,13 @@ class LatticeDictionary;
 struct LatticeConstraints {
   std::vector<uint32_t> segment_breaks;  // A segment boundary must fall here.
   std::vector<uint32_t> segment_joins;   // No segment boundary may fall here.
+  // A word boundary must fall here, a segment boundary or not (M66). It only drops the nodes
+  // that span the position and never rules a transition out.
+  std::vector<uint32_t> word_boundaries;
 
-  bool Empty() const noexcept { return segment_breaks.empty() && segment_joins.empty(); }
+  bool Empty() const noexcept {
+    return segment_breaks.empty() && segment_joins.empty() && word_boundaries.empty();
+  }
 };
 
 struct LatticeWord {
@@ -56,11 +61,17 @@ struct LatticeQuery {
   size_t max_paths{8};
   LatticeConstraints constraints;
   LatticeLimits limits;
+  // Candidates of the head [0, p) of the reading (spec section 7.3, M66). The constraints must
+  // hold exactly one word boundary p and nothing else; the search is rejected otherwise. Each
+  // path then holds the words before p only, and its cost adds the smallest continuation from
+  // p to the sentence end.
+  bool head_only{};
 };
 
 struct LatticeResult {
   LatticeStatus status{LatticeStatus::Complete};
-  // A Complete search stopped at 64 x N complete paths or 64 x N x (n + 1) expansions.
+  // A Complete search stopped at 64 x N complete paths or 64 x N x (n + 1) expansions (n is p
+  // for a head_only search).
   bool limited{};
   // Paths in cost order, one per surface (spec sections 6.2 and 6.3).
   std::vector<LatticePath> paths;

@@ -77,6 +77,11 @@ struct MixedConversionOptions {
   bool typo_correction{true};
   // false skips the NLL rerank (the section 8.3 extra conversions).
   bool nll{true};
+  // M66 (segment-editing-spec section 5.3): the reading after a first segment's. Non-empty
+  // makes the request a first segment's: the lattice searches it after the reading and gives
+  // the first segment's surfaces; nothing else reads it. Set it with typo_correction false, so
+  // the reading the first segment ends with is the one converted.
+  std::string remaining_reading;
 };
 
 struct InferenceTelemetry {
@@ -656,9 +661,11 @@ class InferenceEngine {
                                            const MixedConversionOptions* mixed,
                                            bool lattice_allowed);
   // The lattice N-best of `kana` as candidates (docs/lattice-conversion-spec.md section 3.4),
-  // with the search's status for the logs of section 3.6.
+  // with the search's status for the logs of section 3.6. A non-empty `remaining_reading` makes
+  // them the candidates of `kana` as a first segment (segment-editing-spec section 5.3).
   std::vector<core::Candidate> LatticeCandidatesLocked(
-      const std::string& kana, size_t max_paths, const std::atomic<bool>* cancel,
+      const std::string& kana, const std::string& remaining_reading, size_t max_paths,
+      const std::atomic<bool>* cancel,
       std::optional<std::chrono::steady_clock::time_point> deadline,
       core::LatticeStatus& status) const;
   // Logs the static layers whose CONN the lattice does not use (section 3.6): `layer` only,

@@ -5092,6 +5092,49 @@ TEST_F(DispatcherTest, FirstSegmentRequestWithoutATypoStoreConvertsLikeAnyOther)
   EXPECT_EQ(surfaces("は"), whole);
 }
 
+// M66 (segment-editing-spec section 10): the remaining reading reaches the engine, whose lattice
+// (lattice fixture, no model) costs the first segment's paths with it: お京 trails お今日 by
+// 4000 instead of 3000 (C = 10000), so its score falls from 0.7 to 0.6.
+TEST(FirstSegmentDispatchTest, TheRemainingReadingReachesTheEngine) {
+  azookey::host::EngineConfig config;
+  config.max_candidates = 0;
+  config.lattice.enabled = true;
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
+                                        config);
+  const auto loaded =
+      engine.LoadBundledDictionaryLayers(std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "lattice");
+  ASSERT_FALSE(loaded.empty());
+  ASSERT_TRUE(loaded.back().loaded) << loaded.back().error;
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+
+  uint64_t id = 7300;
+  const auto score = [&](const std::string& remaining) {
+    ipc::QueryCandidatesRequest request;
+    request.reading = "おきょう";
+    request.remaining_reading = remaining;
+    ipc::Envelope env;
+    env.version = 1;
+    env.request_id = ++id;
+    env.type = ipc::MessageType::QueryCandidates;
+    env.payload_json = ipc::BuildQueryCandidatesRequest(request);
+    const auto response = dispatcher.Dispatch(env);
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    if (parsed)
+      for (const auto& candidate : parsed->candidates)
+        if (candidate.surface == "お京") {
+          EXPECT_EQ(candidate.reading, "おきょう");
+          return candidate.score;
+        }
+    return -1.0;
+  };
+  EXPECT_DOUBLE_EQ(score(""), 0.7);
+  EXPECT_DOUBLE_EQ(score("はいいてんきです"), 0.6);
+}
+
 // M55 (typo-correction-learning-spec section 12.13): a requested
 // typo_correction_mode and raw_keys leave the conversion to the mode the Host
 // settings resolve to (SafeMode resolves to off), secure or not, so a request

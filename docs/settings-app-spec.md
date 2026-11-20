@@ -240,6 +240,8 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 
 拡張子 `.enc` のない `learning.tsv` と `user_dict.json` は旧版からの移行元であり、移行後の保存先ではない。
 
+表のパスは既定の root（`%LOCALAPPDATA%\azooKey`）に固定する。Host の `--data-root`（開発・試験専用。`docs/windows-tsf-host-architecture.md`「Host CLI 引数」）は Host の config / data / logs / models を別の root へ移すが、設定アプリはこれを追わない。`--data-root` 付きで起動した Host は、設定アプリが保存した `settings.json` を読まず、Host 本体のログを `<root>\logs` に書く（AI 送信の失敗や句読点挿入など、一部の部品のログは `--data-root` を追わず表のパスに書く）。
+
 ### 3.5 `ITfFnConfigure` 連携（Windows 設定「詳細設定」からの起動）
 
 Windows の「設定 > 時刻と言語 > 言語と地域 > 日本語 > キーボード」や従来の Text Services
@@ -517,6 +519,7 @@ schema 自体は superset のまま変えない。
 - **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。フォルダーはログを書き出したときに
   作られるので、まだ無いか開けないときは、その旨を InfoBar で示す。場所は RuntimeLogger の既定の書き出し先と同じ
   core の `azookey::logging::DefaultLogsDirectory()` から取り、設定アプリの中で組み立て直さない。
+  開くのはこの既定の場所だけである。`--data-root` 付きで起動した Host が `<root>\logs` に書くログ（§3.4）は対象外とする。
 
 #### v1.0 / v1.x 境界表
 

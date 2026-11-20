@@ -43,6 +43,7 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
 `--model`、`--learning`、`--user-dict`、`--data-root`、`--mock-dict`、`--handshake-token` も値を必須とする。
 `--data-root` は絶対パスのみ受け付け、Host と CLI の config / data / logs / models を
 その root 配下に解決する。結合テストは一時 root を指定して通常のユーザーデータから隔離する。
+`--data-root` は開発・試験専用で、製品の起動経路は渡さない。設定アプリ・TIP・`azookey_diag` は `--data-root` を追わず、既定の root（`%LOCALAPPDATA%\azooKey`）を使う。
 `--learning` と `--user-dict` の明示パスは `--data-root` 内の既定パスより優先する。
 `userdict` より後ろのトークンは user dictionary CLI へ、`lookup` より後ろのトークンは
 読み取り専用 lookup CLI へ、`newwords` より後ろのトークンは新語承認 CLI

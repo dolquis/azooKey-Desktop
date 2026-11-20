@@ -3,6 +3,7 @@
 #include <filesystem>
 
 #include "azookey/host/UserDataPaths.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 namespace {
 
@@ -29,6 +30,22 @@ TEST(UserDataPathsTest, DefaultPathsUseLocalAppDataLayout) {
   EXPECT_EQ(paths->learning_path, local / "azooKey" / "data" / "learning.tsv");
   EXPECT_EQ(paths->user_dict_path, local / "azooKey" / "data" / "user_dict.json");
   EXPECT_EQ(paths->english_learning_path, local / "azooKey" / "data" / "english_learning.tsv");
+}
+
+// The settings app's "open the log folder" button opens DefaultLogsDirectory(); without
+// --data-root the Host must write its logs there too.
+TEST(UserDataPathsTest, DefaultRootLogsDirIsTheRuntimeLoggerDefault) {
+  azookey::host::UserDataPathInputs inputs;
+  inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
+  if (!inputs.local_app_data) {
+    EXPECT_TRUE(azookey::logging::DefaultLogsDirectory().empty());
+    return;
+  }
+
+  const auto paths = azookey::host::ResolveUserDataPaths(inputs);
+  ASSERT_TRUE(paths.has_value());
+  EXPECT_EQ(paths->logs_dir.lexically_normal(),
+            azookey::logging::DefaultLogsDirectory().lexically_normal());
 }
 
 TEST(UserDataPathsTest, ExpandsALeadingLocalAppDataPrefixOnly) {

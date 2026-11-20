@@ -590,7 +590,7 @@ TEST_F(ProofreadHotkeyTest, ReadsNoTextInAnAppProfiledForLocalAi) {
 TEST_F(ProofreadHotkeyTest, ReadsNoTextForAnUnresolvedApplication) {
   service_.set_foreground_app_for_test({"", "", false});
   service_.set_privacy_settings_for_test(
-      R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+      R"({"privacy":{"mode":"normal","externalAiConsent":true,"autoSecureInput":false}})");
   auto document = MakeDocument(L"前面アプリを特定できないときの本文。");
   auto& context = NewContext(document);
   context.selection = 0;

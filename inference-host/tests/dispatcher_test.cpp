@@ -6932,8 +6932,8 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   // is sent and the answer is "unsupported".
   for (
       const auto* privacy :
-      {R"("privacy":{"mode":"custom","custom":{"learning":true,"aiCandidate":false}})",
-       R"("privacy":{"mode":"custom","custom":{"learning":true,"aiCandidate":true,"externalAi":false}})"}) {
+      {R"("privacy":{"mode":"custom","externalAiConsent":true,"custom":{"learning":true,"aiCandidate":false}})",
+       R"("privacy":{"mode":"custom","externalAiConsent":true,"custom":{"learning":true,"aiCandidate":true,"externalAi":false}})"}) {
     {
       std::ofstream file(settings_path, std::ios::trunc);
       file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)" << privacy << "}";
@@ -7119,7 +7119,7 @@ TEST_F(DispatcherTest, TransformSelectedTextGatesPrivacyBeforeAnyBackend) {
                   R"("privacy":{"mode":"secure"}})",
                   "BlockedBySecure"},
         std::pair{R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
-                  R"("privacy":{"mode":"private"}})",
+                  R"("privacy":{"mode":"private","externalAiConsent":true}})",
                   "Disabled"}}) {
     write_settings(json);
     settings.Reload();

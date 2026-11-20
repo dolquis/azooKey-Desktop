@@ -230,6 +230,19 @@ TEST(SettingsDocumentTest, ExternalAiConsentSurvivesUnrelatedSaveAndInvalidValue
     EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "normal");
     EXPECT_EQ(parsed->Find("privacy")->GetBool("externalAiConsent"), consent);
   }
+  // Turning the switch on writes the key into a file without it; turning it off keeps it false.
+  WriteText(path, R"({"privacy":{"mode":"normal"}})");
+  for (const bool consent : {true, false}) {
+    auto loaded = azookey::settings::LoadSettingsDocument(path);
+    ASSERT_TRUE(loaded.warnings.empty());
+    loaded.settings.values["privacy.externalAiConsent"] = consent;
+    const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+    ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_NE(parsed->Find("privacy"), nullptr);
+    EXPECT_EQ(parsed->Find("privacy")->GetBool("externalAiConsent"), consent);
+  }
   for (const auto* text :
        {R"({"privacy":{"externalAiConsent":"true"}})", R"({"privacy":{"externalAiConsent":1}})"}) {
     SCOPED_TRACE(text);

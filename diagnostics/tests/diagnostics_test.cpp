@@ -328,16 +328,26 @@ TEST(DiagnosticsTest, DpapiRequiresKeyOnlyForEffectiveOpenAiBackends) {
       probe(
           R"({"privacy":{"externalAiConsent":true},"aiBackend":"none","profilesByApp":{"default":{"aiBackend":"openai","privacyMode":"private"},"app.exe":{"privacyMode":"normal"}}})"),
       diag::DpapiState::MissingKey);
-  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"private"}}})"),
-            diag::DpapiState::NotRequired);
-  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"secure"}}})"),
-            diag::DpapiState::NotRequired);
-  EXPECT_EQ(probe(R"({"aiBackend":"openai","openAiApiKey":"dpapi:AQID","privacy":{"mode":"offline"}})"),
-            diag::DpapiState::NotRequired);
-  EXPECT_EQ(probe(R"({"aiBackend":"none","privacy":{"mode":"offline"},"profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"normal"}}})"),
-            diag::DpapiState::NotRequired);
-  EXPECT_EQ(probe(R"({"aiBackend":"openai","privacy":{"mode":"custom","custom":{"externalAi":false}}})"),
-            diag::DpapiState::NotRequired);
+  EXPECT_EQ(
+      probe(
+          R"({"privacy":{"externalAiConsent":true},"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"private"}}})"),
+      diag::DpapiState::NotRequired);
+  EXPECT_EQ(
+      probe(
+          R"({"privacy":{"externalAiConsent":true},"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"secure"}}})"),
+      diag::DpapiState::NotRequired);
+  EXPECT_EQ(
+      probe(
+          R"({"aiBackend":"openai","openAiApiKey":"dpapi:AQID","privacy":{"mode":"offline","externalAiConsent":true}})"),
+      diag::DpapiState::NotRequired);
+  EXPECT_EQ(
+      probe(
+          R"({"aiBackend":"none","privacy":{"mode":"offline","externalAiConsent":true},"profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"normal"}}})"),
+      diag::DpapiState::NotRequired);
+  EXPECT_EQ(
+      probe(
+          R"({"aiBackend":"openai","privacy":{"mode":"custom","externalAiConsent":true,"custom":{"externalAi":false}}})"),
+      diag::DpapiState::NotRequired);
   EXPECT_EQ(crypto.decrypt_calls, 0);
 }
 

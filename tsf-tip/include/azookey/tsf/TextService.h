@@ -161,6 +161,10 @@ std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_k
                                                                 LPARAM key_data);
 void SetTranslateAsciiDecimalDigitForTest(TranslateAsciiDecimalDigitFnForTest translate_digit);
 void ClearTranslateAsciiDecimalDigitForTest();
+// The scan code the kana table takes for a key message without one
+// (input-style-spec §4.1). nullptr restores MapVirtualKeyExW with the current layout.
+using MapVirtualKeyToScanCodeFnForTest = UINT (*)(UINT);
+void SetMapVirtualKeyToScanCodeForTest(MapVirtualKeyToScanCodeFnForTest map);
 void SetCaretWin32ApiForTest(
     GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
     GetPhysicalCursorPosFnForTest get_physical_cursor_pos,
@@ -372,6 +376,9 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   void set_romaji_table_for_test(std::shared_ptr<const core::CustomRomajiTable> table) {
     local_settings_.SetRomajiTableForTest(std::move(table));
+  }
+  void set_input_style_for_test(TipInputStyle style) {
+    local_settings_.SetInputStyleForTest(style);
   }
   HRESULT apply_prediction_reading_for_test(ITfContext* context, const std::string& reading) {
     return ApplyPredictionReading(context, reading);
@@ -1028,8 +1035,11 @@ class TextService final : public ITfTextInputProcessorEx,
   // Borrowed identity only, never dereferenced; cleared at the next key or cleanup.
   ITfContext* bracket_test_context_{nullptr};
   WPARAM bracket_test_key_{};
+  // `kana`: the kana a key of the kana table types (input-style-spec §4.4).
+  // Only 「 and 」 count as brackets then, never the layout's character.
   HRESULT HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
-                           bool test_only, bool& handled);
+                           bool test_only, bool& handled,
+                           std::optional<std::string_view> kana = std::nullopt);
 
 #ifdef _DEBUG
   DebugThreadAffinity ui_thread_affinity_;
@@ -1175,6 +1185,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // batch_raw_romaji_, which is lowercase. UI thread only.
   std::string english_raw_romaji_;
   std::shared_ptr<const core::CustomRomajiTable> batch_romaji_table_;
+  // inputStyle of the composition in progress (input-style-spec §2). Every key
+  // typed without input takes the current setting, so whichever path then
+  // starts a composition keeps it. UI thread only.
+  TipInputStyle composition_input_style_{TipInputStyle::Default};
   bool batch_query_in_progress_{false};
   // AI axis of the batch path: an ai-cleanup conversion whose privacy was
   // reduced must not be learned from. Reset with the rest of the batch state.
@@ -1779,8 +1793,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void ObservePunctuationConversion(ITfContext* context, const core::ObserveCommit& observe);
   std::optional<uint64_t> ApplyLiveConversionResultImpl();
   std::string CaptureLeftContext(ITfContext* context, bool secure);
+  // `kana`: as for HandleBracketKey. A kana key never enters the search (input-style-spec §6).
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
-                         bool test_only, bool& handled);
+                         bool test_only, bool& handled,
+                         std::optional<std::string_view> kana = std::nullopt);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
                            ITfContext* context);
   // Single evaluation point for the M46 secure decision and the AI privacy
@@ -1898,7 +1914,17 @@ class TextService final : public ITfTextInputProcessorEx,
   bool EnsureDisplayAttributeAtoms();
   void AdviseCompositionMouseSink(ITfContext* context, ITfRange* range);
   void UnadviseCompositionMouseSink();
+  // batchRomajiConversion, unless the key is typed in kana input, which has no
+  // romaji to accumulate (input-style-spec §6).
   bool BatchRomajiEnabled() const;
+  // Whether the reading, the pending romaji or the batch romaji holds input.
+  bool HasCompositionInput() const;
+  // input-style-spec §2: the style the composition started with while one is
+  // in progress, otherwise the current setting.
+  TipInputStyle InputStyleForKey() const;
+  // Whether a key now is looked up in the kana table (spec §4.1): kana input,
+  // outside Unicode input and the emoji search.
+  bool TypesKana() const;
   // M60: inlineEnglishCandidates is on and the Host advertised
   // "english_candidates" (docs/inline-english-candidate-spec.md §6.2, §7).
   bool EnglishCandidatesEnabled() const;

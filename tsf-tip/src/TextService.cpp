@@ -26,6 +26,7 @@
 #include "azookey/core/CandidatePage.h"
 #include "azookey/core/DateTimeRewriter.h"
 #include "azookey/core/EtwLogger.h"
+#include "azookey/core/KanaInput.h"
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/MixedRomajiSplitter.h"
 #include "azookey/core/NumberRewriter.h"
@@ -797,16 +798,29 @@ std::optional<WCHAR> CurrentBracketCharacter(WPARAM key, LPARAM key_data) {
 #endif
 }
 
+// The letter a romaji key feeds. Shift alone decides its case, never CapsLock,
+// so a capital rule of a custom table matches Shift-typed letters only
+// (legacy-parity-spec §5.1); the built-in table folds the case.
+char TypedRomajiLetter(WPARAM key, uint32_t modifiers) {
+  return (modifiers & azookey::core::kModifierShift) != 0 ? static_cast<char>(key)
+                                                          : static_cast<char>(key - 'A' + 'a');
+}
+
 std::optional<char> CurrentCustomRomajiCharacter(WPARAM key, LPARAM key_data,
                                                  const azookey::core::RomajiKanaConverter& romaji) {
   if (!romaji.HasCustomTable()) return std::nullopt;
+  char ascii = 0;
+  if (key >= 'A' && key <= 'Z') {
+    ascii = TypedRomajiLetter(key, CurrentKeyModifiers());
+  } else {
 #ifdef AZOOKEY_TSF_TESTING
-  const auto character = g_translate_custom_romaji_character(key, key_data);
+    const auto character = g_translate_custom_romaji_character(key, key_data);
 #else
-  const auto character = TranslateKeyboardCharacter(key, key_data);
+    const auto character = TranslateKeyboardCharacter(key, key_data);
 #endif
-  if (!character || *character < L'!' || *character > L'~') return std::nullopt;
-  const char ascii = static_cast<char>(*character);
+    if (!character || *character < L'!' || *character > L'~') return std::nullopt;
+    ascii = static_cast<char>(*character);
+  }
   return romaji.CanContinueCustomWith(ascii) ? std::optional<char>(ascii) : std::nullopt;
 }
 
@@ -967,6 +981,86 @@ std::string ApplyCompositionSymbols(const std::string& text) {
       surface.push_back(c);
   }
   return surface;
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+azookey::tsf::testing::MapVirtualKeyToScanCodeFnForTest g_map_virtual_key_to_scan_code = nullptr;
+#endif
+
+// The physical key of a key message: bits 16-23 of lParam, or, when a host
+// sends none (an injected VK), the current layout's scan code of the VK
+// (input-style-spec §4.1).
+UINT KeyScanCode(WPARAM key, LPARAM key_data) {
+  const UINT scan_code = static_cast<UINT>((static_cast<ULONG_PTR>(key_data) >> 16) & 0xff);
+  if (scan_code != 0) return scan_code;
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_map_virtual_key_to_scan_code) return g_map_virtual_key_to_scan_code(static_cast<UINT>(key));
+#endif
+  return MapVirtualKeyExW(static_cast<UINT>(key), MAPVK_VK_TO_VSC, GetKeyboardLayout(0));
+}
+
+bool IsNumpadKey(WPARAM key) {
+  return (key >= VK_NUMPAD0 && key <= VK_NUMPAD9) || key == VK_ADD || key == VK_SUBTRACT ||
+         key == VK_MULTIPLY || key == VK_DECIMAL || key == VK_DIVIDE;
+}
+
+struct KanaKey {
+  std::string_view kana;
+  UINT scan_code;
+};
+
+// A key of the kana table and the kana it types (input-style-spec §4.1,
+// §4.2), by the physical key and Shift, never by the VK or the layout's
+// character. Ctrl, Alt and Win keys, numpad keys (told apart by the VK first)
+// and keys with the extended flag are not in the table. VK_PACKET's scan code
+// bits carry an injected character, not a physical key.
+std::optional<KanaKey> LookupKanaKey(WPARAM key, LPARAM key_data, uint32_t modifiers) {
+  if (HasSystemModifier(modifiers) || IsNumpadKey(key) || key == VK_PACKET) return std::nullopt;
+  const bool extended = ((static_cast<ULONG_PTR>(key_data) >> 24) & 1) != 0;
+  const UINT scan_code = KeyScanCode(key, key_data);
+  if (scan_code == 0 || scan_code > 0xff) return std::nullopt;
+  const auto kana = azookey::core::LookupKanaJis(static_cast<uint8_t>(scan_code), extended,
+                                                 (modifiers & azookey::core::kModifierShift) != 0);
+  if (!kana) return std::nullopt;
+  return KanaKey{*kana, scan_code};
+}
+
+// Spec §4.1, §4.4: a kana key is typed whatever its VK. Only the window's
+// candidate numbers stay: the unshifted 1-9 keys (0x02-0x0A) while it shows.
+azookey::core::UserActionEvent KanaKeyEvent(const KanaKey& key, uint32_t modifiers,
+                                            bool cand_visible) {
+  using azookey::core::UserAction;
+  if (cand_visible && (modifiers & azookey::core::kModifierShift) == 0 && key.scan_code >= 0x02 &&
+      key.scan_code <= 0x0A)
+    return {UserAction::SelectByDigit, 0, modifiers, static_cast<int>(key.scan_code - 0x01)};
+  return {UserAction::Input, 0, modifiers, 0};
+}
+
+// Spec §4.4: the table's 、 and 。 are the explicit punctuation of
+// tsf-deep-integration-spec §3.5, as if typed with , and . in romaji input.
+std::optional<OemCompositionSymbol> KanaPunctuationSymbol(std::string_view kana) {
+  if (kana == "、") return OemCompositionSymbol{',', "、"};
+  if (kana == "。") return OemCompositionSymbol{'.', "。"};
+  return std::nullopt;
+}
+
+// Spec §4.3: a voicing mark replaces the last kana of the reading when they
+// combine and otherwise joins the reading alone; any other kana joins it.
+void AppendKana(std::string& reading, std::string_view kana) {
+  if (const auto mark = azookey::core::AsVoicingMark(kana)) {
+    const auto voiced = azookey::core::ApplyVoicingMark(reading, *mark);
+    reading.erase(reading.size() - voiced.replace_bytes);
+    reading += voiced.text;
+    return;
+  }
+  reading += kana;
+}
+
+char32_t SingleCodepoint(std::string_view text) {
+  size_t offset = 0;
+  char32_t codepoint = 0;
+  return azookey::core::DecodeNextUtf8(text, offset, codepoint) && offset == text.size() ? codepoint
+                                                                                         : 0;
 }
 
 bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
@@ -1237,6 +1331,10 @@ void SetTranslateCustomRomajiCharacterForTest(TranslateOemCompositionCharacterFn
 
 void ClearTranslateCustomRomajiCharacterForTest() {
   g_translate_custom_romaji_character = &TranslateKeyboardCharacter;
+}
+
+void SetMapVirtualKeyToScanCodeForTest(MapVirtualKeyToScanCodeFnForTest map) {
+  g_map_virtual_key_to_scan_code = map;
 }
 
 std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_key,
@@ -2683,7 +2781,8 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) try {
 }
 
 HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
-                                      bool test_only, bool& handled) {
+                                      bool test_only, bool& handled,
+                                      std::optional<std::string_view> kana) {
   handled = false;
   if (bracket_composition_) {
     if (test_only && (key == VK_ESCAPE || key == VK_RETURN)) {
@@ -2714,7 +2813,11 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
   if (!core::BracketPairingEnabledForApp(settings, foreground_app_.Get(), WindowsAppNameEqual))
     return S_OK;
   const bool enabled = !alnum || settings.pairing.enabled_in_alnum_mode;
-  const auto raw = CurrentBracketCharacter(key, key_data);
+  // Input-style-spec §4.4: the table's 「 」 pair as romaji's [ ] would.
+  const auto raw = !kana           ? CurrentBracketCharacter(key, key_data)
+                   : *kana == "「" ? std::optional<WCHAR>(L'[')
+                   : *kana == "」" ? std::optional<WCHAR>(L']')
+                                   : std::nullopt;
   // DEV-1748: after a pending n the ' separates ん before it can open a quote pair.
   if (raw == L'\'' && !candidate_ui_.IsShowing() &&
       PendingNTakesApostrophe(romaji_, batch_raw_romaji_, batch_romaji_table_))
@@ -2814,7 +2917,8 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
 }
 
 HRESULT TextService::HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
-                                    bool test_only, bool& handled) {
+                                    bool test_only, bool& handled,
+                                    std::optional<std::string_view> kana) {
   handled = false;
   // The existing directory watcher publishes settings without I/O on the key thread.
   if (const auto options = local_settings_.RewriterSnapshot()) {
@@ -2828,7 +2932,7 @@ HRESULT TextService::HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_
                        emoji_trigger_search_.load(std::memory_order_relaxed) &&
                        local_settings_.Snapshot().input_mode == core::BracketInputMode::Hiragana;
   if (!enabled && emoji_mode_ == EmojiMode::Inactive) return S_OK;
-  const auto character = CurrentBracketCharacter(key, key_data);
+  const auto character = kana ? std::nullopt : CurrentBracketCharacter(key, key_data);
   const bool colon = character && *character == L':';
   const bool entering = emoji_mode_ == EmojiMode::Inactive && enabled && colon &&
                         CurrentPreeditSurface().empty() && !composition_ && !bracket_composition_;
@@ -3101,13 +3205,19 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       return S_OK;
     }
 
+    // Input-style-spec §4.1: a key of the kana table is decided here, ahead of
+    // the key map, the emoji entry, bracket pairing and the symbol table.
+    const auto kana_key =
+        TypesKana() ? LookupKanaKey(wParam, lParam, modifiers) : std::optional<KanaKey>{};
+    const auto kana = kana_key ? std::optional(kana_key->kana) : std::nullopt;
     if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
-      const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, true, emoji_handled);
+      const HRESULT emoji_hr =
+          HandleEmojiKey(context, wParam, lParam, eaten, true, emoji_handled, kana);
       if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
       bool bracket_handled = false;
       const HRESULT bracket_hr =
-          HandleBracketKey(context, wParam, lParam, eaten, true, bracket_handled);
+          HandleBracketKey(context, wParam, lParam, eaten, true, bracket_handled, kana);
       if (FAILED(bracket_hr) || bracket_handled) {
         if (*eaten) {
           bracket_test_context_ = context;
@@ -3120,17 +3230,21 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool unicode_active = UnicodeInputActive();
-    auto key_event =
-        MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active, ResizesSegments());
-    const auto composition_symbol = TypedCompositionSymbol(wParam, lParam, BatchRomajiEnabled());
-    const auto decimal_digit = TypedDecimalDigit(wParam, lParam, modifiers);
+    auto key_event = kana_key ? std::optional(KanaKeyEvent(*kana_key, modifiers, cand_visible))
+                              : MapTipKey(wParam, modifiers, has_preedit, cand_visible,
+                                          unicode_active, ResizesSegments());
+    const auto composition_symbol =
+        kana_key ? KanaPunctuationSymbol(kana_key->kana)
+                 : TypedCompositionSymbol(wParam, lParam, BatchRomajiEnabled());
+    const auto decimal_digit =
+        kana_key ? std::nullopt : TypedDecimalDigit(wParam, lParam, modifiers);
     core::RomajiKanaConverter input_romaji = romaji_;
     if (!has_preedit && batch_raw_romaji_.empty()) {
       input_romaji = {};
       input_romaji.SetCustomTable(local_settings_.RomajiSnapshot());
     }
     std::optional<char> custom_input;
-    if (!unicode_active && !HasSystemModifier(modifiers) &&
+    if (!kana_key && !unicode_active && !HasSystemModifier(modifiers) &&
         (!key_event || key_event->action == core::UserAction::Input)) {
       if (composition_symbol && input_romaji.CanContinueCustomWith(composition_symbol->raw))
         custom_input = composition_symbol->raw;
@@ -3165,8 +3279,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     } else if (key_event->action == UserAction::Input) {
       // The map decides the states a digit or symbol key is typed in (numpad
       // keys only with a reading); the layout's character decides whether the
-      // reading takes it (spec section 3.5).
-      if (custom_input || (wParam >= 'A' && wParam <= 'Z') || composition_symbol || decimal_digit)
+      // reading takes it (spec section 3.5). A kana key always types its kana.
+      if (kana_key || custom_input || (wParam >= 'A' && wParam <= 'Z') || composition_symbol ||
+          decimal_digit)
         *eaten = TRUE;
     } else if (key_event->action == UserAction::Backspace) {
       *eaten = has_preedit ? TRUE : FALSE;
@@ -3334,6 +3449,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     }
     ResolveCarriedInput(context);
     ReprobeInputScopeFieldBeforeKey(context);
+    // Input-style-spec §2: a composition keeps the style it started with; a key
+    // typed without input takes the current setting.
+    if (!HasCompositionInput())
+      composition_input_style_ = local_settings_.InputStyleSnapshot().style;
     // Spec §3.7: a space whose lock was not granted is inserted again once,
     // before this key, which is then handled as usual. The probe does it, as
     // it finishes Unicode input, so a key the app takes lands after the space.
@@ -3609,14 +3728,21 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     }
 
+    // Input-style-spec §4.1: a key of the kana table is decided here, as the
+    // probe decides it, ahead of the key map, the emoji entry, bracket pairing
+    // and the symbol table.
+    const auto kana_key =
+        TypesKana() ? LookupKanaKey(wParam, lParam, modifiers) : std::optional<KanaKey>{};
+    const auto kana = kana_key ? std::optional(kana_key->kana) : std::nullopt;
     if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
-      const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, false, emoji_handled);
+      const HRESULT emoji_hr =
+          HandleEmojiKey(context, wParam, lParam, eaten, false, emoji_handled, kana);
       if (emoji_handled) core_input_active_ = false;
       if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
       bool bracket_handled = false;
       const HRESULT bracket_hr =
-          HandleBracketKey(context, wParam, lParam, eaten, false, bracket_handled);
+          HandleBracketKey(context, wParam, lParam, eaten, false, bracket_handled, kana);
       if (bracket_handled) core_input_active_ = false;
       if (bracket_claimed && !*eaten) {
         *eaten = TRUE;
@@ -3734,11 +3860,18 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool unicode_active = UnicodeInputActive();
-    auto key_event =
-        MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active, ResizesSegments());
+    auto key_event = kana_key ? std::optional(KanaKeyEvent(*kana_key, modifiers, cand_visible))
+                              : MapTipKey(wParam, modifiers, has_preedit, cand_visible,
+                                          unicode_active, ResizesSegments());
     const bool unicode_routed = UnicodeInputRouted(key_event, has_preedit, cand_visible);
-    const auto composition_symbol = TypedCompositionSymbol(wParam, lParam, BatchRomajiEnabled());
-    const auto decimal_digit = TypedDecimalDigit(wParam, lParam, modifiers);
+    // A kana key's 、 。 take the explicit punctuation path; its other kana join
+    // the reading as they are (kana_text).
+    const auto composition_symbol =
+        kana_key ? KanaPunctuationSymbol(kana_key->kana)
+                 : TypedCompositionSymbol(wParam, lParam, BatchRomajiEnabled());
+    const auto decimal_digit =
+        kana_key ? std::nullopt : TypedDecimalDigit(wParam, lParam, modifiers);
+    const auto kana_text = composition_symbol ? std::nullopt : kana;
     using core::UserAction;
     if (IsActionKey(key_event, UserAction::StartUnicodeInput) && !unicode_routed) return S_OK;
     // Spec §3.6 (DEV-1812): F6-F10 commit the reading in one form from every
@@ -3759,7 +3892,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       input_romaji.SetCustomTable(input_table);
     }
     std::optional<char> custom_input;
-    if (!unicode_active && !HasSystemModifier(modifiers) &&
+    if (!kana_key && !unicode_active && !HasSystemModifier(modifiers) &&
         (!key_event || key_event->action == UserAction::Input)) {
       if (composition_symbol && input_romaji.CanContinueCustomWith(composition_symbol->raw))
         custom_input = composition_symbol->raw;
@@ -3772,6 +3905,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (custom_input && !key_event)
       key_event = core::UserActionEvent{UserAction::Input, 0, modifiers, 0};
     const bool is_input = IsActionKey(key_event, UserAction::Input);
+    const bool kana_style = InputStyleForKey() == TipInputStyle::KanaJis;
     if (is_input && !has_preedit && batch_raw_romaji_.empty()) {
       // Capture the latest immutable table only when a new input begins.
       // A watcher reload must not rewrite an existing preedit.
@@ -3786,8 +3920,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // nothing for romaji that no longer spells the reading. DEV-1734 reads the
     // same romaji for its other readings, so it is recorded whether or not
     // English candidates are on; each request still checks its own setting.
+    // Kana input has no typed romaji (input-style-spec §6), not even the
+    // numpad's `-`.
     std::optional<char> english_typed;
-    if (is_input && !unicode_active && !BatchRomajiEnabled()) {
+    if (is_input && !unicode_active && !BatchRomajiEnabled() && !kana_style) {
       if (custom_input)
         english_typed = *custom_input;
       else if (wParam >= 'A' && wParam <= 'Z')
@@ -3887,10 +4023,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         }
         event.codepoint = *UnicodeInputCodepoint(wParam, modifiers);
       } else if (event.action == UserAction::Input) {
-        if (custom_input) {
+        if (kana_text) {
+          event.codepoint = SingleCodepoint(*kana_text);
+        } else if (custom_input) {
           event.codepoint = static_cast<unsigned char>(*custom_input);
         } else if (wParam >= 'A' && wParam <= 'Z') {
-          event.codepoint = static_cast<char32_t>(wParam);
+          event.codepoint = static_cast<char32_t>(TypedRomajiLetter(wParam, modifiers));
         } else if (IsLongVowelSymbol(composition_symbol)) {
           event.codepoint = U'-';
         } else if (decimal_digit) {
@@ -3950,10 +4088,30 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             input_state_.kind() == core::InputStateKind::Selecting &&
             (event.action == UserAction::Input || event.action == UserAction::InputAlnum) &&
             !input_state_.PunctuationConversionReading(event);
+        // Input-style-spec §4.3: a voicing mark that combines with the last kana
+        // of the reading replaces it. The reading without that kana is handed
+        // in, so the replacement is an ordinary Input of the combined kana;
+        // input_state_ stays as it was for the rollback until the result applies.
+        std::optional<core::InputState> voiced_state;
+        if (const auto mark = kana_text && event.action == UserAction::Input
+                                  ? core::AsVoicingMark(*kana_text)
+                                  : std::nullopt;
+            mark && !input_state_.pending_romaji().HasPending() &&
+            (input_state_.kind() == core::InputStateKind::Composing ||
+             input_state_.kind() == core::InputStateKind::Previewing)) {
+          auto voiced = core::ApplyVoicingMark(input_state_.confirmed_kana(), *mark);
+          if (voiced.replace_bytes > 0) {
+            std::string kana_before = input_state_.confirmed_kana();
+            kana_before.erase(kana_before.size() - voiced.replace_bytes);
+            voiced_state = input_state_.WithComposition(std::move(kana_before));
+            event.codepoint = SingleCodepoint(voiced.text);
+          }
+        }
+        const core::InputState& typed_state = voiced_state ? *voiced_state : input_state_;
         auto result = [&] {
-          if (event.action != UserAction::Input) return input_state_.HandleEvent(event);
+          if (event.action != UserAction::Input) return typed_state.HandleEvent(event);
           ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
-          return input_state_.HandleEvent(event);
+          return typed_state.HandleEvent(event);
         }();
         const std::string before_backspace =
             event.action == UserAction::Backspace && !romaji_.HasPending() ? preedit_kana_
@@ -4037,6 +4195,27 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
+    } else if (is_input && kana_text) {
+      // Input-style-spec §4.4: the kana joins the reading, a voicing mark
+      // combining with its last kana (§4.3). The window commits first, as for
+      // any other character.
+      if (cand_visible) return commit_selection_then_retype();
+      const auto rollback_state = capture_preedit_rollback_state();
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        candidates_.clear();
+        candidate_window_show_pending_ = false;
+      }
+      {
+        ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
+        preedit_kana_ += romaji_.Flush();
+      }
+      AppendKana(preedit_kana_, *kana_text);
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+      if (FAILED(update_hr)) return update_hr;
+      PostQueryCandidates(context, CurrentPreeditSurface());
+      *eaten = TRUE;
+
     } else if (is_input && wParam >= 'A' && wParam <= 'Z') {
       if (cand_visible) return commit_selection_then_retype();
       const auto rollback_state = capture_preedit_rollback_state();
@@ -4057,7 +4236,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       } else {
         {
           ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
-          preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
+          preedit_kana_ += romaji_.Feed(TypedRomajiLetter(wParam, modifiers));
         }
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
@@ -5255,6 +5434,9 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
   // An on key changes nothing while the IME is on; the off keys end the wait.
   if (open_close == OpenCloseKeyAction::Open) return WindowWaitKey::Pass;
   if (open_close != OpenCloseKeyAction::None) return WindowWaitKey::Drop;
+  // A kana key types its kana, or chooses a candidate, whatever the layout
+  // makes of it (input-style-spec §4.4).
+  if (TypesKana() && LookupKanaKey(key, key_data, modifiers)) return WindowWaitKey::Hold;
   // Segment-editing-spec §5.2: the first segment's wait also holds ← → Ctrl+B
   // Ctrl+F, which a resized segment takes. A resize runs at once unless keys
   // wait before it; Space's wait holds it for the window (§4).
@@ -5421,6 +5603,10 @@ bool TextService::HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, L
       ClassifyOpenCloseKey(static_cast<uint32_t>(key), modifiers,
                            local_settings_.ConvertKeysActionSnapshot()) != OpenCloseKeyAction::None)
     return false;
+  // A kana key starts the next input whatever its VK (input-style-spec §4.4).
+  if (local_settings_.InputStyleSnapshot().style == TipInputStyle::KanaJis &&
+      LookupKanaKey(key, key_data, modifiers))
+    return true;
   const auto idle = MapTipKey(key, modifiers, /*has_preedit=*/false, /*cand_visible=*/false,
                               /*unicode_active=*/false);
   if (idle && idle->action == core::UserAction::Input &&
@@ -12085,17 +12271,33 @@ void TextService::stop_ipc_worker_for_test() { StopIpcWorker(); }
 #endif
 
 bool TextService::BatchRomajiEnabled() const {
-  return batch_romaji_conversion_.load(std::memory_order_relaxed);
+  return batch_romaji_conversion_.load(std::memory_order_relaxed) &&
+         InputStyleForKey() != TipInputStyle::KanaJis;
+}
+
+bool TextService::HasCompositionInput() const {
+  return !preedit_kana_.empty() || romaji_.HasPending() || !batch_raw_romaji_.empty();
+}
+
+TipInputStyle TextService::InputStyleForKey() const {
+  return HasCompositionInput() ? composition_input_style_
+                               : local_settings_.InputStyleSnapshot().style;
+}
+
+bool TextService::TypesKana() const {
+  return emoji_mode_ == EmojiMode::Inactive && !UnicodeInputActive() &&
+         InputStyleForKey() == TipInputStyle::KanaJis;
 }
 
 std::string TextService::MixedEnglishRawRomajiFor(const std::string& reading, bool secure) const {
   // M63 section 5: the M60 setting and capability, the M63 setting and
-  // capability, the built-in romaji table (the Host has no custom table), a
-  // field that is not secure, romaji that still spells the reading, and the
-  // section 10 length limit.
+  // capability, inputStyle default with the built-in romaji table (the Host
+  // has no other table, input-style-spec §5), a field that is not secure,
+  // romaji that still spells the reading, and the section 10 length limit.
   if (secure || !EnglishCandidatesEnabled() ||
       !ipc_host_mixed_english_.load(std::memory_order_relaxed) ||
-      !local_settings_.MixedEnglishAutoConversionSnapshot() || romaji_.HasCustomTable())
+      !local_settings_.MixedEnglishAutoConversionSnapshot() || romaji_.HasCustomTable() ||
+      InputStyleForKey() != TipInputStyle::Default)
     return {};
   auto raw_romaji = EnglishRawRomajiFor(reading);
   if (raw_romaji.size() > core::MixedRomajiSplitOptions{}.max_raw_length) return {};
@@ -12108,7 +12310,11 @@ bool TextService::EnglishCandidatesEnabled() const {
 }
 
 std::string TextService::EnglishRawRomajiFor(const std::string& reading) const {
-  if (english_raw_romaji_.empty() || reading.empty()) return {};
+  // Kana input sends no typed romaji (input-style-spec §6), also when a commit
+  // undo brought back the romaji of an earlier input.
+  if (english_raw_romaji_.empty() || reading.empty() ||
+      InputStyleForKey() == TipInputStyle::KanaJis)
+    return {};
   const auto& table = batch_romaji_table_;
   // The reading is either the preview (pending romaji shown as typed) or, once
   // Space flushed it, the committed conversion; the romaji must spell one.

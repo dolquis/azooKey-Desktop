@@ -8,6 +8,7 @@
 #include <string>
 #include <system_error>
 
+#include "azookey/core/AzikTable.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/logging/RuntimeLogger.h"
 
@@ -357,6 +358,11 @@ std::shared_ptr<const core::CustomRomajiTable> TipLocalSettings::RomajiSnapshot(
   return romaji_table_;
 }
 
+TipInputStyleSettings TipLocalSettings::InputStyleSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return {input_style_, romaji_table_};
+}
+
 void TipLocalSettings::Reload() noexcept {
 #ifdef AZOOKEY_TSF_TESTING
   ++reloads_;
@@ -375,7 +381,7 @@ void TipLocalSettings::Reload() noexcept {
   std::array<std::shared_ptr<const core::AppProfileResolver>, 2> prediction_profile_probes;
   bool inline_english_candidates = false;
   bool mixed_english_auto_conversion = false;
-  bool custom_romaji = false;
+  TipInputStyle input_style = TipInputStyle::Default;
   std::string custom_romaji_path;
   std::shared_ptr<const core::CustomRomajiTable> romaji_table;
   romaji_path_.clear();
@@ -427,7 +433,11 @@ void TipLocalSettings::Reload() noexcept {
       prediction_profile_probes = MakePredictionProfileProbes(*json);
       inline_english_candidates = json->GetBool("inlineEnglishCandidates").value_or(false);
       mixed_english_auto_conversion = json->GetBool("mixedEnglishAutoConversion").value_or(false);
-      custom_romaji = json->GetString("inputStyle").value_or("default") == "custom";
+      const std::string style = json->GetString("inputStyle").value_or("default");
+      input_style = style == "azik"      ? TipInputStyle::Azik
+                    : style == "kanaJis" ? TipInputStyle::KanaJis
+                    : style == "custom"  ? TipInputStyle::Custom
+                                         : TipInputStyle::Default;
       custom_romaji_path = json->GetString("customRomajiTablePath").value_or("");
     }
     const auto default_path = path_.parent_path().parent_path() / L"bracket-pairs.tsv";
@@ -446,7 +456,10 @@ void TipLocalSettings::Reload() noexcept {
     }
     next.table = std::make_shared<const core::BracketTable>(std::move(parsed.table));
     romaji_path_.clear();
-    if (custom_romaji) {
+    // AZIK takes the table-driven path with its built-in table, which has no
+    // file to watch (input-style-spec §5).
+    if (input_style == TipInputStyle::Azik) romaji_table = core::BuiltinAzikTable();
+    if (input_style == TipInputStyle::Custom) {
       const auto default_romaji_path = path_.parent_path().parent_path() / L"custom-romaji.tsv";
       auto custom_path = std::filesystem::path(
           std::u8string(custom_romaji_path.begin(), custom_romaji_path.end()));
@@ -469,7 +482,9 @@ void TipLocalSettings::Reload() noexcept {
         bool read = false;
         const auto bytes = ReadBounded(romaji_path_, &read);
         if (read) {
-          auto romaji = core::CustomRomajiLoader::Parse(bytes);
+          // The TIP feeds letters in the case Shift gives them, so a capital
+          // rule matches Shift-typed letters only (legacy-parity-spec §5.1).
+          auto romaji = core::CustomRomajiLoader::Parse(bytes, /*case_sensitive_rules=*/true);
           if (!romaji.invalid_lines.empty()) {
             WatchLogger().Log(
                 logging::RuntimeLogLevel::Warn, "romaji_table_invalid_rows",
@@ -487,6 +502,8 @@ void TipLocalSettings::Reload() noexcept {
     ai.privacy_policy = {};
     ai.prediction_allowed = false;
     prediction_profile_probes = {};
+    input_style = TipInputStyle::Default;
+    romaji_table.reset();
     next = {};  // No contents/paths in diagnostics, no writes to user configuration.
   }
   {
@@ -504,6 +521,7 @@ void TipLocalSettings::Reload() noexcept {
     prediction_profile_probes_ = std::move(prediction_profile_probes);
     inline_english_candidates_ = inline_english_candidates;
     mixed_english_auto_conversion_ = mixed_english_auto_conversion;
+    input_style_ = input_style;
     romaji_table_ = std::move(romaji_table);
   }
   changed_.notify_all();
@@ -713,6 +731,15 @@ void TipLocalSettings::SetAppProfilesForTest(std::string_view contents) {
 void TipLocalSettings::SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table) {
   const std::lock_guard<std::mutex> lock(mutex_);
   romaji_table_ = std::move(table);
+}
+
+void TipLocalSettings::SetInputStyleForTest(TipInputStyle style) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  input_style_ = style;
+  if (style == TipInputStyle::Azik)
+    romaji_table_ = core::BuiltinAzikTable();
+  else if (style != TipInputStyle::Custom)
+    romaji_table_.reset();
 }
 
 bool TipLocalSettings::WaitForPrivacyForTest(

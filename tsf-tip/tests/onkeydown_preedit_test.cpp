@@ -21988,3 +21988,557 @@ TEST(TsfTipSegmentEditingTest, PunctuationCommitsTheShownTextAndUndoPutsTheWhole
   EXPECT_EQ(h.context.document->text, L"前かきく、");
   EXPECT_EQ(h.service.preedit_kana_, "かきく、");
 }
+
+// M70 (docs/input-style-spec.md §4, §6): kana input. Each key carries its scan
+// code in lParam as a key message does, so the table never depends on the
+// layout of the machine running the tests.
+namespace {
+using azookey::tsf::TipInputStyle;
+
+struct JisKey {
+  WPARAM vk;
+  UINT scan_code;
+};
+// The keys the tests type, with the VK a JIS layout gives them.
+constexpr JisKey kKanaKa{'T', 0x14};
+constexpr JisKey kKanaNi{'I', 0x17};
+constexpr JisKey kKanaN{'Y', 0x15};
+constexpr JisKey kKanaShi{'D', 0x20};
+constexpr JisKey kKanaHa{'F', 0x21};
+constexpr JisKey kKanaU{'4', 0x05};
+constexpr JisKey kKanaA{'3', 0x04};
+constexpr JisKey kKanaTe{'W', 0x11};
+constexpr JisKey kKanaKi{'G', 0x22};
+constexpr JisKey kKanaNu{'1', 0x02};  // Shift: ぬ
+constexpr JisKey kKanaFu{'2', 0x03};  // Shift: ふ
+constexpr JisKey kKanaWa{'0', 0x0B};  // Shift: を
+constexpr JisKey kKanaYu{'8', 0x09};  // Shift: ゅ
+constexpr JisKey kKanaDakuten{VK_OEM_3, 0x1A};
+constexpr JisKey kKanaHandakuten{VK_OEM_4, 0x1B};  // Shift: 「
+constexpr JisKey kKanaMu{VK_OEM_6, 0x2B};          // Shift: 」
+constexpr JisKey kKanaNe{VK_OEM_COMMA, 0x33};      // Shift: 、
+constexpr JisKey kKanaRu{VK_OEM_PERIOD, 0x34};     // Shift: 。
+constexpr JisKey kKanaKe{VK_OEM_1, 0x28};          // the : key
+constexpr JisKey kKanaRo{VK_OEM_102, 0x73};
+constexpr JisKey kKanaChoon{VK_OEM_5, 0x7D};  // the ¥ key
+
+LPARAM KanaKeyData(UINT scan_code, bool extended = false) {
+  return static_cast<LPARAM>(1u | (scan_code << 16) | (extended ? 1u << 24 : 0u));
+}
+
+BOOL SendKanaKey(azookey::tsf::TextService& service, ITfContext* context,
+                 KeyboardStateGuard& keyboard_state, JisKey key, bool probe,
+                 bool extended = false) {
+  keyboard_state.Reapply();
+  BOOL eaten = FALSE;
+  EXPECT_EQ(RecordedKeyDown(service, context, key.vk, KanaKeyData(key.scan_code, extended), &eaten,
+                            probe),
+            S_OK);
+  return eaten;
+}
+
+BOOL SendKanaKey(DocumentPreeditHarness& h, JisKey key, bool probe, bool extended = false) {
+  return SendKanaKey(h.service, &h.context, h.keyboard_state, key, probe, extended);
+}
+
+// The probe claims what the key then takes, as TSF calls them.
+BOOL TypeKanaKey(DocumentPreeditHarness& h, JisKey key, bool shift = false) {
+  h.keyboard_state.SetDown(VK_SHIFT, shift);
+  const BOOL probed = SendKanaKey(h, key, true);
+  const BOOL eaten = SendKanaKey(h, key, false);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_EQ(probed, eaten) << "vk " << key.vk;
+  return eaten;
+}
+
+void StartKana(DocumentPreeditHarness& h, bool legacy = false) {
+  ConfigureTypoHarness(h, legacy);
+  h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+}
+
+// Types か and opens the window of 蚊 下 課.
+void OpenKanaWindow(DocumentPreeditHarness& h, bool legacy) {
+  StartKana(h, legacy);
+  ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+  ASSERT_EQ(h.service.preedit_kana_, "か");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  AnswerWindow(h);
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  ASSERT_EQ(h.context.document->text, L"蚊");
+}
+
+// かんじ from the kana keys: か ん し ゛.
+void TypeKanaKanji(DocumentPreeditHarness& h) {
+  for (const JisKey key : {kKanaKa, kKanaN, kKanaShi, kKanaDakuten})
+    ASSERT_TRUE(TypeKanaKey(h, key));
+  ASSERT_EQ(h.service.preedit_kana_, "かんじ");
+}
+
+UINT JisScanCodeForTest(UINT vk) {
+  if (vk == VK_OEM_102) return 0x73;
+  if (vk == 'A') return 0x1E;
+  return 0;
+}
+
+class JisScanCodeGuard {
+ public:
+  JisScanCodeGuard() {
+    azookey::tsf::testing::SetMapVirtualKeyToScanCodeForTest(&JisScanCodeForTest);
+  }
+  ~JisScanCodeGuard() { azookey::tsf::testing::SetMapVirtualKeyToScanCodeForTest(nullptr); }
+};
+
+// The : key enters the emoji search when the layout makes a :.
+class EmojiTranslationGuard {
+ public:
+  EmojiTranslationGuard() {
+    azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateEmojiForTest);
+  }
+  ~EmojiTranslationGuard() { azookey::tsf::testing::ClearTranslateBracketCharacterForTest(); }
+};
+
+void SetCapsLockToggled(bool toggled) {
+  std::array<BYTE, 256> state{};
+  ASSERT_TRUE(GetKeyboardState(state.data()));
+  state[VK_CAPITAL] = static_cast<BYTE>((state[VK_CAPITAL] & ~1) | (toggled ? 1 : 0));
+  ASSERT_TRUE(SetKeyboardState(state.data()));
+}
+}  // namespace
+
+TEST(TsfTipKanaInputTest, TableKeysTypeTheirKanaByThePhysicalKey) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartKana(h, legacy);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+    ASSERT_EQ(h.service.preedit_kana_, "か");
+    ASSERT_EQ(h.service.core_input_active_for_test(), !legacy);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaNi));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaWa, /*shift=*/true));
+    // The ろ and ¥ keys make the same \ on a JIS layout; their scan codes differ.
+    ASSERT_TRUE(TypeKanaKey(h, kKanaRo));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaChoon));
+    // Another driver's VK for the ろ key (VK_ABNT_C1) types ろ all the same.
+    ASSERT_TRUE(TypeKanaKey(h, {0xC1, 0x73}));
+    EXPECT_EQ(h.service.preedit_kana_, "かにをろーろ");
+    EXPECT_EQ(h.context.document->text, L"かにをろーろ");
+  }
+}
+
+TEST(TsfTipKanaInputTest, VkOnlyKeysMapTheVkAndOtherKeysAreNotLookedUp) {
+  JisScanCodeGuard scan_codes;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  AsciiDecimalDigitTranslationGuard digits;
+  DocumentPreeditHarness h;
+  StartKana(h);
+  // A key message without a scan code (an injected VK) maps its VK.
+  ASSERT_TRUE(ProbeTypoKey(h, VK_OEM_102));
+  ASSERT_TRUE(h.Press(VK_OEM_102));
+  ASSERT_EQ(h.service.preedit_kana_, "ろ");
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, "ろち");
+  // The extended flag marks the numpad /, which shares the め key's scan code;
+  // the layout's / takes the symbol table instead.
+  ASSERT_TRUE(SendKanaKey(h, {VK_OEM_2, 0x35}, true, /*extended=*/true));
+  ASSERT_TRUE(SendKanaKey(h, {VK_OEM_2, 0x35}, false, /*extended=*/true));
+  ASSERT_EQ(h.service.preedit_kana_, "ろち・");
+  // A numpad VK is told apart before its scan code.
+  ASSERT_TRUE(SendKanaKey(h, {VK_DIVIDE, 0x35}, true));
+  ASSERT_TRUE(SendKanaKey(h, {VK_DIVIDE, 0x35}, false));
+  ASSERT_EQ(h.service.preedit_kana_, "ろち・/");
+  // Ctrl keys are not looked up: Ctrl+H (the く key) is the romaji Backspace.
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  EXPECT_TRUE(SendKanaKey(h, {'H', 0x23}, true));
+  EXPECT_TRUE(SendKanaKey(h, {'H', 0x23}, false));
+  EXPECT_EQ(h.service.preedit_kana_, "ろち・");
+  // Ctrl+A (the ち key) maps to nothing and goes to the app.
+  EXPECT_FALSE(SendKanaKey(h, {'A', 0x1E}, true));
+  EXPECT_FALSE(SendKanaKey(h, {'A', 0x1E}, false));
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  // Alt and Win keys go to the app as well.
+  for (const int modifier : {VK_MENU, VK_LWIN}) {
+    SCOPED_TRACE(modifier);
+    h.keyboard_state.SetDown(modifier, true);
+    EXPECT_FALSE(SendKanaKey(h, kKanaKa, true));
+    EXPECT_FALSE(SendKanaKey(h, kKanaKa, false));
+    h.keyboard_state.SetDown(modifier, false);
+  }
+  EXPECT_EQ(h.service.preedit_kana_, "ろち・");
+}
+
+TEST(TsfTipKanaInputTest, IdleDigitKeysStartTheInputButTheNumpadNeedsTheNumberRewriter) {
+  AsciiDecimalDigitTranslationGuard digits;
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartKana(h, legacy);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaNu));
+    EXPECT_EQ(h.service.preedit_kana_, "ぬ");
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    ASSERT_TRUE(h.service.preedit_kana_.empty());
+    // The legacy path is the one with numberRewriter on.
+    EXPECT_EQ(SendKanaKey(h, {VK_NUMPAD1, 0x4F}, true), legacy ? TRUE : FALSE);
+    EXPECT_EQ(SendKanaKey(h, {VK_NUMPAD1, 0x4F}, false), legacy ? TRUE : FALSE);
+    EXPECT_EQ(h.service.preedit_kana_, legacy ? "1" : "");
+    if (!legacy) continue;
+    // The input the digit started is kana input as well.
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+    EXPECT_EQ(h.service.preedit_kana_, "1か");
+  }
+}
+
+TEST(TsfTipKanaInputTest, WindowKeepsTheUnshiftedDigitsAsCandidateNumbers) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    {
+      DocumentPreeditHarness h;
+      OpenKanaWindow(h, legacy);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaFu));
+      EXPECT_EQ(h.context.document->text, L"下");
+      EXPECT_TRUE(h.service.preedit_kana_.empty());
+      EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    }
+    {
+      // 0x0B (わ) is no candidate number: it commits the selection and types わ.
+      // With the number rewriter on (legacy), the 0 of the digit row would
+      // join the reading instead (legacy-parity-spec §1.2); わ does not.
+      DocumentPreeditHarness h;
+      OpenKanaWindow(h, legacy);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaWa));
+      EXPECT_EQ(h.context.document->text, L"蚊わ");
+      EXPECT_EQ(h.service.preedit_kana_, "わ");
+      EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    }
+    {
+      // A Shift digit key is kana too.
+      DocumentPreeditHarness h;
+      OpenKanaWindow(h, legacy);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaNu, /*shift=*/true));
+      EXPECT_EQ(h.context.document->text, L"蚊ぬ");
+      EXPECT_EQ(h.service.preedit_kana_, "ぬ");
+    }
+  }
+}
+
+// A JIS layout makes no character for Shift+0; the を key still waits for the
+// window and types を after the commit.
+TEST(TsfTipKanaInputTest, KeysWaitForTheWindowLikeAnyCharacter) {
+  OemCompositionTranslationGuard oem_translation(&TranslateJisLayoutForTest);
+  AsciiDecimalDigitTranslationGuard digits;
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartKana(h, legacy);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_FALSE(h.service.candidate_window_showing_for_test());
+    ASSERT_TRUE(TypeKanaKey(h, kKanaWa, /*shift=*/true));
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+    ASSERT_EQ(h.context.document->text, L"か");
+    AnswerWindow(h);
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_EQ(h.context.document->text, L"蚊を");
+    EXPECT_EQ(h.service.preedit_kana_, "を");
+  }
+}
+
+TEST(TsfTipKanaInputTest, AlphanumericModeAndImeOffLeaveTheKeysToTheApp) {
+  DocumentPreeditHarness h;
+  StartKana(h);
+  h.service.set_alnum_mode_for_test(true);
+  EXPECT_FALSE(SendKanaKey(h, kKanaKa, true));
+  EXPECT_FALSE(SendKanaKey(h, kKanaKa, false));
+  h.service.set_alnum_mode_for_test(false);
+  h.service.set_keyboard_open_for_test(false);
+  EXPECT_FALSE(SendKanaKey(h, kKanaNu, true));
+  EXPECT_FALSE(SendKanaKey(h, kKanaNu, false));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_TRUE(h.context.document->text.empty());
+}
+
+TEST(TsfTipKanaInputTest, VoicingMarksCombineWithTheLastKanaAndBackspaceErasesTheResult) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartKana(h, legacy);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+    ASSERT_EQ(h.service.preedit_kana_, "が");
+    ASSERT_TRUE(TypeKanaKey(h, kKanaHa));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaHandakuten));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaU));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+    ASSERT_EQ(h.service.preedit_kana_, "がぱゔ");
+    // あ does not combine, nor does a mark already there: both stay alone.
+    ASSERT_TRUE(TypeKanaKey(h, kKanaA));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+    ASSERT_EQ(h.service.preedit_kana_, "がぱゔあ゛゛");
+    EXPECT_EQ(h.context.document->text, L"がぱゔあ゛゛");
+    for (const char* expected : {"がぱゔあ゛", "がぱゔあ", "がぱゔ", "がぱ", "が"}) {
+      ASSERT_TRUE(h.Press(VK_BACK));
+      EXPECT_EQ(h.service.preedit_kana_, expected);
+    }
+  }
+}
+
+TEST(TsfTipKanaInputTest, VoicingMarkAfterACommitStartsTheNextInputAlone) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartKana(h, legacy);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.context.document->text, L"か");
+    ASSERT_TRUE(h.service.preedit_kana_.empty());
+    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+    EXPECT_EQ(h.service.preedit_kana_, "゛");
+    EXPECT_EQ(h.context.document->text, L"か゛");
+  }
+}
+
+TEST(TsfTipKanaInputTest, TablePunctuationIsExplicitPunctuation) {
+  {
+    // Without a reading 、 keeps its half-width candidate.
+    DocumentPreeditHarness h;
+    StartKana(h);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaNe, /*shift=*/true));
+    ASSERT_EQ(h.service.preedit_kana_, "、");
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_EQ(shown.size(), 2u);
+    EXPECT_EQ(shown[0].surface, "、");
+    EXPECT_EQ(shown[1].surface, ",");
+  }
+  {
+    // punctuationConversion commits the first candidate with the 。.
+    DocumentPreeditHarness h;
+    StartKana(h);
+    StartPunctuationConversion(h);
+    for (const JisKey key : {kKanaTe, kKanaN, kKanaKi}) ASSERT_TRUE(TypeKanaKey(h, key));
+    ASSERT_EQ(h.service.preedit_kana_, "てんき");
+    h.service.mark_pending_ipc_query_sent_for_test();
+    h.service.set_cached_candidates_for_test({ModelField("天気", "てんき")});
+    h.service.show_candidate_window_from_cache_for_test();
+    ASSERT_TRUE(TypeKanaKey(h, kKanaRu, /*shift=*/true));
+    EXPECT_EQ(h.context.document->text, L"天気。");
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+  }
+}
+
+TEST(TsfTipKanaInputTest, OnlyTheTableBracketsPair) {
+  BracketHarness h;
+  h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+  auto type = [&](JisKey key, bool shift) {
+    h.keyboard.SetDown(VK_SHIFT, shift);
+    const BOOL probed = SendKanaKey(h.service, &h.context, h.keyboard, key, true);
+    const BOOL eaten = SendKanaKey(h.service, &h.context, h.keyboard, key, false);
+    h.keyboard.SetDown(VK_SHIFT, false);
+    EXPECT_EQ(probed, eaten);
+    return eaten;
+  };
+  ASSERT_TRUE(type(kKanaHandakuten, true));
+  ASSERT_EQ(h.context.document->text, L"「」");
+  ASSERT_EQ(h.context.document->start, 1);
+  // Shift+8 types ゅ, not the layout's (; the unshifted [ and ] keys are ゜ and む.
+  ASSERT_TRUE(type(kKanaYu, true));
+  ASSERT_TRUE(type(kKanaHandakuten, false));
+  ASSERT_TRUE(type(kKanaMu, false));
+  EXPECT_EQ(h.service.preedit_kana_, "ゅ゜む");
+  EXPECT_EQ(h.context.document->text, L"「ゅ゜む」");
+}
+
+TEST(TsfTipKanaInputTest, RomanFormsSpellHepburnAndUnicodeInputTakesHexDigits) {
+  for (const auto& [key, text] :
+       {std::pair{WPARAM{VK_F9}, L"ｋａｎｊｉ"}, std::pair{WPARAM{VK_F10}, L"kanji"}}) {
+    SCOPED_TRACE(key);
+    DocumentPreeditHarness h;
+    StartKana(h);
+    TypeKanaKanji(h);
+    PressForm(h, key);
+    ExpectCommitted(h, text);
+  }
+  {
+    DocumentPreeditHarness h;
+    StartKana(h);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaU));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaDakuten));
+    PressForm(h, VK_F10);
+    ExpectCommitted(h, L"vu");
+  }
+  {
+    // The digit keys make あ ゃ う ふ in kana input, hex digits after Ctrl+Shift+U.
+    DocumentPreeditHarness h;
+    StartKana(h);
+    PressCtrlShift(h, 'U');
+    ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::UnicodeInput);
+    for (const JisKey key : {kKanaA, kKanaWa, kKanaU, kKanaFu}) ASSERT_TRUE(TypeKanaKey(h, key));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.context.document->text, L"あ");
+  }
+}
+
+TEST(TsfTipKanaInputTest, KanaInputSendsNoTypedRomaji) {
+  DocumentPreeditHarness h;
+  StartKana(h);
+  h.service.set_english_candidates_for_test(true);
+  h.service.set_mixed_english_for_test(true);
+  TypeKanaKanji(h);
+  EXPECT_TRUE(h.service.english_raw_romaji_for_test().empty());
+  EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+  EXPECT_FALSE(h.service.pending_ipc_mixed_english_for_test());
+  EXPECT_TRUE(h.service.alt_readings_for_test("かんじ", 3).empty());
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
+  EXPECT_FALSE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+TEST(TsfTipKanaInputTest, BatchAndTheEmojiEntryDoNotApply) {
+  {
+    DocumentPreeditHarness h;
+    StartKana(h);
+    h.service.set_batch_romaji_options_for_test(true);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaNi));
+    EXPECT_EQ(h.service.preedit_kana_, "かに");
+    EXPECT_TRUE(h.service.batch_raw_romaji_for_test().empty());
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    EXPECT_FALSE(h.service.pending_ipc_query_is_batch_for_test());
+    EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "かに");
+  }
+  {
+    EmojiTranslationGuard emoji_translation;
+    DocumentPreeditHarness h;
+    StartKana(h);
+    h.service.set_emoji_rewriter_for_test(true);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKe));
+    EXPECT_EQ(h.service.preedit_kana_, "け");
+    EXPECT_TRUE(h.service.pending_emoji_trigger_for_test().empty());
+  }
+}
+
+TEST(TsfTipKanaInputTest, AStyleChangeAppliesFromTheNextInput) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(SendKanaKey(h, {'K', 0x25}, false));
+  h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+  ASSERT_TRUE(TypeKanaKey(h, {'A', 0x1E}));
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_TRUE(TypeKanaKey(h, {'A', 0x1E}));
+  EXPECT_EQ(h.service.preedit_kana_, "ち");
+  h.service.set_input_style_for_test(TipInputStyle::Default);
+  ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+  EXPECT_EQ(h.service.preedit_kana_, "ちか");
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+  ASSERT_TRUE(TypeKanaKey(h, {'A', 0x1E}));
+  EXPECT_EQ(h.service.preedit_kana_, "た");
+}
+
+// M70 AZIK (docs/input-style-spec.md §3, §5): the built-in table on the
+// table-driven path, with the exclusions of a custom table.
+TEST(TsfTipAzikTest, KeysGoThroughTheTableWithoutTheRomajiSpecialCases) {
+  OemCompositionTranslationGuard oem_translation(&TranslateJisLayoutForTest);
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    h.service.set_input_style_for_test(TipInputStyle::Azik);
+    TypeTypoRomaji(h, "KK");
+    ASSERT_EQ(h.service.preedit_kana_, "きん");
+    // ; and - are rules of the table (spec §3.1); JIS types ; with VK_OEM_PLUS.
+    ASSERT_TRUE(h.Press(VK_OEM_PLUS));
+    ASSERT_TRUE(h.Press(VK_OEM_MINUS));
+    EXPECT_EQ(h.service.preedit_kana_, "きんっー");
+    EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+    EXPECT_TRUE(h.service.alt_readings_for_test(h.service.preedit_kana_, 3).empty());
+  }
+  for (const bool legacy : {false, true}) {
+    for (const auto& [key, text] :
+         {std::pair{WPARAM{VK_F9}, L"ｎｉｃｈｉ"}, std::pair{WPARAM{VK_F10}, L"nichi"}}) {
+      SCOPED_TRACE(::testing::Message() << "legacy " << legacy << " key " << key);
+      // F9 and F10 respell the kana, not the typed nt.
+      DocumentPreeditHarness h;
+      ConfigureTypoHarness(h, legacy);
+      h.service.set_input_style_for_test(TipInputStyle::Azik);
+      TypeTypoRomaji(h, "NT");
+      ASSERT_EQ(h.service.preedit_kana_, "にち");
+      PressForm(h, key);
+      ExpectCommitted(h, text);
+    }
+  }
+}
+
+TEST(TsfTipAzikTest, ColonIsTheLongVowelUnlessItEntersTheEmojiSearch) {
+  OemCompositionTranslationGuard oem_translation(&TranslateJisLayoutForTest);
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_input_style_for_test(TipInputStyle::Azik);
+    ASSERT_TRUE(ProbeTypoKey(h, VK_OEM_1));
+    ASSERT_TRUE(h.Press(VK_OEM_1));
+    EXPECT_EQ(h.service.preedit_kana_, "ー");
+  }
+  for (const bool composing : {false, true}) {
+    SCOPED_TRACE(composing);
+    EmojiTranslationGuard emoji_translation;
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_input_style_for_test(TipInputStyle::Azik);
+    h.service.set_emoji_rewriter_for_test(true);
+    // Only a : without a composition enters the search (spec §3.3).
+    if (composing) TypeTypoRomaji(h, "KA");
+    ASSERT_TRUE(h.Press(VK_OEM_1));
+    EXPECT_EQ(h.service.preedit_kana_, composing ? "かー" : ":");
+  }
+}
+
+TEST(TsfTipAzikTest, PeriodAfterZIsARuleAndBracketsPairFirst) {
+  OemCompositionTranslationGuard oem_translation(&TranslateJisLayoutForTest);
+  {
+    DocumentPreeditHarness h;
+    StartPunctuationConversion(h);
+    h.service.set_input_style_for_test(TipInputStyle::Azik);
+    TypeTypoRomaji(h, "KA");
+    h.service.mark_pending_ipc_query_sent_for_test();
+    h.service.set_cached_candidates_for_test({ModelField("蚊", "か")});
+    h.service.show_candidate_window_from_cache_for_test();
+    ASSERT_TRUE(h.Press('Z'));
+    ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+    EXPECT_EQ(h.service.preedit_kana_, "か…");
+    EXPECT_EQ(h.context.document->text, L"か…");
+  }
+  {
+    BracketHarness h;
+    h.service.set_input_style_for_test(TipInputStyle::Azik);
+    EXPECT_TRUE(h.Press('Z'));
+    EXPECT_TRUE(h.Press(VK_OEM_4, true));
+    EXPECT_TRUE(h.Press(VK_OEM_4));
+    EXPECT_EQ(h.context.document->text, L"z「」");
+  }
+}
+
+// legacy-parity-spec §5.1: a capital rule matches Shift-typed letters only,
+// whatever CapsLock says, and Shift falls back to the lowercase rule.
+TEST(TsfTipCustomRomajiTest, CapitalRulesMatchShiftTypedLettersOnly) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    h.service.set_romaji_table_for_test(
+        azookey::core::CustomRomajiLoader::Parse("KA\tカ\nka\tか\nki\tき\n", true).table);
+    TypeTypoRomaji(h, "KA");
+    ASSERT_EQ(h.service.preedit_kana_, "か");
+    PressShifted(h, 'K');
+    PressShifted(h, 'A');
+    ASSERT_EQ(h.service.preedit_kana_, "かカ");
+    PressShifted(h, 'K');
+    ASSERT_TRUE(h.Press('I'));
+    ASSERT_EQ(h.service.preedit_kana_, "かカき");
+    SetCapsLockToggled(true);
+    TypeTypoRomaji(h, "KA");
+    SetCapsLockToggled(false);
+    EXPECT_EQ(h.service.preedit_kana_, "かカきか");
+  }
+}

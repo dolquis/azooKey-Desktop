@@ -135,9 +135,9 @@
     },
     "inputStyle": {
       "type": "string",
-      "enum": ["default", "custom"],
+      "enum": ["default", "azik", "kanaJis", "custom"],
       "default": "default",
-      "description": "Phase 5 (M17): default=内蔵ローマ字テーブル / custom=customRomajiTablePath を読み込む"
+      "description": "Phase 5 (M17)・M70: default=内蔵ローマ字テーブル / azik=AZIK（内蔵の表） / kanaJis=かな入力（JIS 配列） / custom=customRomajiTablePath を読み込む"
     },
     "customRomajiTablePath": {
       "type": "string",

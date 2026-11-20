@@ -18756,6 +18756,14 @@ TEST(TsfTipMagicConversionTest, TheWindowNeedsTheSettingTheHostAnExternalAiAndAS
     EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
   }
   {
+    // ai-backend-spec section 14.2 (DEV-2161): normal without externalAiConsent sends nothing.
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.DoubleTap(kAlnumKey);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  }
+  {
     MagicConversionHarness m;
     m.Select(L"Good morning.", 4, 4);
     m.DoubleTap(kAlnumKey);

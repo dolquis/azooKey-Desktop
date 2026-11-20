@@ -358,7 +358,7 @@ secure と分けない。SafeMode による停止は Host が担う（`docs/host
    `privacy.custom.detailedLogging = true` でも `redactLogs = true` の間は本文系フィールドを
    redact し続ける（`docs/observability-spec.md` §7.6 の設定解決に従う）。
    これにより Debug + `AZOOKEY_LOG_BODY=1` であっても、`redactLogs` が有効な限り入力本文は出力されない。
-5. **`privacy.externalAiConsent` は外部 AI 許可の floor**: 外部 AI 許可は `custom.externalAi` 単独では
+5. **`privacy.externalAiConsent` は外部 AI 許可の floor**（全モード共通。下記）: 外部 AI 許可は `custom.externalAi` 単独では
    true にならず、外部 AI への明示同意 `privacy.externalAiConsent = true`（既定 `false`）を併せて満たす場合のみ
    true になる（`docs/ai-backend-spec.md` §14.2）。
 

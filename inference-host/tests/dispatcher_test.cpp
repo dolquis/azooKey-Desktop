@@ -6912,7 +6912,7 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   // An openai backend without an API key is a setting to make, not a failure.
   {
     std::ofstream file(settings_path, std::ios::trunc);
-    file << R"({"aiBackend":"openai"})";
+    file << R"({"aiBackend":"openai","privacy":{"externalAiConsent":true}})";
   }
   settings.Reload();
   EXPECT_EQ(detect(766, request)->error, std::optional<std::string>("unsupported"));

@@ -735,8 +735,7 @@ wire の値として残す。利用者から見える挙動と既定値、設定
 同意の無い要求は §8 の `外部 AI 許可==false` と同じに扱う。実効 backend が `OpenAi` なら外部へ送らず、
 消費者の fallback（§7.4）へ進む。同意は設定アプリの OpenAI 節で取り、初回送信前の確認ダイアログは
 設けない。不変条件（`外部 AI 許可 ⇒ AI 候補生成許可`、secure が最優先）はこの決定で変わらない。
-設定キーの名前と schema への追加は実装の課題（DEV-2161）が決め、決めたキーを §11 の表と
-`docs/privacy-and-secure-input-spec.md` §5 の表に載せる。
+キーは `privacy.externalAiConsent`（§11）であり、`docs/privacy-and-secure-input-spec.md` §5.2 の表にも載せる。
 
 根拠は次のとおり。
 

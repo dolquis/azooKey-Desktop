@@ -951,7 +951,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ## 想定される追記先（前提整備・現時点では未同梱）
 
-M62-C/D・M53 で取り込む可能性がある資産と、取り込み時に必要な表記義務の目安。
+M62-C/D・M53・M55 で取り込む可能性がある資産と、取り込み時に必要な表記義務の目安。
 **実際に取り込む段階で正式に追記する。現時点ではいずれも同梱していない。**
 
 | 想定資産 | 用途（M） | ライセンス | 追記時の要点 |
@@ -959,6 +959,7 @@ M62-C/D・M53 で取り込む可能性がある資産と、取り込み時に必
 | Mozc `symbol.tsv` 由来データ | 記号リライター（M62-C） | BSD-3-Clause © Google | 名前条項（3rd clause）保持・原典表記の全文転記 |
 | Mozc `emoji_data.tsv` 由来データ | 絵文字リライター（M62-D） | BSD-3-Clause © Google | 同上 |
 | Unicode CLDR 由来データ | 絵文字リライター（M62-D） | Unicode License v3 | CLDR データ条項・出典バージョン明記 |
+| SQLite（amalgamation） | typo v2 ストア（M55。`docs/typo-correction-learning-spec.md` §12.8） | Public Domain（SPDX `blessing`） | 帰属の義務は無いが配布物に静的リンクするので節を置く。amalgamation を third_party の下に commit する（版と SHA256 を記録）。sbom 注記と、repo に置いたソースの版と hash を扱う SBOM 生成の拡張を同じ PR で行う |
 
 > 上表は**将来取り込みの計画**であり、現時点で該当データを再配布していないことを再掲する。
-> 定義・受け入れ条件の正典は `plans/windows-port-roadmap.md`（M62 / M53）、進捗・状態は Linear。
+> 定義・受け入れ条件の正典は `plans/windows-port-roadmap.md`（M62 / M53 / M55）、進捗・状態は Linear。

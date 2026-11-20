@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "LearningPaneModel.h"
 #include "azookey/ipc/Payloads.h"
 #include "pch.h"
 
@@ -47,9 +48,21 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   winrt::fire_and_forget Reset();
   winrt::fire_and_forget Export();
   winrt::fire_and_forget Import();
+  // Learns once which user dictionary features the Host advertises (user-dictionary-pos-spec
+  // section 7.4). It runs beside a listing, so it leaves the busy state and the status bar alone;
+  // only an answer is kept, and a Host that did not answer is asked again on the next showing.
+  winrt::fire_and_forget ProbeUserDictFeatures();
+  void ApplyUserDictFeatures();
+  bool IsUserDictTab() const;
+  // "ほかの IME の辞書を取り込む…" (user-dictionary-pos-spec section 8).
+  winrt::fire_and_forget ImportUserDictText();
   winrt::Windows::Foundation::IAsyncOperation<bool> Confirm(winrt::hstring title,
                                                             winrt::hstring message,
                                                             winrt::hstring primary_text);
+  // Confirm with any content, such as a panel holding a choice.
+  winrt::Windows::Foundation::IAsyncOperation<bool> Ask(
+      winrt::hstring title, winrt::Windows::Foundation::IInspectable content,
+      winrt::hstring primary_text);
   void RenderEntries();
   void UpdatePager();
   void SetBusy(bool busy);
@@ -69,7 +82,10 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   winrt::Microsoft::UI::Xaml::Controls::StackPanel add_section_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox add_reading_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox add_word_box_{nullptr};
+  // Shown only when the Host advertises user_dict_pos / user_dict_text_import.
+  winrt::Microsoft::UI::Xaml::Controls::ComboBox add_pos_combo_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button add_button_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Button user_dict_import_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel backup_section_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox search_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button search_button_{nullptr};
@@ -95,6 +111,10 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   std::vector<azookey::ipc::LearningEntryField> entries_;
   bool loaded_once_{false};
   bool busy_{false};
+  UserDictHostFeatures user_dict_features_;
+  // Set while an import of another IME's dictionary runs, from the picker to the result.
+  bool user_dict_import_in_flight_{false};
+  bool user_dict_probe_in_flight_{false};
 };
 
 }  // namespace azookey::settings

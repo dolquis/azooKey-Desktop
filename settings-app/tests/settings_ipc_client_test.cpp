@@ -5,6 +5,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifndef NOMINMAX
@@ -127,6 +128,7 @@ class FakeHost {
     options.connect_timeout_ms = 1000;
     options.response_timeout_ms = 1000;
     options.long_response_timeout_ms = 1000;
+    options.user_dict_import_timeout_ms = 1000;
     return options;
   }
 
@@ -476,6 +478,172 @@ TEST(SettingsIpcClientTest, ProbingACapabilitySendsNoRequest) {
   absent.connect_timeout_ms = 100;
   EXPECT_EQ(azookey::settings::ProbeHostCapability(absent, "learning_reset"),
             HostCallStatus::HostNotRunning);
+}
+
+TEST(SettingsIpcClientTest, HostCapabilitiesComeFromOneHandshakeWithoutARequest) {
+  FakeHost host({"settings", "user_dict_pos", "user_dict_text_import"},
+                [](azookey::ipc::MessageType, const std::string&) {
+                  return std::optional<std::string>("{}");
+                });
+  ASSERT_TRUE(host.started());
+
+  const auto result = azookey::settings::RequestHostCapabilities(host.Options());
+
+  ASSERT_EQ(result.status, HostCallStatus::Ok);
+  ASSERT_TRUE(result.response);
+  EXPECT_EQ(*result.response,
+            (std::vector<std::string>{"settings", "user_dict_pos", "user_dict_text_import"}));
+  EXPECT_EQ(host.requests(), 0);
+
+  azookey::settings::SettingsIpcOptions absent;
+  absent.pipe_name = "\\\\.\\pipe\\azookey-settings-capabilities-absent";
+  absent.handshake_token = "settings-test-token";
+  absent.connect_timeout_ms = 100;
+  const auto missing = azookey::settings::RequestHostCapabilities(absent);
+  EXPECT_EQ(missing.status, HostCallStatus::HostNotRunning);
+  EXPECT_FALSE(missing.response);
+}
+
+TEST(SettingsIpcClientTest, UserDictCapabilityNamesMatchTheProtocol) {
+  EXPECT_EQ(std::string_view(azookey::settings::kCapabilityUserDictPos),
+            azookey::ipc::kCapabilityUserDictPos);
+  EXPECT_EQ(std::string_view(azookey::settings::kCapabilityUserDictTextImport),
+            azookey::ipc::kCapabilityUserDictTextImport);
+}
+
+TEST(SettingsIpcClientTest, AddUserWordCarriesThePartOfSpeech) {
+  std::optional<azookey::ipc::AddUserWordRequest> seen;
+  FakeHost host(
+      {"settings", "user_dict_pos"}, [&](azookey::ipc::MessageType, const std::string& payload) {
+        seen = azookey::ipc::ParseAddUserWordRequest(payload);
+        azookey::ipc::AddUserWordResponse response;
+        response.ok = false;
+        response.error = "invalid_pos";
+        return std::optional<std::string>(azookey::ipc::BuildAddUserWordResponse(response));
+      });
+  ASSERT_TRUE(host.started());
+  azookey::ipc::AddUserWordRequest request;
+  request.ruby = "ggru";
+  request.word = "Gguru";
+  request.pos = "verb_godan_ra";
+
+  const auto result = azookey::settings::RequestAddUserWord(host.Options(), request);
+
+  ASSERT_EQ(result.status, HostCallStatus::Ok);
+  EXPECT_FALSE(result.response->ok);
+  EXPECT_EQ(result.response->error, "invalid_pos");
+  ASSERT_TRUE(seen);
+  EXPECT_EQ(seen->pos, "verb_godan_ra");
+}
+
+// user-dictionary-pos-spec 7.1: a Host whose Handshake does not advertise user_dict_pos would drop
+// the part of speech and answer ok, so such a word is not sent to it; a noun still is.
+TEST(SettingsIpcClientTest, AddUserWordWithAPartOfSpeechNeedsTheCapabilityOnTheSameConnection) {
+  int requests = 0;
+  FakeHost host({"settings"}, [&](azookey::ipc::MessageType, const std::string&) {
+    ++requests;
+    azookey::ipc::AddUserWordResponse response;
+    response.ok = true;
+    return std::optional<std::string>(azookey::ipc::BuildAddUserWordResponse(response));
+  });
+  ASSERT_TRUE(host.started());
+  azookey::ipc::AddUserWordRequest request;
+  request.ruby = "ggru";
+  request.word = "Gguru";
+  request.pos = "verb_godan_ra";
+
+  const auto refused = azookey::settings::RequestAddUserWord(host.Options(), request);
+  EXPECT_EQ(refused.status, HostCallStatus::Unsupported);
+  EXPECT_FALSE(refused.response.has_value());
+  EXPECT_EQ(requests, 0);
+
+  request.pos.reset();
+  const auto noun = azookey::settings::RequestAddUserWord(host.Options(), request);
+  ASSERT_EQ(noun.status, HostCallStatus::Ok);
+  EXPECT_TRUE(noun.response->ok);
+  EXPECT_EQ(requests, 1);
+}
+
+TEST(SettingsIpcClientTest, ImportUserDictionaryTextCarriesTheRequestAndNeedsItsCapability) {
+  std::vector<azookey::ipc::ImportUserDictionaryTextRequest> seen;
+  FakeHost host({"user_dict_text_import"},
+                [&](azookey::ipc::MessageType type, const std::string& payload) {
+                  EXPECT_EQ(type, azookey::ipc::MessageType::ImportUserDictionaryText);
+                  if (auto parsed = azookey::ipc::ParseImportUserDictionaryTextRequest(payload)) {
+                    seen.push_back(*parsed);
+                  }
+                  azookey::ipc::ImportUserDictionaryTextResponse response;
+                  response.ok = true;
+                  response.format = "msime";
+                  response.encoding = "utf-16le";
+                  azookey::ipc::UserDictionaryTextImportCounts counts;
+                  counts.added = 120;
+                  counts.kept = 3;
+                  counts.duplicates_in_file = 1;
+                  counts.unsupported_pos = 5;
+                  response.counts = counts;
+                  return std::optional<std::string>(
+                      azookey::ipc::BuildImportUserDictionaryTextResponse(response));
+                });
+  ASSERT_TRUE(host.started());
+  azookey::ipc::ImportUserDictionaryTextRequest preview;
+  preview.source_path = "C:\\Users\\me\\Desktop\\msime-dict.txt";
+  preview.dry_run = true;
+
+  const auto result = azookey::settings::RequestImportUserDictionaryText(host.Options(), preview);
+
+  ASSERT_EQ(result.status, HostCallStatus::Ok);
+  EXPECT_TRUE(result.response->ok);
+  EXPECT_EQ(result.response->format, "msime");
+  EXPECT_EQ(result.response->encoding, "utf-16le");
+  ASSERT_TRUE(result.response->counts);
+  EXPECT_EQ(result.response->counts->added, 120u);
+  EXPECT_EQ(result.response->counts->kept, 3u);
+  EXPECT_EQ(result.response->counts->unsupported_pos, 5u);
+  ASSERT_EQ(seen.size(), 1u);
+  EXPECT_EQ(seen[0].source_path, "C:\\Users\\me\\Desktop\\msime-dict.txt");
+  EXPECT_EQ(seen[0].format, "auto");
+  EXPECT_EQ(seen[0].conflict_resolution, "merge");
+  EXPECT_TRUE(seen[0].dry_run);
+
+  auto run = preview;
+  run.format = "google";
+  run.conflict_resolution = "overwrite";
+  run.dry_run = false;
+  ASSERT_EQ(azookey::settings::RequestImportUserDictionaryText(host.Options(), run).status,
+            HostCallStatus::Ok);
+  ASSERT_EQ(seen.size(), 2u);
+  EXPECT_EQ(seen[1].format, "google");
+  EXPECT_EQ(seen[1].conflict_resolution, "overwrite");
+  EXPECT_FALSE(seen[1].dry_run);
+
+  FakeHost older({"settings", "user_dict_pos"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>("{}");
+  });
+  ASSERT_TRUE(older.started());
+  EXPECT_EQ(azookey::settings::RequestImportUserDictionaryText(older.Options(), preview).status,
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(older.requests(), 0);
+}
+
+TEST(SettingsIpcClientTest, ImportUserDictionaryTextWaitsForItsOwnTimeout) {
+  FakeHost host({"user_dict_text_import"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>();
+  });
+  ASSERT_TRUE(host.started());
+  auto options = host.Options();
+  options.user_dict_import_timeout_ms = 200;
+  // The import's own wait applies, not the long one of an archive.
+  options.long_response_timeout_ms = 60000;
+  azookey::ipc::ImportUserDictionaryTextRequest request;
+  request.source_path = "C:\\dict.txt";
+
+  const auto started = std::chrono::steady_clock::now();
+  const auto result = azookey::settings::RequestImportUserDictionaryText(options, request);
+
+  EXPECT_EQ(result.status, HostCallStatus::Timeout);
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+  EXPECT_EQ(azookey::settings::SettingsIpcOptions{}.user_dict_import_timeout_ms, 30000u);
 }
 
 TEST(SettingsIpcClientTest, QueryPersonaSendsAnEmptyObjectAndNeedsItsCapability) {

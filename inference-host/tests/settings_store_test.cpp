@@ -217,7 +217,8 @@ TEST(SettingsStoreTest, AutoSecureInputOnlyExplicitFalseDisablesAndMalformedRelo
 }
 
 // M70 (docs/input-style-spec.md §2): the four styles are read as they are; any
-// other value, a non-string and an absent key are default.
+// other value, a non-string and an absent key are default. Each of those comes
+// right after a style other than default, so keeping the previous value fails.
 TEST(SettingsStoreTest, InputStyleReadsTheFourStylesAndDefaultsOtherValues) {
   ScopedTempDirectory temp("azookey_settings_input_style");
   const auto path = temp.path() / "settings.json";
@@ -225,13 +226,14 @@ TEST(SettingsStoreTest, InputStyleReadsTheFourStylesAndDefaultsOtherValues) {
   EXPECT_EQ(store.Load().settings.input_style, "default");
   for (const auto& [text, style] : {
            std::pair{R"({"inputStyle":"azik"})", "azik"},
-           std::pair{R"({"inputStyle":"kanaJis"})", "kanaJis"},
-           std::pair{R"({"inputStyle":"custom"})", "custom"},
-           std::pair{R"({"inputStyle":"default"})", "default"},
            std::pair{R"({"inputStyle":"AZIK"})", "default"},
-           std::pair{R"({"inputStyle":"kanaUs"})", "default"},
+           std::pair{R"({"inputStyle":"kanaJis"})", "kanaJis"},
            std::pair{R"({"inputStyle":1})", "default"},
+           std::pair{R"({"inputStyle":"custom"})", "custom"},
            std::pair{R"({})", "default"},
+           std::pair{R"({"inputStyle":"kanaJis"})", "kanaJis"},
+           std::pair{R"({"inputStyle":"kanaUs"})", "default"},
+           std::pair{R"({"inputStyle":"default"})", "default"},
        }) {
     WriteText(path, text);
     EXPECT_EQ(store.Reload().settings.input_style, style) << text;

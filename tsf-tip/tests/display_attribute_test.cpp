@@ -513,6 +513,30 @@ TEST(TsfTipDisplayAttributeTest, SegmentRangesFollowTheFocusAndWhatEachSegmentSh
   EXPECT_TRUE(azookey::tsf::BuildSegmentAttributeRanges({}, 0).empty());
 }
 
+// segment-editing-spec §7: a resized first segment is Focused and the remaining
+// reading after it Converted, and both reach the composition as two ranges.
+TEST(TsfTipDisplayAttributeTest, ResizedFirstSegmentIsFocusedBeforeTheConvertedRest) {
+  const auto ranges = azookey::tsf::BuildFirstSegmentAttributeRanges(2, 3);
+  ASSERT_EQ(ranges.size(), 2u);
+  EXPECT_EQ(ranges[0].start, 0);
+  EXPECT_EQ(ranges[0].length, 2);
+  EXPECT_EQ(ranges[0].kind, DisplayAttributeKind::FocusedSegment);
+  EXPECT_EQ(ranges[1].start, 2);
+  EXPECT_EQ(ranges[1].length, 3);
+  EXPECT_EQ(ranges[1].kind, DisplayAttributeKind::ConvertedSegment);
+
+  std::vector<std::unique_ptr<OffsetRange>> clones;
+  OffsetRange composition(0, 5, 5, &clones);
+  RecordingProperty property;
+  ASSERT_EQ(azookey::tsf::ApplyDisplayAttributes(1, &property, &composition, ranges, kAtoms), S_OK);
+  ASSERT_EQ(property.writes.size(), 2u);
+  EXPECT_EQ(property.writes[0].end, 2);
+  EXPECT_EQ(property.writes[0].atom, 12u);
+  EXPECT_EQ(property.writes[1].start, 2);
+  EXPECT_EQ(property.writes[1].end, 5);
+  EXPECT_EQ(property.writes[1].atom, 13u);
+}
+
 TEST(TsfTipDisplayAttributeTest, MouseEdgeAndQuadrantPickTheSegmentUnderTheClick) {
   const std::vector<DisplayedSegment> segments{{2, true}, {0, true}, {3, true}};
   size_t index = 99;

@@ -417,16 +417,20 @@ bool HasSystemModifier(uint32_t modifiers) {
 // derives the state kind from its composition and candidate window, or from the
 // core Unicode input state while that is active, and drops actions whose
 // effects it does not implement (replace suggestion and its double taps).
+// `segment_resize` maps Shift+Left / Shift+Right of Selecting to the resize of
+// the first segment (segment-editing-spec §4), as a normal conversion takes them.
 std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t modifiers,
                                                         bool has_preedit, bool cand_visible,
-                                                        bool unicode_active) {
+                                                        bool unicode_active,
+                                                        bool segment_resize = false) {
   using azookey::core::InputStateKind;
   using azookey::core::UserAction;
   const InputStateKind kind = unicode_active ? InputStateKind::UnicodeInput
                               : cand_visible ? InputStateKind::Selecting
                               : has_preedit  ? InputStateKind::Composing
                                              : InputStateKind::Idle;
-  auto event = azookey::core::MapUserAction(static_cast<uint32_t>(key), modifiers, kind);
+  auto event =
+      azookey::core::MapUserAction(static_cast<uint32_t>(key), modifiers, kind, segment_resize);
   if (!event) return std::nullopt;
   switch (event->action) {
     case UserAction::Input:
@@ -453,6 +457,8 @@ std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t mod
     case UserAction::CommitFullwidthRoman:
     case UserAction::CommitHalfwidthRoman:
     case UserAction::UndoCommit:
+    case UserAction::ShrinkSegment:
+    case UserAction::ExtendSegment:
       return event;
     default:
       return std::nullopt;
@@ -2479,8 +2485,19 @@ bool TextService::HasInputToCommitBeforeClose() const {
 HRESULT TextService::CloseKeyboardCommittingShownText(ITfContext* context,
                                                       std::string_view source) {
   ITfContext* target = context ? context : active_context_;
-  if (keyboard_open_ && keyboard_open_compartment_ && client_id_ != TF_CLIENTID_NULL && target &&
-      HasInputToCommitBeforeClose()) {
+  // Segment-editing-spec §4, §5.2: Enter would commit a resized first segment
+  // alone. What it shows is committed instead: while its candidates are
+  // awaited, the reading through the lifecycle path below, unobserved; once
+  // they show, the candidate and the remaining reading as typing commits them.
+  const bool can_close =
+      keyboard_open_ && keyboard_open_compartment_ && client_id_ != TF_CLIENTID_NULL && target;
+  const bool resizing = can_close && !committing_ && ResizingSegment();
+  if (resizing && !input_state_.awaiting_segment_candidates()) {
+    const HRESULT hr = ApplyInputStateResult(target, CommitShownSegmentResult());
+    if (FAILED(hr)) return hr;
+    // A refused commit waits for its retry, still on (spec §4.2).
+    if (committing_) return S_OK;
+  } else if (!resizing && can_close && HasInputToCommitBeforeClose()) {
     // Spec §4.2: an off key commits what is shown (the live conversion, the
     // selected candidate) the way Enter does, without waiting for a final
     // punctuation request, before closing.
@@ -3103,7 +3120,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool unicode_active = UnicodeInputActive();
-    auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active);
+    auto key_event =
+        MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active, ResizesSegments());
     const auto composition_symbol = TypedCompositionSymbol(wParam, lParam, BatchRomajiEnabled());
     const auto decimal_digit = TypedDecimalDigit(wParam, lParam, modifiers);
     core::RomajiKanaConverter input_romaji = romaji_;
@@ -3154,7 +3172,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = has_preedit ? TRUE : FALSE;
     } else if (key_event->action == UserAction::Forward ||
                key_event->action == UserAction::Backward) {
-      *eaten = !shown_batch_segments_.empty() ? TRUE : FALSE;
+      // Segment-editing-spec §4: a resized first segment takes → / Ctrl+F (a
+      // partial commit) and ← / Ctrl+B (nothing); the whole reading leaves them.
+      *eaten = !shown_batch_segments_.empty() || ResizingSegment() ? TRUE : FALSE;
     } else {
       // Conversion, candidate navigation, Commit and Cancel are mapped only
       // while a preedit or the candidate window exists.
@@ -3383,7 +3403,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // window instead, as any key did before the keys were held.
     if (wait_key != WindowWaitKey::Drop && !commit_before_close_ && core_input_active_ &&
         waiting_for_window && IpcHostUnavailable() && active_context_) {
-      if (const HRESULT open_hr = OpenLocalCandidateWindow(active_context_);
+      // A resized first segment takes the local candidates of its reading
+      // (segment-editing-spec §5.2).
+      if (const HRESULT open_hr = AwaitingSegmentCandidates()
+                                      ? OpenLocalSegmentCandidates(active_context_)
+                                      : OpenLocalCandidateWindow(active_context_);
           open_hr == E_OUTOFMEMORY)
         return open_hr;
     }
@@ -3417,8 +3441,20 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     if (committing_) {
       ITfContext* retry_context = commit_context_ ? commit_context_ : active_context_;
+      // Segment-editing-spec §4: an off key commits the text shown whole, the
+      // remaining reading with the first segment.
+      if (commit_before_close_) partial_commit_.reset();
       const HRESULT retry_hr = retry_context ? RequestCommitEditSession(retry_context) : E_FAIL;
       if (retry_hr == E_OUTOFMEMORY) return retry_hr;
+      if (completed_partial_commit_) {
+        // Segment-editing-spec §6.2: the first segment is committed; the
+        // remaining reading stays and asks for its candidates only now.
+        if (const HRESULT finish_hr = FinishPartialCommit(retry_context);
+            finish_hr == E_OUTOFMEMORY)
+          return finish_hr;
+        *eaten = TRUE;
+        return ReplayRetryWaitingKeys(context, wParam, lParam);
+      }
       if (SUCCEEDED(retry_hr)) {
         preedit_kana_.clear();
         romaji_.Reset();
@@ -3698,7 +3734,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool unicode_active = UnicodeInputActive();
-    auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active);
+    auto key_event =
+        MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active, ResizesSegments());
     const bool unicode_routed = UnicodeInputRouted(key_event, has_preedit, cand_visible);
     const auto composition_symbol = TypedCompositionSymbol(wParam, lParam, BatchRomajiEnabled());
     const auto decimal_digit = TypedDecimalDigit(wParam, lParam, modifiers);
@@ -3706,9 +3743,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (IsActionKey(key_event, UserAction::StartUnicodeInput) && !unicode_routed) return S_OK;
     // Spec §3.6 (DEV-1812): F6-F10 commit the reading in one form from every
     // path that holds one (core, batch, number rewriter, the rewriter window).
+    // A resized first segment commits that segment alone (segment-editing-spec §6.1).
     if (const auto form = CommitFormFor(key_event)) {
       *eaten = TRUE;
-      const HRESULT form_hr = CommitReadingInForm(context, *form);
+      const HRESULT form_hr = ResizingSegment()
+                                  ? CommitFirstSegmentInForm(context, *form, *key_event)
+                                  : CommitReadingInForm(context, *form);
       return form_hr == E_OUTOFMEMORY ? form_hr : S_OK;
     }
     core::RomajiKanaConverter input_romaji = romaji_;
@@ -5025,8 +5065,11 @@ void TextService::HoldRetryWaitingKey(ITfContext* context, WPARAM key, LPARAM ke
 // DEV-1813: the window query that Space sent is still unanswered, in core
 // (InputState waits for its candidates) or on the TIP's Space path (English
 // candidates and the rewriters), which keeps candidate_window_show_pending_.
-// Batch conversion and the emoji search keep their own waits.
+// Batch conversion and the emoji search keep their own waits. The first
+// segment's answer is waited for the same way, with the window kept open
+// (segment-editing-spec §5.2).
 bool TextService::AwaitingCandidateWindow() {
+  if (AwaitingSegmentCandidates()) return true;
   if (committing_ || candidate_ui_.IsShowing()) return false;
   if (core_input_active_)
     return input_state_.awaiting_candidates() &&
@@ -5101,6 +5144,107 @@ HRESULT TextService::OpenLocalCandidateWindow(ITfContext* context) {
                                input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
 }
 
+bool TextService::AwaitingSegmentCandidates() const {
+  return core_input_active_ && !committing_ &&
+         input_state_.kind() == core::InputStateKind::Selecting &&
+         input_state_.awaiting_segment_candidates();
+}
+
+// Segment-editing-spec §5.1, §5.2: what the TIP offers on its own for the first
+// segment, as for the whole reading without a Host. Never empty: the reading
+// itself is always the first one (BuildLocalFallbackCandidates).
+std::vector<TipCandidate> TextService::LocalSegmentCandidates(const std::string& reading) const {
+  return BuildTipCandidates(reading, BuildLocalFallbackCandidates(reading),
+                            number_rewriter_.load(std::memory_order_relaxed),
+                            katakana_rewriter_.load(std::memory_order_relaxed),
+                            /*symbol_rewriter_enabled=*/false, DynamicCandidates(reading));
+}
+
+HRESULT TextService::OpenLocalSegmentCandidates(ITfContext* context) {
+  return ApplySegmentCandidates(context,
+                                LocalSegmentCandidates(input_state_.FirstSegmentReading()));
+}
+
+HRESULT TextService::ApplySegmentCandidates(ITfContext* context,
+                                            std::vector<TipCandidate> candidates) {
+  // The window takes the TIP metadata with the list core shows (ShowCandidateWindow).
+  core_cached_metadata_ = std::move(candidates);
+  std::vector<core::Candidate> list;
+  list.reserve(core_cached_metadata_.size());
+  for (const auto& item : core_cached_metadata_) {
+    core::Candidate candidate;
+    candidate.surface = item.field.surface;
+    candidate.reading = item.field.reading;
+    candidate.score = item.field.score;
+    candidate.description = item.description;
+    list.push_back(std::move(candidate));
+  }
+  const HRESULT hr =
+      ApplyInputStateResult(context, input_state_.HandleSegmentCandidatesArrived(
+                                         input_state_.FirstSegmentReading(), std::move(list)));
+  // A result rolled back still waits for this query, whose answer stays cached.
+  if (SUCCEEDED(hr)) segment_query_.reset();
+  return hr;
+}
+
+// Segment-editing-spec §5.1: only the answer of the latest first segment's
+// query counts. An answer that corrected the reading, and a candidate of
+// another reading, are not used; the first segment's local candidates replace
+// a list left with none of the Host's, so the wait always ends with candidates.
+bool TextService::ApplySegmentCandidatesFromCache() {
+  if (!AwaitingSegmentCandidates() || !segment_query_ || !active_context_) return false;
+  std::vector<TipCandidate> answer;
+  bool corrected = false;
+  {
+    std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+    if (candidates_query_token_ != segment_query_->token) return false;
+    answer = candidates_;
+    // Set with the candidates of this answer (the request id may have changed
+    // since, when a new Host generation was sent the query again).
+    corrected =
+        corrected_reading_result_ && corrected_reading_result_->reading == segment_query_->reading;
+    if (corrected) corrected_reading_result_.reset();
+  }
+  const std::string reading = segment_query_->reading;
+  std::vector<TipCandidate> usable;
+  if (!corrected) {
+    for (auto& candidate : answer)
+      if (candidate.local || candidate.field.reading == reading)
+        usable.push_back(std::move(candidate));
+  }
+  if (std::none_of(usable.begin(), usable.end(),
+                   [](const TipCandidate& candidate) { return !candidate.local; }))
+    usable = LocalSegmentCandidates(reading);
+  return SUCCEEDED(ApplySegmentCandidates(active_context_, std::move(usable)));
+}
+
+void TextService::CancelSegmentQuery() {
+  if (!segment_query_) return;
+  segment_query_.reset();
+  CancelOutstandingQueries();
+}
+
+void TextService::CancelOutstandingQueries() {
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  bool need_notify = false;
+  if (ipc_has_request_) {
+    ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false,
+                               ipc_pending_id_, 0, ipc_pending_trace_id_});
+    ipc_has_request_ = false;
+    need_notify = true;
+  }
+  if (ipc_inflight_id_ != 0) {
+    ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
+                               false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+    ipc_inflight_window_query_id_ = 0;
+    need_notify = true;
+  }
+  // An answer already on its way fails the staleness check.
+  ++ipc_pending_id_;
+  TrimIpcSendQueueLocked();
+  if (need_notify) ipc_cv_.notify_one();
+}
+
 // legacy-parity-spec §1.2: a key the window would take is held; Esc, the off
 // keys and the switch to alphanumeric mode end the wait; any other key (←→,
 // Home) goes on as if there were no wait. Tab is eaten before this (§3.4).
@@ -5111,8 +5255,13 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
   // An on key changes nothing while the IME is on; the off keys end the wait.
   if (open_close == OpenCloseKeyAction::Open) return WindowWaitKey::Pass;
   if (open_close != OpenCloseKeyAction::None) return WindowWaitKey::Drop;
-  if (const auto selecting = MapTipKey(key, modifiers, /*has_preedit=*/true,
-                                       /*cand_visible=*/true, /*unicode_active=*/false)) {
+  // Segment-editing-spec §5.2: the first segment's wait also holds ← → Ctrl+B
+  // Ctrl+F, which a resized segment takes. A resize runs at once unless keys
+  // wait before it; Space's wait holds it for the window (§4).
+  const bool segment_wait = AwaitingSegmentCandidates();
+  if (const auto selecting =
+          MapTipKey(key, modifiers, /*has_preedit=*/true,
+                    /*cand_visible=*/true, /*unicode_active=*/false, ResizesSegments())) {
     switch (selecting->action) {
       case UserAction::Cancel:
       case UserAction::ToggleHankaku:
@@ -5120,6 +5269,11 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
         return WindowWaitKey::Drop;
       case UserAction::Forward:
       case UserAction::Backward:
+        return segment_wait ? WindowWaitKey::Hold : WindowWaitKey::Pass;
+      case UserAction::ShrinkSegment:
+      case UserAction::ExtendSegment:
+        return segment_wait && window_waiting_keys_.empty() ? WindowWaitKey::Pass
+                                                            : WindowWaitKey::Hold;
       case UserAction::ToggleDebugWindow:
       case UserAction::Forget:
         return WindowWaitKey::Pass;
@@ -5712,6 +5866,9 @@ void TextService::CompleteTypoCommit(std::optional<PendingTypoCommit> pending,
 }
 
 HRESULT TextService::ApplyPendingCorrectedReading(ITfContext* context) {
+  // Segment-editing-spec §5.1: a resized first segment keeps its reading; the
+  // answer of its query is judged where it is taken (ApplySegmentCandidatesFromCache).
+  if (ResizingSegment()) return S_OK;
   std::optional<CorrectedReadingResult> pending;
   {
     std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
@@ -5791,6 +5948,10 @@ void TextService::ClearTextStateForLifecycle() {
   commit_surface_.clear();
   pending_commit_observation_.reset();
   ClearCommitContext();
+  segment_query_.reset();
+  whole_reading_candidates_.clear();
+  partial_commit_.reset();
+  completed_partial_commit_.reset();
 }
 
 namespace {
@@ -5848,6 +6009,9 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context,
   if (bracket_composition_) {
     return SUCCEEDED(BracketEditSession::Finish(*this, context, client_id_, false));
   }
+  // Segment-editing-spec §4: a waiting partial commit is committed whole, the
+  // remaining reading as typed, like the text any lifecycle commit shows.
+  partial_commit_.reset();
   std::string pending_surface;
   if (committing_) {
     pending_surface = commit_surface_;
@@ -6508,6 +6672,195 @@ HRESULT TextService::CommitReadingInForm(ITfContext* context, core::CommitForm f
     pending_commit_observation_.reset();
   }
   return commit_hr == E_OUTOFMEMORY ? commit_hr : S_OK;
+}
+
+// --- Partial commit (M66, docs/segment-editing-spec.md §6) ---
+
+core::HandleResult TextService::CommitShownSegmentResult() const {
+  // The actions core gives a key typed over the resized segment before the
+  // key starts the next reading (InputState::CommitCandidate).
+  const auto& candidates = input_state_.candidates();
+  const size_t index = input_state_.selected_index();
+  if (index >= candidates.size()) return {{}, input_state_};
+  const std::string& surface = candidates[index].surface;
+  return {
+      {core::HideCandidateWindow{},
+       core::ReplaceMarkedText{surface + input_state_.RemainingReading()}, core::CommitMarkedText{},
+       core::ObserveCommit{input_state_.FirstSegmentReading(), surface}},
+      input_state_.Reset()};
+}
+
+HRESULT TextService::ApplyPartialCommitResult(ITfContext* context, core::HandleResult result) {
+  std::string surface;
+  for (const auto& action : result.actions)
+    if (const auto* first = std::get_if<core::CommitFirstSegment>(&action))
+      surface = first->surface;
+  // §8: the first segment's observation, from the list its window showed.
+  pending_commit_observation_.reset();
+  bool preedit_update_needed = false;
+  bool commit_pending = false;
+  for (const auto& action : result.actions)
+    if (std::holds_alternative<core::ObserveCommit>(action))
+      (void)ApplyClientAction(context, action, preedit_update_needed, commit_pending);
+  auto observation = std::exchange(pending_commit_observation_, std::nullopt);
+  // The window closes with the commit; the remaining reading's query waits for it.
+  std::erase_if(result.actions, [](const core::ClientAction& action) {
+    return !std::holds_alternative<core::QueryCandidates>(action);
+  });
+  return CommitFirstSegment(context, std::move(surface), std::move(result), std::move(observation));
+}
+
+HRESULT TextService::CommitFirstSegmentInForm(ITfContext* context, core::CommitForm form,
+                                              const core::UserActionEvent& event) {
+  // A key typed while the segment's candidates are awaited waits for them.
+  if (!context || input_state_.awaiting_segment_candidates()) return S_OK;
+  const std::string reading = input_state_.FirstSegmentReading();
+  // tsf-deep-integration-spec §3.6: the typed romaji spells the whole reading,
+  // so the roman forms spell the first segment in Hepburn.
+  const std::string surface = core::BuildCommitForm(reading, form);
+  std::optional<PendingCommitObservation> observation;
+  // Only the katakana forms are learned (§3.6), for the first segment.
+  if (form == core::CommitForm::Katakana || form == core::CommitForm::HalfwidthKatakana) {
+    const auto privacy = ResolvePrivacy(context, false);
+    if (privacy.learning_allowed && batch_learning_allowed_) {
+      ipc::CandidateField chosen;
+      chosen.surface = surface;
+      chosen.reading = reading;
+      chosen.source = "heuristic";
+      observation =
+          PendingCommitObservation{reading, std::move(chosen), {}, {}, privacy.secure, true};
+    }
+  }
+  // Core closes the window and asks for the remaining reading (§6.1).
+  auto result = input_state_.WithLiveConversion(local_settings_.LiveConversionSnapshot())
+                    .WithPunctuationConversion(local_settings_.PunctuationConversionSnapshot())
+                    .HandleEvent(event);
+  std::erase_if(result.actions, [](const core::ClientAction& action) {
+    return !std::holds_alternative<core::QueryCandidates>(action);
+  });
+  return CommitFirstSegment(context, surface, std::move(result), std::move(observation));
+}
+
+HRESULT TextService::CommitFirstSegment(ITfContext* context, std::string surface,
+                                        core::HandleResult result,
+                                        std::optional<PendingCommitObservation> observation) {
+  if (!context || surface.empty()) return S_OK;
+  const std::string remaining = input_state_.RemainingReading();
+  // Put back only when the edit session cannot even be created.
+  const core::InputState previous_state = input_state_;
+  const std::string previous_kana = preedit_kana_;
+  const core::RomajiKanaConverter previous_romaji = romaji_;
+  const std::string previous_marked = core_marked_surface_;
+  const std::vector<TipCandidate> previous_shown = shown_candidates_;
+  const int previous_selected = selected_candidate_idx_;
+  const std::string previous_raw_romaji = english_raw_romaji_;
+
+  ClearPrediction();
+  candidate_ui_.EndUI();
+  shown_candidates_.clear();
+  selected_candidate_idx_ = 0;
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    candidates_.clear();
+    candidates_query_token_ = 0;
+    candidate_window_show_pending_ = false;
+    corrected_reading_result_.reset();
+  }
+  segment_query_.reset();
+  CancelOutstandingQueries();
+  // §6.1: from now on the composition holds the remaining reading as reading
+  // input shows it. The live conversion and the typed romaji belonged to the
+  // whole reading.
+  live_display_reading_.clear();
+  live_display_surface_.clear();
+  live_display_segments_.clear();
+  live_display_auto_punctuation_ = false;
+  live_carries_.clear();
+  english_raw_romaji_.clear();
+  input_state_ = result.next;
+  preedit_kana_ = input_state_.confirmed_kana();
+  romaji_ = input_state_.pending_romaji();
+  core_marked_surface_ = remaining;
+  core_input_active_ = true;
+  // commit-undo-spec §8: a partial commit records no undo target, and an
+  // undo put back before it owes no "undo" (§7).
+  commit_undo_target_.reset();
+  pending_undo_correction_.reset();
+  last_commit_undo_pair_.reset();
+  recent_character_form_commit_.reset();
+  // typo-correction-learning-spec §4-1: the tracker and the commit it held go,
+  // so no ObserveTypo pairs the corrected reading with a part of the input.
+  pending_typo_commit_.reset();
+  typo_tracker_.Reset();
+  // The composition stays, so a Backspace edits the remaining reading.
+  if (observation) observation->arms_undo = false;
+  pending_commit_observation_ = std::move(observation);
+  // A lifecycle commit before the edit session writes the text shown whole.
+  commit_surface_ = surface + remaining;
+  committing_ = true;
+  partial_commit_ =
+      PartialCommit{std::move(surface), remaining, input_state_, std::move(result.actions)};
+  SetCommitContext(context);
+  const HRESULT commit_hr = RequestCommitEditSession(context);
+  if (completed_partial_commit_) {
+    const HRESULT finish_hr = FinishPartialCommit(context);
+    return finish_hr == E_OUTOFMEMORY ? finish_hr : S_OK;
+  }
+  if (SUCCEEDED(commit_hr)) {
+    // The edit session committed the text whole (the host had ended the
+    // composition), as a lifecycle commit does.
+    preedit_kana_.clear();
+    romaji_.Reset();
+    input_state_ = input_state_.Reset();
+    core_marked_surface_.clear();
+    return S_OK;
+  }
+  if (commit_hr == E_OUTOFMEMORY && committing_ && partial_commit_) {
+    // No session was created, so the document is unchanged. The resized
+    // Selecting comes back with its window, so the same key can commit again.
+    // What was dropped above stays dropped, each on the safe side: no query is
+    // left (the first segment's list was answered, and the Selecting shown
+    // reads shown_candidates_, not candidates_), no live text or corrected
+    // reading is shown, and no undo target, pending "undo", NonConvert target,
+    // typo pair or prediction survives, so nothing is learned or put back from
+    // this input that it would not have been after the partial commit.
+    committing_ = false;
+    commit_surface_.clear();
+    partial_commit_.reset();
+    pending_commit_observation_.reset();
+    ClearCommitContext();
+    input_state_ = previous_state;
+    preedit_kana_ = previous_kana;
+    romaji_ = previous_romaji;
+    core_marked_surface_ = previous_marked;
+    shown_candidates_ = previous_shown;
+    selected_candidate_idx_ = previous_selected;
+    english_raw_romaji_ = previous_raw_romaji;
+    try {
+      if (!shown_candidates_.empty())
+        candidate_ui_.BeginUI(thread_mgr_, CompositionAnchorRect(),
+                              BuildCandidateViews(shown_candidates_), selected_candidate_idx_);
+    } catch (...) {
+      // The logical state is back; the window returns with the next key.
+    }
+    return commit_hr;
+  }
+  // §6.2 (tsf-deep-integration-spec §2.4.1): a refused session leaves the
+  // commit waiting for the next key, which retries it before the remaining
+  // reading's query goes out.
+  return S_OK;
+}
+
+HRESULT TextService::FinishPartialCommit(ITfContext* context) {
+  if (!completed_partial_commit_) return S_OK;
+  PartialCommit done = std::move(*completed_partial_commit_);
+  completed_partial_commit_.reset();
+  // §6.2: the left context of the remaining reading's query is read now, so
+  // it holds the committed surface.
+  core_marked_surface_ = done.remaining;
+  core_input_active_ = true;
+  return ApplyInputStateResult(context,
+                               core::HandleResult{std::move(done.queries), std::move(done.next)});
 }
 
 // --- IPC worker (M4 + M6 + M10) ---
@@ -7270,6 +7623,7 @@ void TextService::ServeConnection() {
     std::string raw_romaji;
     std::vector<std::string> alt_readings;
     std::string raw_keys;
+    std::string remaining_reading;
     std::shared_ptr<const core::CustomRomajiTable> batch_table;
     bool english_candidates = false;
     bool mixed_english = false;
@@ -7277,6 +7631,7 @@ void TextService::ServeConnection() {
     std::string trace_id;
     std::chrono::steady_clock::time_point trace_start;
     uint64_t req_id = 0;
+    uint64_t query_token = 0;
     bool has_qc = false;
     bool is_batch = false;
     bool is_live_conversion = false;
@@ -7328,6 +7683,7 @@ void TextService::ServeConnection() {
         raw_romaji = ipc_pending_raw_romaji_;
         alt_readings = ipc_pending_alt_readings_;
         raw_keys = ipc_pending_raw_keys_;
+        remaining_reading = ipc_pending_remaining_reading_;
         batch_table = ipc_pending_batch_table_;
         english_candidates = ipc_pending_english_candidates_;
         mixed_english = ipc_pending_mixed_english_;
@@ -7335,6 +7691,7 @@ void TextService::ServeConnection() {
         trace_id = ipc_pending_trace_id_;
         trace_start = ipc_pending_trace_start_;
         req_id = ipc_pending_id_;
+        query_token = ipc_pending_query_token_;
         is_batch = ipc_pending_is_batch_;
         is_live_conversion = ipc_pending_is_live_conversion_;
         apply_live_preview = ipc_pending_apply_live_preview_;
@@ -7549,6 +7906,9 @@ void TextService::ServeConnection() {
         // M55 section 12.13: only to a Host that advertised "raw_keys" in this
         // connection's handshake, and never for a secure field.
         if (!secure && ipc_host_raw_keys_.load(std::memory_order_relaxed)) qreq.raw_keys = raw_keys;
+        // Segment-editing-spec §5.1: the first segment's query; a Host that
+        // does not know the field reads it as an ordinary one.
+        qreq.remaining_reading = remaining_reading;
         qenv.type = MessageType::QueryCandidates;
         qenv.payload_json = BuildQueryCandidatesRequest(qreq);
       }
@@ -7778,8 +8138,10 @@ void TextService::ServeConnection() {
 
       // A late window query (live = false) puts the per-key live answer made
       // with the same reading and context ahead of the TIP-local kana (DEV-1653).
+      // The first segment's query takes the local candidates of its reading
+      // alone (segment-editing-spec §5.2).
       if (emoji_trigger.empty()) {
-        if (!live && !secure && live_prefetch_.reading == reading &&
+        if (!live && !secure && remaining_reading.empty() && live_prefetch_.reading == reading &&
             live_prefetch_.left_context == left_context &&
             live_prefetch_.learning_allowed == learning_allowed)
           response_candidates = live_prefetch_.candidates;
@@ -7872,6 +8234,8 @@ void TextService::ServeConnection() {
           std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
           if (window_query && IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id)) {
             candidate_window_show_pending_ = false;
+            // An empty answer of this request (segment-editing-spec §5.2).
+            candidates_query_token_ = query_token;
             end_wait = true;
           }
         }
@@ -7962,6 +8326,7 @@ void TextService::ServeConnection() {
           is_fresh = false;
         } else {
           candidates_ = std::move(tip_candidates);
+          candidates_query_token_ = query_token;
           corrected_reading_result_.reset();
           if (!corrected_reading.empty())
             corrected_reading_result_ = CorrectedReadingResult{req_id, reading, corrected_reading};
@@ -8527,16 +8892,21 @@ std::string TextService::CurrentActionTraceId() const {
 }
 
 std::string TextService::PostQueryCandidates(ITfContext* context, const std::string& reading,
-                                             bool live, const std::string& emoji_trigger) {
+                                             bool live, const std::string& emoji_trigger,
+                                             const std::string& remaining_reading) {
   const auto privacy = ResolvePrivacy(context, false);
   const std::string left_context = CaptureLeftContext(context, privacy.secure);
   const bool apply_live_preview = live && emoji_trigger.empty() && !privacy.secure &&
                                   !core_input_active_ && local_settings_.LiveConversionSnapshot();
+  // Segment-editing-spec §5.1: the typed romaji spells the whole reading, not
+  // its front, so the first segment's query sends none of what rides on it
+  // (English and mixed candidates, other readings, the typo keys).
+  const bool typed_keys = remaining_reading.empty();
   // M60 §4.1 / §6.2: English candidates join only the candidate window
   // (live = false), and the romaji goes only while it still spells the reading.
   // The romaji is the user's input, so a secure field never sends it (DEV-1745).
   const bool english =
-      !live && emoji_trigger.empty() && !privacy.secure && EnglishCandidatesEnabled();
+      typed_keys && !live && emoji_trigger.empty() && !privacy.secure && EnglishCandidatesEnabled();
   std::string raw_romaji = english ? EnglishRawRomajiFor(reading) : std::string{};
   // M63 section 9.1: mixed_english rides on the M60 fields.
   const bool mixed_english =
@@ -8544,13 +8914,14 @@ std::string TextService::PostQueryCandidates(ITfContext* context, const std::str
   // DEV-1734: the window query compares the readings of an ambiguous "nn" +
   // vowel; the per-key query keeps the typed reading. A secure field drops a
   // corrected reading (below), so it sends no other reading to convert either.
-  auto alt_readings = !live && emoji_trigger.empty() && !privacy.secure
+  auto alt_readings = typed_keys && !live && emoji_trigger.empty() && !privacy.secure
                           ? AltReadingsFor(reading, kWindowAmbiguousPositions)
                           : std::vector<std::string>{};
   // M55 (typo-correction-learning-spec sections 12.12.2 and 12.13): the keys
   // for the typo correction of the per-key and window queries, never for a
   // secure field. ServeConnection drops them for a Host without "raw_keys".
-  auto raw_keys = emoji_trigger.empty() && !privacy.secure ? RawKeysFor(reading) : std::string{};
+  auto raw_keys =
+      typed_keys && emoji_trigger.empty() && !privacy.secure ? RawKeysFor(reading) : std::string{};
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
@@ -8564,6 +8935,8 @@ std::string TextService::PostQueryCandidates(ITfContext* context, const std::str
   ipc_pending_raw_romaji_ = std::move(raw_romaji);
   ipc_pending_alt_readings_ = std::move(alt_readings);
   ipc_pending_raw_keys_ = std::move(raw_keys);
+  ipc_pending_remaining_reading_ = remaining_reading;
+  ipc_pending_query_token_ = ++ipc_query_token_seq_;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -8633,6 +9006,8 @@ std::string TextService::PostQueryLiveConversion(ITfContext* context, const std:
   // QueryLiveConversion has no raw_keys, and the QueryCandidates fallback for a
   // Host before M14 has no "raw_keys" either.
   ipc_pending_raw_keys_.clear();
+  ipc_pending_remaining_reading_.clear();
+  ipc_pending_query_token_ = ++ipc_query_token_seq_;
   ipc_pending_english_candidates_ = false;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
@@ -8763,6 +9138,8 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_raw_romaji_ = raw_romaji;
   ipc_pending_alt_readings_.clear();
   ipc_pending_raw_keys_.clear();  // QueryBatchConversion has no raw_keys.
+  ipc_pending_remaining_reading_.clear();
+  ipc_pending_query_token_ = ++ipc_query_token_seq_;
   ipc_pending_batch_table_ = batch_romaji_table_;
   // ai-cleanup stays without English even when it falls back to neural, and a
   // secure field asks for none (DEV-1745). The request says whether it is
@@ -9409,9 +9786,24 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
       candidates_ = IsStandalonePunctuation(query->reading)
                         ? BuildTipCandidates(query->reading, {}, false, false)
                         : std::vector<TipCandidate>{};
+      candidates_query_token_ = 0;
       candidate_window_show_pending_ = input_state_.awaiting_candidates();
     }
-    if (!IsStandalonePunctuation(query->reading)) {
+    if (!query->remaining_reading.empty()) {
+      // Segment-editing-spec §5.1: a resize asks for the first segment's list
+      // with the remaining reading. Standalone punctuation needs no Host; its
+      // fixed candidates answer once the actions are applied, and the query of
+      // the previous end is cancelled as a new query would.
+      if (!IsStandalonePunctuation(query->reading)) {
+        (void)PostQueryCandidates(context, query->reading, /*live=*/false, {},
+                                  query->remaining_reading);
+        std::lock_guard<std::mutex> lock(ipc_mtx_);
+        segment_query_ = SegmentQuery{ipc_pending_query_token_, query->reading};
+      } else {
+        segment_query_.reset();
+        CancelOutstandingQueries();
+      }
+    } else if (!IsStandalonePunctuation(query->reading)) {
       // The window query asks for the full list (live = false): typo
       // suggestions, English candidates and the n-best (DEV-1653).
       // The prediction of this reading asks with the same context (DEV-1818).
@@ -9458,6 +9850,10 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
 }
 
 HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResult result) {
+  if (std::any_of(result.actions.begin(), result.actions.end(), [](const auto& action) {
+        return std::holds_alternative<core::CommitFirstSegment>(action);
+      }))
+    return ApplyPartialCommitResult(context, std::move(result));
   auto previous_state = input_state_;
   auto previous_kana = preedit_kana_;
   auto previous_romaji = romaji_;
@@ -9471,6 +9867,8 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
   auto previous_shown = shown_candidates_;
   const int previous_selected = selected_candidate_idx_;
   const bool was_showing = candidate_ui_.IsShowing();
+  const bool was_resizing =
+      previous_state.kind() == core::InputStateKind::Selecting && previous_state.resizing_segment();
   bool preedit_was_updated = false;
   auto rollback = [&]() {
     input_state_ = std::move(previous_state);
@@ -9528,14 +9926,32 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         if (const auto* replace = std::get_if<core::ReplaceMarkedText>(&action)) replaced = replace;
         if (const auto* observe = std::get_if<core::ObserveCommit>(&action)) observed = observe;
       }
-      commits_typed_mark = replaced && observed && replaced->text != observed->surface;
+      // A resized first segment commits the remaining reading after its
+      // candidate (segment-editing-spec §4); the reading already holds it
+      // (commit-undo-spec §8).
+      const std::string shown =
+          observed ? observed->surface +
+                         (was_resizing ? previous_state.RemainingReading() : std::string{})
+                   : std::string{};
+      commits_typed_mark = replaced && observed && replaced->text != shown;
       if (commits_typed_mark)
-        typed_mark = replaced->text.starts_with(observed->surface)
-                         ? std::optional(replaced->text.substr(observed->surface.size()))
+        typed_mark = replaced->text.starts_with(shown)
+                         ? std::optional(replaced->text.substr(shown.size()))
                          : std::nullopt;
     }
     input_state_ = std::move(result.next);
     core_action_in_progress_ = true;
+    // Segment-editing-spec §4: the whole reading's list returns without a
+    // query when the segment grows back to it, so its metadata is kept from the
+    // start of the resize, and the first segment's query is dropped.
+    if (input_state_.kind() == core::InputStateKind::Selecting) {
+      if (!was_resizing && input_state_.resizing_segment()) {
+        whole_reading_candidates_ = shown_candidates_;
+      } else if (was_resizing && !input_state_.resizing_segment()) {
+        CancelSegmentQuery();
+        core_cached_metadata_ = whole_reading_candidates_;
+      }
+    }
     // DEV-1806: a new input has no live answer yet. Whatever an earlier input
     // left behind (a path that ended it without clearing) is not shown for it.
     if (previous_state.kind() == core::InputStateKind::Idle &&
@@ -9710,6 +10126,16 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     if (input_state_.awaiting_candidates() && IpcHostUnavailable()) {
       core_action_in_progress_ = false;
       return OpenLocalCandidateWindow(context);
+    }
+    // Segment-editing-spec §5.2: the first segment's wait ends the same way
+    // without a Host, and at once for a reading of punctuation alone.
+    if (AwaitingSegmentCandidates()) {
+      if (IsStandalonePunctuation(input_state_.FirstSegmentReading()) || IpcHostUnavailable()) {
+        core_action_in_progress_ = false;
+        return OpenLocalSegmentCandidates(context);
+      }
+    } else {
+      segment_query_.reset();
     }
     core_action_in_progress_ = false;
     try {
@@ -11127,6 +11553,13 @@ void TextService::OnCandidateClicked(int idx) {
     (void)CompleteReconversionSelection(static_cast<size_t>(idx), /*click=*/true, before);
     return;
   }
+  // Segment-editing-spec §5.2: the list left in the window while the first
+  // segment's candidates are awaited is not that segment's, so a click there
+  // does nothing and the highlight stays.
+  if (AwaitingSegmentCandidates()) {
+    (void)candidate_ui_.SetSelection(selected_candidate_idx_);
+    return;
+  }
   if (core_input_active_ && input_state_.kind() == core::InputStateKind::Selecting &&
       active_context_) {
     // The window draws only the current page, so the clicked row is on it; its
@@ -11424,6 +11857,8 @@ POINT TextService::CandidateAnchorPoint() {
 }
 
 bool TextService::ShowCandidateWindowFromCache() {
+  // Segment-editing-spec §5.2: the window shown waits for the first segment's list.
+  if (AwaitingSegmentCandidates()) return ApplySegmentCandidatesFromCache();
   if (core_input_active_ && input_state_.kind() != core::InputStateKind::Idle &&
       shown_batch_segments_.empty() && emoji_mode_ == EmojiMode::Inactive) {
     if (input_state_.kind() == core::InputStateKind::Selecting ||
@@ -11571,6 +12006,18 @@ void TextService::set_corrected_candidates_for_test(const std::string& reading,
   if (!corrected_reading.empty())
     corrected_reading_result_ =
         CorrectedReadingResult{request_id.value_or(ipc_pending_id_), reading, corrected_reading};
+}
+
+void TextService::answer_query_for_test(uint64_t query_token, const std::string& reading,
+                                        std::vector<ipc::CandidateField> candidates,
+                                        const std::string& corrected_reading) {
+  std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+  candidates_ = BuildTipCandidates(corrected_reading.empty() ? reading : corrected_reading,
+                                   std::move(candidates), false, false);
+  candidates_query_token_ = query_token;
+  corrected_reading_result_.reset();
+  if (!corrected_reading.empty())
+    corrected_reading_result_ = CorrectedReadingResult{ipc_pending_id_, reading, corrected_reading};
 }
 
 std::vector<ipc::MessageType> TextService::queued_ipc_types_for_test() {
@@ -12088,6 +12535,110 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       service_->external_edit_end_pending_ = false;
     }
 
+    // M66 (segment-editing-spec §6.2): a partial commit. The first segment
+    // leaves the composition as committed text and the remaining reading stays
+    // in it. Without a composition of the TIP's to shift (the host ended it),
+    // the commit below writes the surface and the remaining reading whole.
+    if (service_->committing_ && service_->partial_commit_) {
+      if (!service_->terminated_composition_surface_.empty() || !service_->composition_) {
+        service_->partial_commit_.reset();
+      } else {
+        const std::wstring surface = Utf8ToWide(service_->partial_commit_->surface);
+        const std::wstring remaining = Utf8ToWide(service_->partial_commit_->remaining);
+        ITfComposition* comp = service_->composition_;
+        // Step 1: the composition holds the surface and the remaining reading.
+        ITfRange* written = nullptr;
+        HRESULT hr =
+            WriteCompositionText(ec, comp, surface + remaining,
+                                 Utf8ToWide(service_->composition_range_surface_), &written);
+        if (FAILED(hr)) {
+          // The range may hold part of the write (DEV-1845); the commit waits.
+          service_->composition_range_surface_.clear();
+          service_->composition_range_readback_.reset();
+          return hr;
+        }
+        Microsoft::WRL::ComPtr<ITfRange> whole;
+        whole.Attach(written);
+        service_->composition_range_surface_ = service_->commit_surface_;
+        // Step 2: the surface keeps no preedit attribute (tsf-deep-integration-spec
+        // §5.6). Step 3: the composition starts after it.
+        Microsoft::WRL::ComPtr<ITfRange> head;
+        LONG shifted = 0;
+        hr = whole->Clone(head.GetAddressOf());
+        if (SUCCEEDED(hr) && !head) hr = E_UNEXPECTED;
+        if (SUCCEEDED(hr)) hr = head->Collapse(ec, TF_ANCHOR_START);
+        if (SUCCEEDED(hr))
+          hr = head->ShiftEnd(ec, static_cast<LONG>(surface.size()), &shifted, nullptr);
+        if (SUCCEEDED(hr) && shifted != static_cast<LONG>(surface.size())) hr = E_FAIL;
+        if (SUCCEEDED(hr)) {
+          clear_display_attributes(head.Get());
+          hr = head->Collapse(ec, TF_ANCHOR_END);
+        }
+        if (SUCCEEDED(hr)) hr = comp->ShiftStart(ec, head.Get());
+        if (SUCCEEDED(hr)) {
+          service_->composition_range_surface_ = service_->partial_commit_->remaining;
+        } else {
+          // §6.2: the surface alone ends the composition, and the remaining
+          // reading starts a new one right after it, in the update below.
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "partial_commit_shift_start_failed");
+          hr = whole->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+          if (FAILED(hr)) {
+            service_->composition_range_surface_.clear();
+            service_->composition_range_readback_.reset();
+            return hr;
+          }
+          service_->composition_range_surface_ = service_->partial_commit_->surface;
+          clear_display_attributes(whole.Get());
+          // Detached first, so a termination callback leaves the remaining
+          // reading alone. The mouse sink goes only with the composition.
+          service_->composition_ = nullptr;
+          service_->etw_composition_end_in_progress_ = true;
+          const HRESULT end_hr = comp->EndComposition(ec);
+          service_->etw_composition_end_in_progress_ = false;
+          if (FAILED(end_hr)) {
+            service_->composition_ = comp;
+            service_->composition_range_readback_.reset();
+            return end_hr;
+          }
+          service_->UnadviseCompositionMouseSink();
+          comp->Release();
+          core::EtwLogger::LogCompositionEnd(surface.size(), true);
+          if (SUCCEEDED(whole->Collapse(ec, TF_ANCHOR_END))) {
+            TF_SELECTION sel{};
+            sel.range = whole.Get();
+            (void)context_->SetSelection(ec, 1, &sel);
+          }
+          service_->composition_range_surface_.clear();
+        }
+        // The update below takes the range the remaining reading's left
+        // context is read from.
+        if (service_->composition_range_) {
+          service_->composition_range_->Release();
+          service_->composition_range_ = nullptr;
+        }
+        service_->composition_range_readback_.reset();
+        service_->committing_ = false;
+        service_->commit_surface_.clear();
+        service_->completed_partial_commit_ = std::move(service_->partial_commit_);
+        service_->partial_commit_.reset();
+        // What a commit does once its text is in the document: the first
+        // segment's observation (§8), and no undo target (commit-undo-spec §8).
+        service_->last_learned_commit_pairs_.clear();
+        service_->PostPendingCommitObservation();
+        service_->last_commit_undo_pair_.reset();
+        service_->pending_undo_correction_.reset();
+        // The remaining reading as reading input shows it. The commit is done
+        // whatever happens to this update; the next one repairs the display.
+        ITfEditSession* update = NewComBoundaryObject<EditSession>(service_, context_);
+        const HRESULT update_hr = update ? update->DoEditSession(ec) : E_OUTOFMEMORY;
+        if (update) update->Release();
+        if (FAILED(update_hr))
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
+                     "partial_commit_preedit_update_failed");
+        return S_OK;
+      }
+    }
+
     // M5/M6: commit path — set final surface text and end composition.
     if (service_->committing_) {
       // Recheck the original context on every successful callback, including
@@ -12413,9 +12964,19 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     service_->attributed_segments_ =
         ranges.empty() ? std::vector<DisplayedSegment>{} : displayed_segments;
     // The candidate selected without batch conversion is no segment, so clicks
-    // stay with the application (§5.3).
+    // stay with the application (§5.3). Neither is a resized first segment,
+    // shown Focused before the remaining reading, Converted (§5.4,
+    // segment-editing-spec §7); text that does not end with that reading
+    // takes the input underline.
     if (ranges.empty() && service_->ShowsSelectedCoreCandidate()) {
-      ranges.push_back({0, static_cast<LONG>(kana.size()), DisplayAttributeKind::FocusedSegment});
+      const core::InputState& state = service_->input_state_;
+      if (!state.resizing_segment()) {
+        ranges.push_back({0, static_cast<LONG>(kana.size()), DisplayAttributeKind::FocusedSegment});
+      } else if (const std::wstring remaining = Utf8ToWide(state.RemainingReading());
+                 remaining.size() < kana.size() && kana.ends_with(remaining)) {
+        ranges = BuildFirstSegmentAttributeRanges(static_cast<LONG>(kana.size() - remaining.size()),
+                                                  static_cast<LONG>(remaining.size()));
+      }
     }
     ITfProperty* pProp = nullptr;
     if (SUCCEEDED(context_->GetProperty(GUID_PROP_ATTRIBUTE, &pProp)) && pProp) {

@@ -67,6 +67,11 @@ struct SegmentAttributeRange {
 std::vector<SegmentAttributeRange> BuildSegmentAttributeRanges(
     const std::vector<DisplayedSegment>& segments, size_t focused_index);
 
+// A normal conversion resizing its first segment (segment-editing-spec §7):
+// the first segment Focused, then the remaining reading Converted.
+std::vector<SegmentAttributeRange> BuildFirstSegmentAttributeRanges(LONG first_length,
+                                                                    LONG remaining_length);
+
 // Segment under a mouse event reported by ITfMouseSink::OnMouseEvent, where
 // uEdge counts characters from the composition start and quadrants 0 and 1
 // precede the edge. Returns false when there are no non-empty segments.

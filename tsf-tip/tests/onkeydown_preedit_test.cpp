@@ -22515,6 +22515,107 @@ TEST(TsfTipKanaInputTest, AStyleChangeAppliesToTheKeyTypedOverTheWindow) {
   }
 }
 
+// Spec §2: the keys the style does not decide carry on over the window as
+// without the change; the composition they start takes the current style.
+TEST(TsfTipKanaInputTest, DigitAndNumpadKeysOverTheWindowCarryOnAfterAStyleChange) {
+  AsciiDecimalDigitTranslationGuard digits;
+  for (const bool legacy : {false, true}) {
+    {
+      SCOPED_TRACE(::testing::Message() << "0, legacy " << legacy);
+      DocumentPreeditHarness h;
+      OpenKanaWindow(h, legacy);
+      h.service.set_input_style_for_test(TipInputStyle::Default);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaWa));
+      if (legacy) {
+        // The number rewriter's window takes the 0 into its reading
+        // (legacy-parity-spec §1.2), which stays the kana input it was.
+        EXPECT_EQ(h.service.preedit_kana_, "か0");
+        EXPECT_EQ(h.context.document->text, L"か0");
+      } else {
+        EXPECT_EQ(h.service.preedit_kana_, "0");
+        EXPECT_EQ(h.context.document->text, L"蚊0");
+        ASSERT_TRUE(TypeKanaKey(h, {'K', 0x25}));
+        ASSERT_TRUE(TypeKanaKey(h, {'A', 0x1E}));
+        EXPECT_EQ(h.service.preedit_kana_, "0か");
+      }
+    }
+    {
+      SCOPED_TRACE(::testing::Message() << "numpad -, legacy " << legacy);
+      DocumentPreeditHarness h;
+      OpenKanaWindow(h, legacy);
+      h.service.set_input_style_for_test(TipInputStyle::Default);
+      ASSERT_TRUE(TypeKanaKey(h, {VK_SUBTRACT, 0x4A}));
+      EXPECT_EQ(h.service.preedit_kana_, "ー");
+      EXPECT_EQ(h.context.document->text, L"蚊ー");
+      ASSERT_TRUE(TypeKanaKey(h, {'K', 0x25}));
+      ASSERT_TRUE(TypeKanaKey(h, {'A', 0x1E}));
+      EXPECT_EQ(h.service.preedit_kana_, "ーか");
+    }
+  }
+}
+
+// punctuationConversion over the window commits the candidate and the mark in
+// one go after a style change too (tsf-deep-integration-spec §3.5.1).
+TEST(TsfTipKanaInputTest, PunctuationConversionOverTheWindowIgnoresAStyleChange) {
+  OemCompositionTranslationGuard oem_translation;
+  DocumentPreeditHarness h;
+  OpenKanaWindow(h, /*legacy=*/false);
+  StartPunctuationConversion(h);
+  h.service.set_input_style_for_test(TipInputStyle::Default);
+  ASSERT_TRUE(TypeKanaKey(h, kKanaNe));
+  EXPECT_EQ(h.context.document->text, L"蚊、");
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
+// Over a resized first segment the window commits what it shows, the first
+// segment's candidate and the remaining reading (segment-editing-spec §4).
+TEST(TsfTipKanaInputTest, AStyleChangeOverAResizedSegmentCommitsWhatIsShown) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  OpenKakiku(h);
+  ShrinkToKaki(h);
+  h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+  ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+  EXPECT_EQ(h.context.document->text, L"前柿くか");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+}
+
+// A key held while the window is awaited replays over it with the current
+// style; JIS makes no character for Shift+0, which kana input reads as を.
+TEST(TsfTipKanaInputTest, AKeyHeldForTheWindowTakesTheStyleWhenItReplays) {
+  OemCompositionTranslationGuard oem_translation(&TranslateJisLayoutForTest);
+  AsciiDecimalDigitTranslationGuard digits;
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaWa, /*shift=*/true));
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+    AnswerWindow(h);
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_EQ(h.context.document->text, L"蚊を");
+    EXPECT_EQ(h.service.preedit_kana_, "を");
+  }
+}
+
+// A refused commit holds the key, which types with the current style after
+// the retry (DEV-1750).
+TEST(TsfTipKanaInputTest, ARefusedCommitHoldsTheRestyledKeyForTheRetry) {
+  DocumentPreeditHarness h;
+  OpenKanaWindow(h, /*legacy=*/false);
+  h.service.set_input_style_for_test(TipInputStyle::Default);
+  h.context.reject_write = true;
+  ASSERT_TRUE(TypeKanaKey(h, {'T', 0x14}));
+  ASSERT_TRUE(h.service.committing_);
+  h.context.reject_write = false;
+  ASSERT_TRUE(TypeKanaKey(h, {'A', 0x1E}));
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"蚊た");
+  EXPECT_EQ(h.service.preedit_kana_, "た");
+}
+
 // M70 AZIK (docs/input-style-spec.md §3, §5): the built-in table on the
 // table-driven path, with the exclusions of a custom table.
 TEST(TsfTipAzikTest, KeysGoThroughTheTableWithoutTheRomajiSpecialCases) {

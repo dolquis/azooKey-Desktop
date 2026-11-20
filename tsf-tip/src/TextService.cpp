@@ -3857,11 +3857,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       retyping_after_commit_ = true;
       return OnKeyDown(context, wParam, lParam, eaten);
     };
-    // Input-style-spec §2: a character typed over the window starts the next
-    // input, which takes the current setting. When that is not the style the
-    // composition started with, the window commits what it shows (as typing
-    // over it does, segment-editing-spec §4) and the key is typed again
-    // without input, on the core path as on the TIP's own.
+    // Input-style-spec §2: a key the current setting reads otherwise than the
+    // composition's style commits what the window shows (as typing over it
+    // does, segment-editing-spec §4) and is typed again without input, on the
+    // core path as on the TIP's own.
     auto commit_shown_then_retype = [&]() -> HRESULT {
       if (!core_input_active_ || input_state_.kind() != core::InputStateKind::Selecting)
         return commit_selection_then_retype();
@@ -3930,10 +3929,30 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (custom_input && !key_event)
       key_event = core::UserActionEvent{UserAction::Input, 0, modifiers, 0};
     const bool is_input = IsActionKey(key_event, UserAction::Input);
-    if (cand_visible && is_input &&
-        local_settings_.InputStyleSnapshot() != composition_input_style_)
-      return commit_shown_then_retype();
-    const bool kana_style = InputStyleForKey() == TipInputStyle::KanaJis;
+    // Input-style-spec §2: a character typed over the window starts the next
+    // input, which takes the current setting.
+    const TipInputStyle next_input_style = local_settings_.InputStyleSnapshot();
+    const bool next_input_restyles =
+        cand_visible && is_input && next_input_style != composition_input_style_;
+    // A key the style gives its meaning (a kana key, a letter, a key of the
+    // romaji table, the main `-` the table reads) commits the window and is
+    // typed again without input. The other keys carry on over the window as
+    // without the change, and so do the numpad keys, which input without a
+    // reading would leave to the app; the composition they start takes the
+    // current style. A resized segment waiting for its candidates keeps its
+    // own handling (CommitShownSegmentResult needs the segment's candidates).
+    if (next_input_restyles && !IsNumpadKey(wParam) &&
+        !(core_input_active_ && input_state_.awaiting_segment_candidates())) {
+      core::RomajiKanaConverter next_romaji;
+      next_romaji.SetCustomTable(local_settings_.RomajiSnapshot());
+      if ((kana_key && !composition_symbol) || (!kana_key && wParam >= 'A' && wParam <= 'Z') ||
+          custom_input || (wParam == VK_OEM_MINUS && IsLongVowelSymbol(composition_symbol)) ||
+          (composition_symbol && next_romaji.CanContinueCustomWith(composition_symbol->raw)))
+        return commit_shown_then_retype();
+    }
+    // The typed romaji belongs to the composition the key types into.
+    const bool kana_style =
+        (next_input_restyles ? next_input_style : InputStyleForKey()) == TipInputStyle::KanaJis;
     if (is_input && !has_preedit && batch_raw_romaji_.empty()) {
       // Capture the latest immutable table only when a new input begins.
       // A watcher reload must not rewrite an existing preedit.
@@ -3976,6 +3995,18 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       batch_romaji_table_ = composition_table;
       english_raw_romaji_.clear();
       if (english_typed) english_raw_romaji_.push_back(*english_typed);
+      if (!next_input_restyles) return;
+      // Spec §2: the composition the key starts takes the current style and
+      // table, in the core state machine too when nothing is pending there.
+      composition_input_style_ = next_input_style;
+      batch_romaji_table_ = local_settings_.RomajiSnapshot();
+      if (core_input_active_ && !input_state_.pending_romaji().HasPending()) {
+        romaji_ = {};
+        romaji_.SetCustomTable(batch_romaji_table_);
+        input_state_ = input_state_.WithComposition(input_state_.confirmed_kana(), romaji_);
+      } else {
+        romaji_.SetCustomTable(batch_romaji_table_);
+      }
     };
     // M60 §4.1: Space opens the window from a live = false query that can
     // carry English candidates, like the rewriter Space path, instead of the

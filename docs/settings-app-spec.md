@@ -98,8 +98,8 @@ Microsoft Learn の事実は
 | 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ カッコ補完（カッコの字形を決める `inputMode` を含む）/ `maxCandidates` |
 | 設定 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 / 「学習」ペインのユーザー辞書タブを開くボタン |
 | 設定 | AI 変換 | `model.enabled` / `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択（「選択を外す」で空の未選択に戻す。§3.7）/ `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6）/ `model.backendPreference` / `powerProfile` / `inferenceThreads` / `maxContextLength` |
-| 設定 | AI サービス | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
-| 設定 | プライバシー | `privacy`（`crashReportConsent` を含む） |
+| 設定 | AI サービス | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` / `privacy.externalAiConsent`（OpenAI の節の先頭） |
+| 設定 | プライバシー | `privacy`（`crashReportConsent` を含む。`externalAiConsent` は AI サービス） |
 | 設定 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
 | 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
 | データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
@@ -354,6 +354,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
 | `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-nll-spec.md` §B9 |
 | `privacy` | object | 下位キーの既定に従う | プライバシー | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
+| `privacy.externalAiConsent` | bool | `false` | AI サービス（OpenAI の節の先頭。`aiBackend` によらず常に操作できる） | M16 | 即時 | `ai-backend-spec.md` §14.2 / `privacy-and-secure-input-spec.md` §5.2 |
 | `profilesByApp` | map<string,object> | `{}` | アプリ別（追加・編集・削除。保存は読み込み時と異なるときだけ、オブジェクト全体を書く） | M48 | 即時 | `app-profile-spec.md` §4 |
 | `safeMode` | object（Host が書く） | 下位キーの既定に従う | 詳細（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `host-availability-spec.md` §8.5.3 |
 

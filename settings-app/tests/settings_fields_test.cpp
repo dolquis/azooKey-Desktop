@@ -238,7 +238,8 @@ TEST(SettingsFieldsTest, TheApiKeyFollowsTheOpenAiSection) {
   const azookey::settings::SettingField* last = nullptr;
   for (const auto& field : azookey::settings::GenericSettingFields()) {
     if (field.pane == azookey::settings::SettingsPane::AiService) last = &field;
-    if (field.section == "OpenAi") {
+    // The consent switch stays editable; ExternalAiConsentLeadsTheOpenAiSection covers it.
+    if (field.section == "OpenAi" && field.path != "privacy.externalAiConsent") {
       ASSERT_TRUE(field.active_when) << field.path;
       EXPECT_EQ(field.active_when->path, condition.path);
       EXPECT_EQ(field.active_when->equals, condition.equals);
@@ -253,6 +254,25 @@ TEST(SettingsFieldsTest, TheApiKeyFollowsTheOpenAiSection) {
   EXPECT_TRUE(azookey::settings::IsSettingConditionMet(condition, values));
   values["aiBackend"] = std::string("local-zenzai");
   EXPECT_FALSE(azookey::settings::IsSettingConditionMet(condition, values));
+}
+
+TEST(SettingsFieldsTest, ExternalAiConsentLeadsTheOpenAiSection) {
+  // ai-backend-spec section 14.2 (DEV-2161): off by default, first in the "OpenAI" section, and
+  // editable whatever the global aiBackend, since an app profile can choose openai on its own.
+  const azookey::settings::SettingField* first = nullptr;
+  for (const auto& field : azookey::settings::GenericSettingFields()) {
+    if (field.section == "OpenAi") {
+      first = &field;
+      break;
+    }
+  }
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(first->path, "privacy.externalAiConsent");
+  EXPECT_EQ(first->pane, azookey::settings::SettingsPane::AiService);
+  EXPECT_EQ(first->kind, azookey::settings::SettingKind::Bool);
+  EXPECT_EQ(std::get<bool>(first->default_value), false);
+  EXPECT_FALSE(first->active_when);
+  EXPECT_TRUE(first->described);
 }
 
 TEST(SettingsFieldsTest, AutoUpdateIsOptInAndItsOptionsFollowTheSwitch) {

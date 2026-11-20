@@ -195,7 +195,7 @@ migration 要・読み込み不可・破損・**選択中機能の資格情報�
 集合を指す。診断は前面アプリに依存しない**静的構成チェック**のため、その集合の
 **いずれか 1 つでも** `openai` に解決されれば「OpenAI 鍵を要求する」とみなす。逆に
 プロファイルが `aiBackend=openai` を宣言しても、privacy（`secure`、または `private` /
-`offline` / `custom` の外部 AI 無効）で `docs/app-profile-spec.md` §4.2 step 2–3 により `local-zenzai` / `none` へ
+`offline` / `custom` の外部 AI 無効、または外部 AI への明示同意 `privacy.externalAiConsent` が無い構成）で `docs/app-profile-spec.md` §4.2 step 2–3 により `local-zenzai` / `none` へ
 降格する実効値は鍵を要求しない（D-014 の判定対象に含めない）。`profilesByApp` が未導入
 （M48 前）の構成では実効集合は global のみとなり、従来の D-014（global `aiBackend` のみで
 判定）と等価で後方互換である。

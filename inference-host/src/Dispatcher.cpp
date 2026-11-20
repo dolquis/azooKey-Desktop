@@ -2137,7 +2137,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     bool ai_stopped = SafeModeEnabled() || parsed->secure ||
                       (settings_store_ && settings_store_->LockPrivacyPolicy().privacy_mode_secure);
     AiBackendOptions options;
-    core::AiPrivacy privacy{true, true};
+    core::AiPrivacy privacy{true, false};  // No settings: no external AI consent.
     if (config_.before_ai_settings_read_for_tests) config_.before_ai_settings_read_for_tests();
     {
       std::lock_guard lock(*config_.update_config_mutex);

@@ -168,6 +168,10 @@
           "type": "string", "enum": ["off", "local"], "default": "off",
           "description": "障害診断の明示的な保存同意。localは例外コード等の最小メタデータだけを端末内に保存し、本文・メモリ・スタックは収集しない。自動送信は行わない"
         },
+        "externalAiConsent": {
+          "type": "boolean", "default": false,
+          "description": "外部AI（OpenAI互換API）へ本文を送ることへの明示同意。全モードで外部AI許可の要件になり、キーが無い場合も同意なしとして扱う（ai-backend-spec §14.2）"
+        },
         "custom": {
           "type": "object", "additionalProperties": false, "default": {},
           "properties": {

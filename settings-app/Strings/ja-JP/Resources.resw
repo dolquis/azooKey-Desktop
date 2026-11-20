@@ -258,6 +258,7 @@
   <data name="Setting_aiBackend" xml:space="preserve"><value>AI サービス</value></data>
   <data name="Setting_llmMagicConversion" xml:space="preserve"><value>AI による変換（Magic Conversion）</value></data>
   <data name="Setting_includeContextInAITransform" xml:space="preserve"><value>AI に前後の文脈を送る</value></data>
+  <data name="Setting_privacy_externalAiConsent" xml:space="preserve"><value>入力中の文字や選択した文章を OpenAI に送る</value></data>
   <data name="Setting_openAiApiEndpoint" xml:space="preserve"><value>OpenAI API のエンドポイント</value></data>
   <data name="Setting_openAiModel" xml:space="preserve"><value>OpenAI のモデル</value></data>
   <data name="Setting_openAiTimeoutMs" xml:space="preserve"><value>OpenAI の応答待ち時間（ミリ秒）</value></data>
@@ -350,9 +351,10 @@
   <data name="SettingNote_bracketPairingAppPolicy" xml:space="preserve"><value>「指定したアプリでは使わない」には、組み込みのアプリ（Visual Studio Code など）も含まれます。</value></data>
   <data name="SettingNote_bracketPairingApps" xml:space="preserve"><value>1 行に 1 つ、実行ファイル名（例: Code.exe）を書きます。大文字と小文字は区別しません。</value></data>
   <data name="SettingNote_bracketPairsPath" xml:space="preserve"><value>空欄なら %LOCALAPPDATA%\azooKey\bracket-pairs.tsv を使います。</value></data>
+  <data name="SettingNote_privacy_externalAiConsent" xml:space="preserve"><value>オンにすると、AI による変換と「AI で整える」で、変換中の読みや選択した文章を、設定したエンドポイントへ送ります。オフの間は外部へ送らず、「AI で整える」はこの PC の中で行い、AI による変換は使いません。プライバシーモードが「プライベート」「オフライン」「常にセーフ入力」の間も送りません。「カスタム」では「外部 AI を使う」もオンのときだけ送ります。</value></data>
   <data name="SettingNote_openAiApiEndpoint" xml:space="preserve"><value>HTTPS の URL を指定します（ループバックアドレスを除く）。</value></data>
   <data name="SettingNote_privacy_mode" xml:space="preserve"><value>「常にセーフ入力」はほかの設定より優先します。「カスタム」では下の項目を個別に設定します。</value></data>
-  <data name="SettingNote_privacy_custom_externalAi" xml:space="preserve"><value>「AI 候補を使う」がオフのときは使いません。</value></data>
+  <data name="SettingNote_privacy_custom_externalAi" xml:space="preserve"><value>「AI 候補を使う」がオフのときは使いません。AI サービスの OpenAI の節で、OpenAI に送ることをオンにしたときだけ使います。</value></data>
   <data name="SettingNote_privacy_custom_detailedLogging" xml:space="preserve"><value>「ログから入力内容を伏せる」がオンのときは残しません。</value></data>
   <data name="SettingNote_privacy_autoSecureInput" xml:space="preserve"><value>オフでも、アプリが IME を無効にした欄ではセーフ入力になります。</value></data>
   <data name="SettingNote_privacy_secureApps" xml:space="preserve"><value>1 行に 1 つ、実行ファイル名（例: keepass.exe）を書きます。組み込みのアプリは常に対象です。</value></data>

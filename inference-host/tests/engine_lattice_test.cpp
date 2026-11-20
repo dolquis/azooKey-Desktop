@@ -607,14 +607,44 @@ TEST(EngineLattice, TheConjugatedUserWordPathStaysWithinTOfTheBestPath) {
   engine->SetUserDictionary(at.get());
   EXPECT_EQ(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).size(), 1U);
   engine->SetUserDictionary(nullptr);
+  std::error_code ec;
+  std::filesystem::remove(model, ec);
+}
 
-  // Without lattice_core (the lattice off leaves it unloaded): no path.
-  const auto without_core = MakeModelEngine(NoLimitConfig(false), model);
-  without_core->SetUserDictionary(at.get());
-  const auto plain = without_core->QueryCandidates("にほんご", "", kNow);
+// Section 5.4: without lattice_core (the lattice off at load leaves it unloaded), no path.
+TEST(EngineLattice, NoConjugatedUserWordPathWithoutLatticeCore) {
+  const auto model = UniqueTempPath("azookey_engine_lattice_user_no_core", ".gguf");
+  const auto dictionary = UserDictionaryWith("ニホむ", "にほむ", "verb_godan_ma");
+  const auto engine = MakeModelEngine(NoLimitConfig(false), model);
+  engine->SetUserDictionary(dictionary.get());
+  const auto plain = engine->QueryCandidates("にほんご", "", kNow);
   ASSERT_FALSE(plain.empty());
+  EXPECT_EQ(plain.front().source, CandidateSource::Model);
   EXPECT_TRUE(UserWordPaths(plain).empty());
-  without_core->SetUserDictionary(nullptr);
+  engine->SetUserDictionary(nullptr);
+  std::error_code ec;
+  std::filesystem::remove(model, ec);
+}
+
+// The lattice switched off after lattice_core loaded counts as no lattice_core: the path stops
+// with stage 1, and comes back when the lattice is switched on again.
+TEST(EngineLattice, NoConjugatedUserWordPathWithTheLatticeSwitchedOff) {
+  const auto model = UniqueTempPath("azookey_engine_lattice_user_switched_off", ".gguf");
+  const auto dictionary = UserDictionaryWith("ニホむ", "にほむ", "verb_godan_ma");
+  const auto engine = MakeModelEngine(NoLimitConfig(), model);
+  engine->SetUserDictionary(dictionary.get());
+  // Precondition: with the lattice on, the path is added.
+  ASSERT_EQ(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).size(), 1U);
+  engine->ApplyConfig(NoLimitConfig(false));
+  const auto off = engine->QueryCandidates("にほんご", "", kNow);
+  ASSERT_FALSE(off.empty());
+  EXPECT_EQ(off.front().source, CandidateSource::Model);
+  EXPECT_TRUE(UserWordPaths(off).empty());
+  // Stage 1 stops too: a request the model fell back on gets no lattice.
+  EXPECT_TRUE(LatticeCandidates(engine->QueryCandidates("にほんごです", "", kNow)).empty());
+  engine->ApplyConfig(NoLimitConfig());
+  EXPECT_EQ(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).size(), 1U);
+  engine->SetUserDictionary(nullptr);
   std::error_code ec;
   std::filesystem::remove(model, ec);
 }

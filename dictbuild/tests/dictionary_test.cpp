@@ -903,13 +903,14 @@ TEST(UserWordConjugation, FormsMatchTheSudachiFormsOfTheRepresentativeWords) {
     const char* pos;
   };
   const Representative words[] = {
-      {"走る", "はしる", "verb_godan_ra"},  {"笑う", "わらう", "verb_godan_wa"},
-      {"書く", "かく", "verb_godan_ka"},    {"泳ぐ", "およぐ", "verb_godan_ga"},
-      {"話す", "はなす", "verb_godan_sa"},  {"待つ", "まつ", "verb_godan_ta"},
-      {"死ぬ", "しぬ", "verb_godan_na"},    {"遊ぶ", "あそぶ", "verb_godan_ba"},
-      {"読む", "よむ", "verb_godan_ma"},    {"見る", "みる", "verb_ichidan"},
-      {"食べる", "たべる", "verb_ichidan"}, {"察する", "さっする", "verb_sahen"},
-      {"高い", "たかい", "adjective"},      {"行く", "いく", "verb_godan_ka"},
+      {"走る", "はしる", "verb_godan_ra"},      {"笑う", "わらう", "verb_godan_wa"},
+      {"書く", "かく", "verb_godan_ka"},        {"泳ぐ", "およぐ", "verb_godan_ga"},
+      {"話す", "はなす", "verb_godan_sa"},      {"待つ", "まつ", "verb_godan_ta"},
+      {"死ぬ", "しぬ", "verb_godan_na"},        {"遊ぶ", "あそぶ", "verb_godan_ba"},
+      {"読む", "よむ", "verb_godan_ma"},        {"見る", "みる", "verb_ichidan"},
+      {"食べる", "たべる", "verb_ichidan"},     {"察する", "さっする", "verb_sahen"},
+      {"高い", "たかい", "adjective"},          {"行く", "いく", "verb_godan_ka"},
+      {"試みる", "こころみる", "verb_ichidan"}, {"逝く", "いく", "verb_godan_ka"},
   };
   for (const auto& representative : words) {
     const auto& rows = by_word[representative.word];
@@ -935,9 +936,18 @@ TEST(UserWordConjugation, FormsMatchTheSudachiFormsOfTheRepresentativeWords) {
       }
       sudachi.emplace(row.form, row.reading, row.surface);
     }
+    // The rows the implementation looks up are those of the section 2.1 name (動詞-一般 for a
+    // verb); 試みる and 逝く give that name the types of 見る and 行く.
+    EXPECT_TRUE(dictionary.ResolvePosRow(lattice_pos->name, lattice_pos->conjugation_type,
+                                         lattice_pos->conjugation_form))
+        << representative.word;
     for (const auto& form :
-         learning::ExpandUserWord(representative.word, representative.ruby, representative.pos))
+         learning::ExpandUserWord(representative.word, representative.ruby, representative.pos)) {
+      EXPECT_TRUE(dictionary.ResolvePosRow(lattice_pos->name, lattice_pos->conjugation_type,
+                                           form.conjugation_form))
+          << representative.word << " " << form.conjugation_form;
       table.emplace(std::string(form.conjugation_form), form.reading, form.surface);
+    }
     EXPECT_EQ(table, sudachi) << representative.word;
   }
 }
@@ -1043,6 +1053,22 @@ TEST(DictionaryStoreLattice, UserWordFormsStopAtTheLimitInKeyOrder) {
   EXPECT_TRUE(store.HasUserWordForms("ぐぐった"));
   EXPECT_TRUE(store.HasUserWordForms("ばずら"));
   EXPECT_FALSE(store.HasUserWordForms("ばずった"));
+
+  // Two words of one key that ReplaceMutable publishes go by their part of speech, whatever the
+  // order given: verb_godan_ra before verb_ichidan, so the limit keeps the 五段 forms.
+  const auto word = [](std::string pos) {
+    learning::DictionaryEntry entry;
+    entry.surface = "タべる";
+    entry.reading = "たべる";
+    entry.frequency = .4;
+    entry.pos = std::move(pos);
+    return entry;
+  };
+  store.ReplaceMutable(learning::LayerId::User, {word("verb_ichidan"), word("verb_godan_ra")});
+  store.SetUserWordFormLimitForTests(7);
+  EXPECT_TRUE(store.UserWordFormsTruncated());
+  EXPECT_TRUE(store.HasUserWordForms("たべっ"));     // 五段の連用形-促音便
+  EXPECT_FALSE(store.HasUserWordForms("たべよう"));  // 一段の意志推量形、一段の語幹
 }
 
 // Section 4.5: a registered form takes the row of its part of speech (the terminal form of a

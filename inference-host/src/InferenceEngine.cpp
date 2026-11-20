@@ -2127,10 +2127,11 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
           LatticePathCount(EffectiveMaxCandidates(config.max_candidates, max_candidates), live),
           cancel, request_deadline, lattice_status.emplace());
     }
-    // Not for live conversion (and so not for reconversion) or another reading (DEV-2101), and
-    // only up to 64 code points. A first segment's request is searched as its own reading
+    // Not for live conversion (and so not for reconversion) or another reading (DEV-2101), not
+    // with the lattice switched off (lattice_core then counts as unusable), and only up to 64
+    // code points. A first segment's request is searched as its own reading
     // (segment-editing-spec section 5.3: only stage 1 reads the remaining reading).
-    if (lattice_allowed && using_model_converter && !live) {
+    if (lattice_allowed && config.lattice.enabled && using_model_converter && !live) {
       const auto length = CountCodepoints(kana);
       user_forms_hit =
           length && *length <= core::kMaxLatticeReading && dictionaries_.HasUserWordForms(kana);

@@ -410,7 +410,8 @@ void DictionaryStore::RebuildUserWordForms() {
   user_forms_truncated_ = false;
   if (!IsLatticeAvailable()) return;
   // Section 4.6: in the ascending order of the user dictionary's keys (reading, word). The
-  // exact entries are the words; the alias entries copy them.
+  // exact entries are the words; the alias entries copy them. The part of speech orders words
+  // ReplaceMutable gave the same key, so the limit cuts the same forms on every build.
   std::vector<const DictionaryEntry*> words;
   for (const auto& [key, entries] : mutable_[IndexOf(LayerId::User) - static_.size()]) {
     (void)key;
@@ -419,7 +420,7 @@ void DictionaryStore::RebuildUserWordForms() {
         words.push_back(&entry);
   }
   std::sort(words.begin(), words.end(), [](const DictionaryEntry* a, const DictionaryEntry* b) {
-    return std::tie(a->reading, a->surface) < std::tie(b->reading, b->surface);
+    return std::tie(a->reading, a->surface, a->pos) < std::tie(b->reading, b->surface, b->pos);
   });
   for (const auto* word : words) {
     const auto lattice_pos = UserWordLatticePosOf(word->surface, word->reading, word->pos);

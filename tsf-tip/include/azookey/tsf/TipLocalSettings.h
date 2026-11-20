@@ -49,6 +49,9 @@ struct TipPredictionSetting {
   bool enabled{true};
   bool by_app_profile{false};
 };
+// inputStyle (docs/input-style-spec.md §2). Absent, not a string or another
+// value: Default.
+enum class TipInputStyle { Default, Azik, KanaJis, Custom };
 
 // Owns a cancellable directory watch. The worker never touches TSF/COM objects.
 class TipLocalSettings final {
@@ -86,7 +89,11 @@ class TipLocalSettings final {
   bool InlineEnglishCandidatesSnapshot() const;
   // mixedEnglishAutoConversion (M63). An absent or unreadable value is false.
   bool MixedEnglishAutoConversionSnapshot() const;
+  // The table of a table-driven style (input-style-spec §5): the built-in AZIK
+  // table, or the custom TSV. Null for the built-in romaji table, which a
+  // custom style also uses when its TSV cannot be read.
   std::shared_ptr<const core::CustomRomajiTable> RomajiSnapshot() const;
+  TipInputStyle InputStyleSnapshot() const;
 
 #ifdef AZOOKEY_TSF_TESTING
   void SetForTest(const core::BracketSettings& settings);
@@ -104,6 +111,9 @@ class TipLocalSettings final {
   void SetInlineEnglishCandidatesForTest(bool enabled);
   void SetMixedEnglishAutoConversionForTest(bool enabled);
   void SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table);
+  // Azik also sets the AZIK table and KanaJis and Default clear the table;
+  // Custom keeps the table SetRomajiTableForTest set.
+  void SetInputStyleForTest(TipInputStyle style);
   bool WaitForEnabledForTest(bool enabled);
   bool WaitForPrivacyForTest(const std::function<bool(const core::PrivacyPolicy&)>& predicate);
   bool WaitForRewritersForTest(const std::function<bool(const TipRewriterSettings&)>& predicate);
@@ -152,6 +162,7 @@ class TipLocalSettings final {
   std::array<std::shared_ptr<const core::AppProfileResolver>, 2> prediction_profile_probes_;
   bool inline_english_candidates_{false};
   bool mixed_english_auto_conversion_{false};
+  TipInputStyle input_style_{TipInputStyle::Default};
   std::shared_ptr<const core::CustomRomajiTable> romaji_table_;
   std::filesystem::path path_;
   std::filesystem::path table_path_;

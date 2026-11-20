@@ -106,8 +106,10 @@ M63 の設定が OFF のときと同じ挙動になる。
 - Handshake 応答の capabilities に `mixed_english` と、M60 の `english_candidates` の両方がある
   （§9.3）。生ローマ字は M60 の条件（M60 §4.1）で送るため、`english_candidates` が無い Host には
   生ローマ字を送らない。
-- カスタムローマ字表が有効でない。Host はカスタム表を持たず、J 区間のかなを作れないため
-  （M60 §4.1.1 と同じ制約）。
+- `inputStyle` が `default` である（`docs/input-style-spec.md` §2）。Host は内蔵ローマ字表しか持たず、
+  AZIK とカスタムローマ字表の表駆動の入力方式では J 区間のかなを作れないため（M60 §4.1.1 と同じ制約）。
+  AZIK の `ka` のように内蔵表と同じ読みになる綴りでも働かせない。かな入力には生ローマ字が無い
+  （`docs/input-style-spec.md` §6）。`custom` の TSV が読めず内蔵ローマ字表で変換している composition でも働かない。
 - 入力欄が secure でない。secure の入力では生ローマ字を送らない。
 - 生ローマ字を内蔵のローマ字表でかなにした結果が、送る読み（`reading` / `kana`）と一致する。
   一致しないとき（Backspace で消したかなの打鍵、記号、Unicode 入力、読みの補正など）は、M60 §4.1

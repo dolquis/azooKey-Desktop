@@ -9,6 +9,7 @@
 #include <thread>
 #include <utility>
 
+#include "azookey/core/AzikTable.h"
 #include "azookey/tsf/TipLocalSettings.h"
 
 namespace {
@@ -340,6 +341,47 @@ TEST_F(LocalSettingsTest, CustomRomajiPathOverrideRebindsWhenSettingsChange) {
     const auto snapshot = reader.RomajiSnapshot();
     return snapshot && snapshot->contains("ka") && snapshot->at("ka").output == "カ";
   }));
+}
+
+// M70 (docs/input-style-spec.md §2): azik and kanaJis are read; any other value
+// is default. AZIK carries its built-in table and kana input none.
+TEST_F(LocalSettingsTest, InputStyleReadsAzikAndKanaJisAndDefaultsOtherValues) {
+  using azookey::tsf::TipInputStyle;
+  for (const auto& [json, style] : {
+           std::pair{R"({"inputStyle":"azik"})", TipInputStyle::Azik},
+           std::pair{R"({"inputStyle":"kanaJis"})", TipInputStyle::KanaJis},
+           std::pair{R"({"inputStyle":"default"})", TipInputStyle::Default},
+           std::pair{R"({"inputStyle":"AZIK"})", TipInputStyle::Default},
+           std::pair{R"({"inputStyle":"kanaUs"})", TipInputStyle::Default},
+           std::pair{R"({"inputStyle":1})", TipInputStyle::Default},
+           std::pair{R"({})", TipInputStyle::Default},
+       }) {
+    SCOPED_TRACE(json);
+    reader.Stop();
+    Write(json);
+    ASSERT_TRUE(reader.Start(path));
+    EXPECT_EQ(reader.InputStyleSnapshot(), style);
+    if (style == TipInputStyle::Azik)
+      EXPECT_EQ(reader.RomajiSnapshot(), azookey::core::BuiltinAzikTable());
+    else
+      EXPECT_FALSE(reader.RomajiSnapshot());
+  }
+}
+
+// legacy-parity-spec §5.1: the TIP reads the custom table with letter case kept.
+TEST_F(LocalSettingsTest, CustomRomajiKeepsTheCaseOfItsRules) {
+  {
+    std::ofstream stream(root / L"custom-romaji.tsv", std::ios::binary);
+    stream << "KA\tカ\nka\tか\n";
+  }
+  Write(R"({"inputStyle":"custom"})");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_EQ(reader.InputStyleSnapshot(), azookey::tsf::TipInputStyle::Custom);
+  const auto table = reader.RomajiSnapshot();
+  ASSERT_TRUE(table);
+  ASSERT_TRUE(table->contains("KA"));
+  EXPECT_EQ(table->at("KA").output, "カ");
+  EXPECT_EQ(table->at("ka").output, "か");
 }
 
 TEST_F(LocalSettingsTest, RewriterChangesReachExistingTipWithoutHandshake) {

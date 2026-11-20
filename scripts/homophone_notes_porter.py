@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import io
 import os
+import re
 import sys
 import tempfile
 import urllib.request
@@ -44,13 +45,33 @@ HEADER = f"""\
 """
 
 
+LABELS = re.compile("(〈[^〉]*〉)+")  # One or more 〈...〉 labels and nothing else.
+
+
+def _before_first_example(text):
+    """Section 3.3 rule 3: the text before the first 「 that is not inside 〈...〉."""
+    depth = 0
+    for index, char in enumerate(text):
+        if char == "〈":
+            depth += 1
+        elif char == "〉":
+            depth = max(0, depth - 1)
+        elif char == "「" and depth == 0:
+            return text[:index]
+    return text
+
+
 def shorten(gloss):
     """Section 3.3: the note for one source gloss, or "" when nothing is left."""
+    gloss = gloss.strip()
     if gloss.startswith("1. "):
         gloss = gloss[3:]
-    gloss = gloss.split(SOURCE_NEWLINE, 1)[0]
-    gloss = gloss.split("「", 1)[0]
-    return gloss.removesuffix("。")
+    segments = gloss.split(SOURCE_NEWLINE)
+    note = segments[0]
+    if len(segments) > 1 and LABELS.fullmatch(note):
+        note += segments[1].removeprefix("1. ")  # A label-only line joins the next sense.
+    note = _before_first_example(note).strip()
+    return note.removesuffix("。").strip()
 
 
 def parse_source(text):

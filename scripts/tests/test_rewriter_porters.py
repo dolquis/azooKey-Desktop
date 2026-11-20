@@ -89,6 +89,14 @@ USAGE = (
     "うんこう\t運航\t*\t(船、航空機が)きまった航路をすすむこと。「飛行機は正常に運航している」\n"
     "かす\t科す\t*\t刑罰を負わせる。「刑罰を科す」\n"
     "かす\t科す\t*\t(刑罰を)負わせる。「刑罰を科す」\n"
+    "あきる\t飽きる\t一段\t〈「厭きる」とも〉同じようなことの繰り返しにうんざりする。\n"
+    "あずかる\t与る\t五段・ラ行\t〈かな書きも〉\\n1. かかわる。「計画に与る」\\n"
+    "2. (恩恵などを)受ける。もらう。「恩恵に与る」「栄誉に与る」\n"
+    "うれい\t憂い\t*\t〈「愁い」とも〉\\n1. 心配すること。\\n2. 悲しく思うこと。\n"
+    "おく\t措く\t五段・カ行イ音便\t〈文語体〉〈「置く」とも〉とりあえず考えないことにする。"
+    "棚上げする。「この問題はひとまず措くとする」\n"
+    "ととのえる\t調える\t一段\t 〈「整える」とも〉(味などを)加減してちょうどいい状態にする。"
+    "「塩コショウで味を調える」\n"
 )
 
 
@@ -99,13 +107,20 @@ class HomophoneNotesPorterTests(unittest.TestCase):
         rows = [line for line in result.splitlines() if not line.startswith("#")]
         self.assertEqual(rows, [
             "あおい\t青い\t晴れているときの空や海の色",
+            # A 「 inside 〈〉 does not start the example.
+            "あきる\t飽きる\t〈「厭きる」とも〉同じようなことの繰り返しにうんざりする",
+            # A label-only line joins the next sense, without its "1. ".
+            "あずかる\t与る\t〈かな書きも〉かかわる",
+            "うれい\t憂い\t〈「愁い」とも〉心配すること",
             "うんこう\t運航\t(船、航空機が)きまった航路をすすむこと",
             "うんこう\t運行\tきまった路線をすすむこと",
+            "おく\t措く\t〈文語体〉〈「置く」とも〉とりあえず考えないことにする。棚上げする",
             "かす\t科す\t刑罰を負わせる",
             "すむ\t住む\tある場所で生活する",
             "すむ\t澄む\t(液体が)すきとおる",
+            "ととのえる\t調える\t〈「整える」とも〉(味などを)加減してちょうどいい状態にする",
         ])  # 棲む's note is empty and dropped; the first 科す row wins.
-        self.assertEqual(homophone_notes_porter.verify(result), 6)
+        self.assertEqual(homophone_notes_porter.verify(result), 11)
 
     def test_header_carries_the_attribution(self):
         header = [line for line in homophone_notes_porter.convert(USAGE).splitlines()

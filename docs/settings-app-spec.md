@@ -240,7 +240,7 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 
 拡張子 `.enc` のない `learning.tsv` と `user_dict.json` は旧版からの移行元であり、移行後の保存先ではない。
 
-表のパスは既定の root（`%LOCALAPPDATA%\azooKey`）に固定する。Host の `--data-root`（開発・試験専用。`docs/windows-tsf-host-architecture.md`「Host CLI 引数」）は Host の config / data / logs / models を別の root へ移すが、設定アプリはこれを追わない。`--data-root` 付きで起動した Host は、設定アプリが保存した `settings.json` を読まず、ログも表のパスに書かない。
+表のパスは既定の root（`%LOCALAPPDATA%\azooKey`）に固定する。Host の `--data-root`（開発・試験専用。`docs/windows-tsf-host-architecture.md`「Host CLI 引数」）は Host の config / data / logs / models を別の root へ移すが、設定アプリはこれを追わない。`--data-root` 付きで起動した Host は、設定アプリが保存した `settings.json` を読まず、Host 本体のログを `<root>\logs` に書く（AI 送信の失敗や句読点挿入など、一部の部品のログは `--data-root` を追わず表のパスに書く）。
 
 ### 3.5 `ITfFnConfigure` 連携（Windows 設定「詳細設定」からの起動）
 

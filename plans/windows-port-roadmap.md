@@ -2785,8 +2785,9 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     - 無関係な入力（ユーザー辞書の語を含む最良の経路のコストが、制約なしの最良の経路から T を超えて大きい）では足されない。
       T はエンジンの定数で初期値 10000 とし、実機確認で見直す（spec §5.2）
     - M52 のベンチ（ユーザー辞書を読まない）の結果が変わらない
-    - dictbuild の試験で、語尾表の各（活用型、活用形）の組が `META.lattice` の品詞の表にあり、SudachiDict の
-      代表の語の活用形と語尾表が一致する
+    - dictbuild の試験で、代表の語の SudachiDict の活用形を SudachiDict の形式で書いた fixture を lattice_core まで通し、
+      語尾表の各形が fixture の活用形と一致し、fixture から作った `META.lattice` の品詞の表にその組がある（spec §9）。
+      実データの品詞の表に無い組の展開形は作らない（spec §4.5）
     - 実機で、活用した登録語が候補に出る（Human Gate）
 - **参照仕様**: `docs/user-dictionary-pos-spec.md`、`docs/lattice-conversion-spec.md` §3・§8.3、
   `docs/learning-data-management-spec.md` §4.5・§6・§13・§14

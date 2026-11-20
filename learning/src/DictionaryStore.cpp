@@ -325,7 +325,7 @@ std::optional<DictionaryEntry> DictionaryStore::ReverseLookup(std::string_view s
 }
 
 namespace {
-bool IsContinuationByte(char byte) { return (static_cast<uint8_t>(byte) & 0xc0) == 0x80; }
+bool IsUtf8ContinuationByte(char byte) { return (static_cast<uint8_t>(byte) & 0xc0) == 0x80; }
 
 // user-dictionary-pos-spec section 4.5: a user dictionary word with a part of speech of section
 // 2.1 takes the ids of its row (the terminal form for one that conjugates), or of its name when
@@ -358,7 +358,7 @@ class MutableLatticeVocabulary final : public core::ILatticeVocabulary {
 
   bool CommonPrefix(std::string_view key, std::vector<core::LatticeEntry>& out) const override {
     for (size_t length = 1; length <= key.size(); ++length) {
-      if (length != key.size() && IsContinuationByte(key[length])) continue;
+      if (length != key.size() && IsUtf8ContinuationByte(key[length])) continue;
       const auto it = index_.find(std::string(key.substr(0, length)));
       if (it == index_.end()) continue;
       for (const auto& entry : it->second)
@@ -382,7 +382,7 @@ class DictionaryStore::FormVocabulary final : public core::ILatticeVocabulary {
   bool CommonPrefix(std::string_view key, std::vector<core::LatticeEntry>& out) const override {
     const auto longest = (std::min)(key.size(), store_.user_form_key_bytes_);
     for (size_t length = 1; length <= longest; ++length) {
-      if (length != key.size() && IsContinuationByte(key[length])) continue;
+      if (length != key.size() && IsUtf8ContinuationByte(key[length])) continue;
       const auto it = store_.user_forms_.find(key.substr(0, length));
       if (it == store_.user_forms_.end()) continue;
       for (const auto& form : it->second) {
@@ -454,11 +454,11 @@ bool DictionaryStore::HasUserWordForms(std::string_view reading) const {
   const auto normalized = core::NormalizeReading(reading);
   const std::string_view key = normalized;
   for (size_t start = 0; start < key.size(); ++start) {
-    if (IsContinuationByte(key[start])) continue;
+    if (IsUtf8ContinuationByte(key[start])) continue;
     const auto rest = key.substr(start);
     const auto longest = (std::min)(rest.size(), user_form_key_bytes_);
     for (size_t length = 1; length <= longest; ++length) {
-      if (length != rest.size() && IsContinuationByte(rest[length])) continue;
+      if (length != rest.size() && IsUtf8ContinuationByte(rest[length])) continue;
       if (user_forms_.find(rest.substr(0, length)) != user_forms_.end()) return true;
     }
   }

@@ -166,6 +166,9 @@ std::vector<SettingField> BuildFields() {
       Enum("aiBackend", Pane::AiService, "AiBackend", "none", {"none", "openai", "local-zenzai"}),
       Bool("llmMagicConversion", Pane::AiService, "AiBackend", false),
       Bool("includeContextInAITransform", Pane::AiService, "AiBackend", true),
+      // Always editable: an app profile can choose openai while the global backend is not
+      // (ai-backend-spec section 14.2).
+      Bool("privacy.externalAiConsent", Pane::AiService, "OpenAi", false, std::nullopt, true),
       Text("openAiApiEndpoint", Pane::AiService, "OpenAi", "https://api.openai.com/v1", openai,
            true),
       Text("openAiModel", Pane::AiService, "OpenAi", "gpt-4o-mini", openai),

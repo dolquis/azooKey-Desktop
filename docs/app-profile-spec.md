@@ -242,7 +242,7 @@ enum `["auto", "local-zenzai", "openai", "none"]` の **`auto` はプロファ�
 2. `AI 候補生成許可 == false`（`secure`、または `custom` で AI 候補生成を
    無効化）→ `aiBackend = none`（外部・ローカルとも AI を使わない。M46 §5 の抑止契約に従う）。
 3. `外部 AI 許可 == false`（`private` / `offline` / `custom` で外部 AI
-   無効）→ 外部 `openai` を禁止。展開後の値が `openai`（明示・`auto` 継承のいずれも）なら
+   無効、または `normal` を含め外部 AI への明示同意 `privacy.externalAiConsent` が無い）→ 外部 `openai` を禁止。展開後の値が `openai`（明示・`auto` 継承のいずれも）なら
    モデル搭載時 `local-zenzai` へ降格、未搭載なら `none`。`local-zenzai` は許可。
 4. 上記いずれにも該当しない（外部 AI 許可）→ 展開後の `profile.aiBackend` を適用。
 

@@ -299,6 +299,30 @@ TEST(SettingsStoreTest, AiPrivacyAndTimeoutAreAppliedAndBounded) {
   EXPECT_FALSE(result.settings.ai_privacy.external);
 }
 
+// ai-backend-spec section 14.2: external AI needs privacy.externalAiConsent,
+// and a missing file or an older file without the key has none.
+TEST(SettingsStoreTest, ExternalAiNeedsExplicitConsent) {
+  ScopedTempDirectory temp("azookey_settings_external_ai_consent");
+  const auto path = temp.path() / "settings.json";
+  azookey::host::SettingsStore store(path);
+  auto result = store.Load();
+  ASSERT_EQ(result.status, azookey::host::SettingsLoadStatus::Missing);
+  EXPECT_TRUE(result.settings.ai_privacy.ai);
+  EXPECT_FALSE(result.settings.ai_privacy.external);
+  for (const auto* text :
+       {R"({"aiBackend":"openai"})", R"({"aiBackend":"openai","privacy":{"mode":"normal"}})",
+        R"({"aiBackend":"openai","privacy":{"externalAiConsent":false}})"}) {
+    WriteText(path, text);
+    result = store.Reload();
+    EXPECT_TRUE(result.settings.ai_privacy.ai) << text;
+    EXPECT_FALSE(result.settings.ai_privacy.external) << text;
+  }
+  WriteText(path, R"({"aiBackend":"openai","privacy":{"externalAiConsent":true}})");
+  result = store.Reload();
+  EXPECT_TRUE(result.settings.ai_privacy.ai);
+  EXPECT_TRUE(result.settings.ai_privacy.external);
+}
+
 TEST(SettingsStoreTest, LoadsCommonProfilesAndReloadKeepsPreviousSnapshotImmutable) {
   ScopedTempDirectory temp("azookey_settings_profiles");
   const auto& dir = temp.path();

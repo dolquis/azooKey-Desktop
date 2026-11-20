@@ -3163,7 +3163,8 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   const auto path = temp_directory.File("azookey_cleanup_settings.json");
   {
     std::ofstream file(path);
-    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+    file
+        << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})";
   }
   azookey::host::SettingsStore settings(path);
   settings.Load();
@@ -3208,7 +3209,8 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   EXPECT_EQ(calls, before_override);
   {
     std::ofstream file(path);
-    file << R"({"aiBackend":"none","openAiApiKey":"test-only-placeholder"})";
+    file
+        << R"({"aiBackend":"none","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})";
   }
   settings.Reload();
   request.ai_backend = "openai";
@@ -3274,7 +3276,7 @@ TEST_F(DispatcherTest, CleanupStopsBeforeAnyBackendWhenSecureOrInSafeMode) {
     file << json;
   };
   constexpr const char* kOpenAi =
-      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})";
   write_settings(kOpenAi);
   azookey::host::SettingsStore settings(path);
   settings.Load();
@@ -3352,7 +3354,7 @@ TEST_F(DispatcherTest, AiRequestsReadPrivacyAgainUnderTheConfigLock) {
     file << json;
   };
   constexpr const char* kOpenAi =
-      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})";
   write_settings(kOpenAi);
   azookey::host::SettingsStore settings(path);
   settings.Load();
@@ -6826,7 +6828,8 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   const auto settings_path = temp_directory.File("azookey_detect_anomalies_settings.json");
   {
     std::ofstream file(settings_path);
-    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+    file
+        << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})";
   }
   azookey::host::SettingsStore settings(settings_path);
   settings.Load();
@@ -6909,7 +6912,7 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   // An openai backend without an API key is a setting to make, not a failure.
   {
     std::ofstream file(settings_path, std::ios::trunc);
-    file << R"({"aiBackend":"openai"})";
+    file << R"({"aiBackend":"openai","privacy":{"externalAiConsent":true}})";
   }
   settings.Reload();
   EXPECT_EQ(detect(766, request)->error, std::optional<std::string>("unsupported"));
@@ -6929,8 +6932,8 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   // is sent and the answer is "unsupported".
   for (
       const auto* privacy :
-      {R"("privacy":{"mode":"custom","custom":{"learning":true,"aiCandidate":false}})",
-       R"("privacy":{"mode":"custom","custom":{"learning":true,"aiCandidate":true,"externalAi":false}})"}) {
+      {R"("privacy":{"mode":"custom","externalAiConsent":true,"custom":{"learning":true,"aiCandidate":false}})",
+       R"("privacy":{"mode":"custom","externalAiConsent":true,"custom":{"learning":true,"aiCandidate":true,"externalAi":false}})"}) {
     {
       std::ofstream file(settings_path, std::ios::trunc);
       file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)" << privacy << "}";
@@ -6945,7 +6948,8 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   // A request canceled before it runs gets no reply.
   {
     std::ofstream file(settings_path, std::ios::trunc);
-    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+    file
+        << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})";
   }
   settings.Reload();
   scheduler.Cancel(768);
@@ -6993,7 +6997,8 @@ TEST_F(DispatcherTest, DetectAnomaliesIsBlockedInSafeMode) {
   EXPECT_EQ(overridden->error, std::optional<std::string>("blocked"));
   EXPECT_EQ(calls, 0u);
 
-  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})");
+  write_settings(
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})");
   settings.Reload();
   const auto sent = detect(772);
   ASSERT_TRUE(sent.has_value());
@@ -7018,7 +7023,8 @@ TEST_F(DispatcherTest, TransformSelectedTextGatesPrivacyBeforeAnyBackend) {
     std::ofstream file(settings_path, std::ios::trunc);
     file << json;
   };
-  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})");
+  write_settings(
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})");
   azookey::host::SettingsStore settings(settings_path);
   settings.Load();
   unsigned calls = 0;
@@ -7113,7 +7119,7 @@ TEST_F(DispatcherTest, TransformSelectedTextGatesPrivacyBeforeAnyBackend) {
                   R"("privacy":{"mode":"secure"}})",
                   "BlockedBySecure"},
         std::pair{R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
-                  R"("privacy":{"mode":"private"}})",
+                  R"("privacy":{"mode":"private","externalAiConsent":true}})",
                   "Disabled"}}) {
     write_settings(json);
     settings.Reload();
@@ -7127,7 +7133,8 @@ TEST_F(DispatcherTest, TransformSelectedTextGatesPrivacyBeforeAnyBackend) {
   // An unreadable settings file keeps the last good AI settings but resolves
   // privacy to secure (privacy-and-secure-input-spec section 5.1): only the
   // Host's own secure check stops the selection here.
-  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})");
+  write_settings(
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})");
   settings.Reload();
   write_settings("{not json");
   settings.Reload();
@@ -7139,7 +7146,8 @@ TEST_F(DispatcherTest, TransformSelectedTextGatesPrivacyBeforeAnyBackend) {
     EXPECT_TRUE(response->result.empty());
     EXPECT_EQ(calls, before);
   }
-  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})");
+  write_settings(
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})");
   settings.Reload();
 
   const auto invalid =
@@ -7272,7 +7280,8 @@ TEST_F(DispatcherTest, TransformSelectedTextNeverLogsTheText) {
   const auto settings_path = temp_directory.File("azookey_transform_log_settings.json");
   {
     std::ofstream file(settings_path);
-    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+    file
+        << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})";
   }
   azookey::host::SettingsStore settings(settings_path);
   settings.Load();

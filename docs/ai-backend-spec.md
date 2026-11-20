@@ -656,6 +656,12 @@ M48 のモード通知 API を前提としない。
 |---|---|---|
 | `openAiTimeoutMs` | `30000` | 外部 API receive と再試行を含む全体期限。1000〜120000 ms（§7.1） |
 
+外部送信の同意（§14.2）:
+
+| キー | 既定 | 意味 |
+|---|---|---|
+| `privacy.externalAiConsent` | `false` | 外部 AI へ本文を送ることへの明示同意。どのモードでも外部 AI 許可（§8）の要件になる。キーが無ければ同意なしとし、真偽値でなければ AI 候補生成も不許可にする（`privacy-and-secure-input-spec.md` §5.2） |
+
 `AiBackend::Transform`はM58-Cから共通利用する。WinHTTPはダウンロードと
 proxy・TLS検証の方針を共有し、AIのPOSTは非同期ハンドルの終了通知まで待って
 キャンセルする。HTTPS以外は数値loopbackのみ許可し、redirectは追従しない。
@@ -729,8 +735,7 @@ wire の値として残す。利用者から見える挙動と既定値、設定
 同意の無い要求は §8 の `外部 AI 許可==false` と同じに扱う。実効 backend が `OpenAi` なら外部へ送らず、
 消費者の fallback（§7.4）へ進む。同意は設定アプリの OpenAI 節で取り、初回送信前の確認ダイアログは
 設けない。不変条件（`外部 AI 許可 ⇒ AI 候補生成許可`、secure が最優先）はこの決定で変わらない。
-設定キーの名前と schema への追加は実装の課題（DEV-2161）が決め、決めたキーを §11 の表と
-`docs/privacy-and-secure-input-spec.md` §5 の表に載せる。
+キーは `privacy.externalAiConsent`（§11）であり、`docs/privacy-and-secure-input-spec.md` §5.2 の表にも載せる。
 
 根拠は次のとおり。
 

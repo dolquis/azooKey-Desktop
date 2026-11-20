@@ -211,6 +211,54 @@ TEST(SettingsDocumentTest, AutoSecureInputSurvivesUnrelatedSaveAndInvalidValuesR
   std::filesystem::remove_all(dir);
 }
 
+// ai-backend-spec section 14.2 (DEV-2161): the consent survives an unrelated save,
+// and a value that is not a boolean restricts privacy like the other switches.
+TEST(SettingsDocumentTest, ExternalAiConsentSurvivesUnrelatedSaveAndInvalidValuesRestrictPrivacy) {
+  const auto dir = TestDir("azookey_settings_external_ai_consent");
+  const auto path = dir / "settings.json";
+  for (const bool consent : {false, true}) {
+    WriteText(path, std::string(R"({"privacy":{"mode":"normal","externalAiConsent":)") +
+                        (consent ? "true" : "false") + "}}");
+    auto loaded = azookey::settings::LoadSettingsDocument(path);
+    ASSERT_EQ(loaded.status, azookey::settings::SettingsDocumentStatus::Loaded);
+    EXPECT_TRUE(loaded.warnings.empty());
+    loaded.settings.log_level = "warn";
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_NE(parsed->Find("privacy"), nullptr);
+    EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "normal");
+    EXPECT_EQ(parsed->Find("privacy")->GetBool("externalAiConsent"), consent);
+  }
+  // Turning the switch on writes the key into a file without it; turning it off keeps it false.
+  WriteText(path, R"({"privacy":{"mode":"normal"}})");
+  for (const bool consent : {true, false}) {
+    auto loaded = azookey::settings::LoadSettingsDocument(path);
+    ASSERT_TRUE(loaded.warnings.empty());
+    loaded.settings.values["privacy.externalAiConsent"] = consent;
+    const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+    ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_NE(parsed->Find("privacy"), nullptr);
+    EXPECT_EQ(parsed->Find("privacy")->GetBool("externalAiConsent"), consent);
+  }
+  for (const auto* text :
+       {R"({"privacy":{"externalAiConsent":"true"}})", R"({"privacy":{"externalAiConsent":1}})"}) {
+    SCOPED_TRACE(text);
+    WriteText(path, text);
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    EXPECT_FALSE(loaded.warnings.empty());
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_NE(parsed->Find("privacy"), nullptr);
+    EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "secure");
+    EXPECT_EQ(parsed->Find("privacy")->Find("externalAiConsent"), nullptr);
+  }
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsDocumentTest, MissingCustomPredictionRemainsAbsentOnUnrelatedSave) {
   const auto dir = TestDir("azookey_settings_custom_prediction_missing");
   const auto path = dir / "settings.json";

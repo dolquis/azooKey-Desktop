@@ -210,6 +210,7 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
 |---|---|---|---|
 | GoogleTest | テスト | `find_package` →（オプトイン時）`FetchContent` | 採用（本トラックで変更しない） |
 | llama.cpp | 推論 | `FetchContent` / submodule、`AZOOKEY_BACKEND` で制御 | 採用（M8 の範囲。本トラック対象外） |
+| ONNX Runtime | 推論（prebuilt バイナリ） | 公式 prebuilt を URL + SHA256 で固定して取得（オプトイン `AZOOKEY_FETCH_ONNXRUNTIME`）。取得しない build は mock | 採用（M56 / M57 の reranker。`neural-reranker-spec.md` §7.3） |
 | WIL | header-only | submodule または `FetchContent`（オプトイン） | 採用（M43 の範囲。§9） |
 | nlohmann-json | header-only | 任意・保留 | `ipc-persistence-hardening-spec.md` §6、`build-ci-spec.md` §11 参照（即時導入しない） |
 | spdlog | 要ビルド | 任意・保留 | `observability-spec.md` §7、`build-ci-spec.md` §11 参照（自前ロガーを優先評価） |
@@ -258,7 +259,7 @@ pin 値の正典は `CMakeLists.txt` と各取得経路（SQLite は third_party
 
 #### 比較項目
 
-推論に関わる依存（llama.cpp / GGUF モデル）は、ビルドが通ることだけでは判断
+推論に関わる依存（llama.cpp / GGUF モデル / ONNX Runtime）は、ビルドが通ることだけでは判断
 しない。更新前後で次を比較する。
 
 | 項目 | 測り方 | 判断 |
@@ -268,6 +269,7 @@ pin 値の正典は `CMakeLists.txt` と各取得経路（SQLite は third_party
 | レイテンシ | bench の JSON 出力（§4.5 の回帰監視） | 既存のしきい値内に収まること |
 | メモリ | 同 bench のピーク常駐 | 明確な増加があれば理由を特定する |
 | ライセンス | 上流 LICENSE と `THIRD_PARTY_LICENSES` の差分 | 変化があれば `docs/licensing-policy.md` を同時に更新する |
+| ONNX Runtime の opset と latency | 固定した opset の M56 / M57 のモデルを新しい版で読めるか、M52 ベンチの reranker の latency（`neural-reranker-spec.md` §7.3） | 読めない、または latency が既存のしきい値を超えるなら更新を保留する |
 
 GoogleTest と WIL は推論品質に影響しないため、比較は「CTest 全件が緑」と
 「ライセンス差分の確認」に留めてよい。cadence と次項の独立 PR 規約は同じく適用する。

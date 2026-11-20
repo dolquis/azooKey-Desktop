@@ -149,17 +149,17 @@ shape とする（`[batch, 12]`）。FeatureExtractor は ONNX メタ情報
 
 **Option B（ModernBERT 共用）を不採用とする理由**（M57 spec と整合）:
 
-1. **CPU で動作しない**: M57 は ModernBERT を `backend in {winml, cuda,
-   vulkan}` でのみロードし、CPU backend ではロードすらしない
-   （`docs/modernbert-ja-scoring-spec.md` §4.0 順 3 / §6.1）。M56 reranker は
+1. **CPU で動作するとは限らない**: M57 は ModernBERT を許可した実行 EP でのみロードし、
+   CPU EP は計測ゲートに合格するまで許さない
+   （`docs/modernbert-ja-scoring-spec.md` §4.0 順 3 / §6.3）。M56 reranker は
    §2 のとおり **CPU 優先で常時動作**する前提のため、embedder を ModernBERT に
    従属させると CPU-only 環境で embedding 特徴が常に欠損する。
 2. **常時ロードされない**: M57 は ambiguity ゲート・RSS ロードゲート・circuit
    breaker により**条件付きにしか起動しない**（`docs/modernbert-ja-scoring-spec.md` §4.0 / §6.1）。embedder の
    可用性が実行時条件に左右されると、M56 の特徴量パイプラインが非決定的になり、
    M52 ベンチの再現性（baseline +3%）を測れない。
-3. **配置フェーズが異なる**: M57 は v1.0 後トラックで bundle / DL 方針も
-   Phase 7 で決定する（§6）。M56 を M57 配置に従属させると M56 単独で acceptance を
+3. **配置フェーズが異なる**: M57 は v1.0 後トラックで、モデルを同梱せずダウンロードで
+   配置する（`docs/modernbert-ja-scoring-spec.md` §6）。M56 を M57 配置に従属させると M56 単独で acceptance を
    満たせない（roadmap M56 の前提は M52 / M53 / M54 / M55 のみで M57 を含まない）。
 4. **IME の embedder として過剰**: 70M BERT を rerank の embedding 供給に常用する
    のは latency / メモリの面で IME に不釣り合い。
@@ -356,7 +356,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 | timeout | 既定 15ms（範囲 10〜20ms、`tinyNeuralTimeoutMs`、範囲外は clamp） |
 | fallback | 失敗時は reranker なしで返す（candidate 順序維持） |
 | 実行頻度 | 通常変換ごと |
-| backend | ONNX Runtime CPU 優先、GPU optional |
+| backend | ONNX Runtime の CPU EP（§7.3） |
 | バッチ | 全候補を 1 forward で処理 |
 
 ### 7.1 失敗 fallback
@@ -421,6 +421,27 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
     `secure_mode` と整合）
   - `circuit_open`: circuit breaker 作動中（runtime 状態）
   - `disabled`: ユーザー設定 `tinyNeuralEnabled=false`
+
+### 7.3 推論ランタイム（決定）
+
+M56 の `tiny_reranker.onnx` と M57 の `modernbert-ja-70m.onnx` は、同じ推論ランタイムで Host が動かす。
+本節を両者の正典とし、M57 固有の実行 EP の条件は `docs/modernbert-ja-scoring-spec.md` §6.3 が持つ。
+比べた候補と根拠は [decisions/2026-11-20-onnx-runtime-for-reranker.md](decisions/2026-11-20-onnx-runtime-for-reranker.md) にある。
+
+| 項目 | 決定 |
+|---|---|
+| ランタイム | Microsoft が配布する ONNX Runtime（ORT）を、C API で使う。同梱する ORT で使う実行 EP は CPU EP だけとする。GPU / NPU の EP は、R2 の再開後に Windows ML の ORT へ移してから使う（下の行、M57 は `docs/modernbert-ja-scoring-spec.md` §6.3）。DirectML EP は入れない（DirectML は Microsoft が新しい機能を足さない maintenance mode にある） |
+| Zenzai の R2 との関係 | R2（`docs/copilot-pc-backend-spec.md` §4.1 の ONNX Runtime GenAI + Windows ML）が止まっている間は、ランタイムを共有しない。R2 を再開した後も、同梱する素の `onnxruntime.dll` は MSI に残す。Host は 1 つのプロセスで ORT を 1 つだけ読む。Windows ML の ORT を読める Host（OS build が 26100 以上で、Windows App SDK の bootstrap に成功した Host）は、M56 と M57 の CPU EP を含め、すべて Windows ML の ORT で動かす。読めない Host（26100 未満、bootstrap の失敗）は、素の ORT を読み、CPU EP だけを使う。どちらを読むかは Host が最初に ORT を使うときに決め、そのプロセスの間は変えない。Windows ML の ORT は ORT と同じ API を持つので、どちらでも推論の呼び出しは変えない |
+| 依存の取り込み | ORT の公式の prebuilt を、URL と SHA256 で固定して取得する（`docs/build-ci-spec.md` §3.1 の 3）。取得は opt-in の `AZOOKEY_FETCH_ONNXRUNTIME`（既定 OFF）で行う。取得しない build は、reranker を mock の runtime で組む（llama.cpp を取り込まない build と同じ扱い）。既定の dev の configure は OFF のままとし、ネットワークに触れない。release 系の preset（`windows-release` など）は ON にし、release 系の preset で OFF のときは configure を失敗させる（Vulkan の preset が llama.cpp を要求するのと同じ扱い）。preset の変更は取り込む PR で行う。Linux の build は mock だけとする。NuGet restore を CMake に足すこと、ORT をソースから build すること、vcpkg は採らない |
+| x64 / ARM64 | x64 と ARM64 の両方の prebuilt を固定する。取得元は ORT の GitHub release の zip とし、その arch の zip が無ければ NuGet の `Microsoft.ML.OnnxRuntime` の nupkg とする（どちらも公式の配布物）。ARM64 の配布物への同梱は M27 の出荷に合わせる |
+| 配布 | `onnxruntime.dll` を base MSI の `azookey_inference_host.exe` の隣に置く。増えるサイズは取り込む PR で実測して記録する。M56 のモデルの配置は §5.3 に従う。M57 のモデルは同梱せずダウンロードする（`docs/modernbert-ja-scoring-spec.md` §6）。取り込む PR で、base MSI の内容（`docs/sideload-packaging-spec.md` §4.1・§4.4）と配布チャネルごとの同梱物の表（`docs/msix-packaging-spec.md` §1.6、`docs/copilot-pc-backend-spec.md` §8.3）に `onnxruntime.dll` を足す。`onnxruntime.dll` が MSVC runtime の DLL を import するなら、同じ PR で `scripts/check-app-local-runtime.ps1` の検査対象に加える |
+| 読み込み | `onnxruntime.dll` を import library でリンクせず、実行時に `LoadLibraryExW` で読む。Host の隣の絶対パスと `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS` を渡し、ORT の入口 `OrtGetApiBase` を `GetProcAddress` で得る（ORT の C API はこの関数が返す表だけを入口にする）。import しないので delay-load の仕組みは要らない。絶対パスで読むのは、Windows の `System32` に別の版の `onnxruntime.dll` があり、名前だけで読むと取り違えるためである。`LOAD_LIBRARY_SEARCH_APPLICATION_DIR` だけを渡すと、依存 DLL の探索から `System32` が外れるため、`DEFAULT_DIRS` を合わせて渡す（Microsoft Learn の `LoadLibraryExW`）。DLL が無い、要求する API の版を返さない、session を作れないときは Host を落とさず、reranker を無効にする |
+| fallback | 上の読み込みの失敗は、§7.1 と §7.2 の `reason=load_failed` に含める（M57 は `docs/modernbert-ja-scoring-spec.md` §4.0 順 4 の `not_loaded`）。原因の内訳（DLL が無い、API の版が合わない、など）は構造化ログにだけ出し、`reason` の値の集合と IPC・設定は変えない |
+| BackendSelector | M24 の `BackendSelector`（Zenzai の backend の判定）には加えない。reranker は自分のロードの成否で使えるかを決める |
+| ライセンス | ORT は MIT License（© Microsoft）。prebuilt に同梱される第三者表記（ThirdPartyNotices）は、配布物の第三者表記へ全文を引き継ぐ。取り込む PR で `THIRD_PARTY_LICENSES` に同梱の節を足し、リリース SBOM の生成（`scripts/complete-release-sbom.py` の source の種別）を URL と hash の pin に対応させる。表記の範囲は Human Gate の DEV-2174 で確定し、取り込む PR は DEV-2174 の確定の後に出す |
+| opset | ONNX export の opset は、固定した版の ORT が読める範囲で、学習パイプラインが 1 つの値に固定する。ORT の版を上げるときは、固定した opset を読めることと latency を確かめる（`docs/build-ci-spec.md` §3.4 の比較項目） |
+| 量子化 | M56 のモデルは fp32 とする。M57 の量子化は `docs/modernbert-ja-scoring-spec.md` §6.3 に従う |
+| スレッド数 | ORT の intra-op / inter-op のスレッド数は明示して設定し、ORT の既定（全コア）は使わない。llama.cpp の推論スレッド数（`docs/copilot-pc-backend-spec.md` §6.2）と合わせて論理コア数を超えない値にする。M56 の値は取り込む PR の計測で、M57 の CPU EP の値は `docs/modernbert-ja-scoring-spec.md` §6.3 の計測ゲートで決める |
 
 ## 8. 設定スキーマ
 

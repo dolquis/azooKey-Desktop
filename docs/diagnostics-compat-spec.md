@@ -56,6 +56,9 @@ Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ラン
 ローテート世代（`.jsonl.N`）も含め、redaction 後に `logs/` へ収集する。
 収集は新しいファイルを優先し、1 ファイルあたり末尾 1 MiB、合計 8 MiB を上限とする。
 切り詰めまたは除外が発生した場合は `logs/README.txt` に件数と上限を記録する。
+収集元は既定のログディレクトリ（`%LOCALAPPDATA%\azooKey\logs\`、D-013 と同じ）だけで、
+`--data-root` 付きで起動した Host が `<root>\logs` に書くログは収集対象外とする
+（`--data-root` は開発・試験専用。`docs/windows-tsf-host-architecture.md`「Host CLI 引数」）。
 
 設定アプリの「プライバシー」ペインの障害診断の節は follow-up とする。
 

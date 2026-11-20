@@ -455,7 +455,8 @@ class ProofreadHotkeyTest : public ::testing::Test {
                                                       &CaptureLaunch);
     azookey::tsf::testing::SetProofreadClientVerifierForTest(&AcceptAnyClient);
     service_.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
-    service_.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    service_.set_privacy_settings_for_test(
+        R"({"privacy":{"mode":"normal","externalAiConsent":true}})");
   }
   void TearDown() override {
     azookey::tsf::testing::SetProofreadClientVerifierForTest(nullptr);

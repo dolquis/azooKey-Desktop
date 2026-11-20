@@ -10560,7 +10560,7 @@ TEST(TsfTipSecureInputTest, AutoSecureInputFalseKeepsUnresolvedAppAndUnknownScop
   TextServiceHarness h;
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
   h.service.set_privacy_settings_for_test(
-      R"({"privacy":{"mode":"custom","autoSecureInput":false,"redactLogs":false,"custom":{"aiCandidate":true,"externalAi":true,"detailedLogging":true}}})");
+      R"({"privacy":{"mode":"custom","externalAiConsent":true,"autoSecureInput":false,"redactLogs":false,"custom":{"aiCandidate":true,"externalAi":true,"detailedLogging":true}}})");
   azookey::tsf::ScopedFocusClassificationForTest focus(azookey::tsf::InputScopeClass::Normal);
   EXPECT_FALSE(h.service.resolve_secure_for_test(&h.context));
   auto ai = h.service.resolve_ai_privacy_for_test(&h.context);  // Unknown scope.
@@ -18530,7 +18530,8 @@ struct MagicConversionHarness {
     scope.scope.value = IS_DEFAULT;
     h.context.input_scope_property = &scope;
     h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
-    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    h.service.set_privacy_settings_for_test(
+        R"({"privacy":{"mode":"normal","externalAiConsent":true}})");
     h.service.set_number_rewriter_enabled_for_test(legacy);
     h.service.set_magic_conversion_for_test(true, "openai");
     h.service.set_host_transform_capability_for_test(true);

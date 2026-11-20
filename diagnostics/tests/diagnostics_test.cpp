@@ -309,15 +309,25 @@ TEST(DiagnosticsTest, DpapiRequiresKeyOnlyForEffectiveOpenAiBackends) {
   EXPECT_EQ(probe(R"({"aiBackend":"none"})"), diag::DpapiState::NotRequired);
   EXPECT_EQ(probe(R"({"aiBackend":"none","openAiApiKey":"dpapi:AQID"})"),
             diag::DpapiState::NotRequired);
-  EXPECT_EQ(probe(R"({"aiBackend":"openai"})"), diag::DpapiState::MissingKey);
-  EXPECT_EQ(probe(R"({"aiBackend":"openai","openAiApiKey":"legacy-key"})"),
-            diag::DpapiState::Plaintext);
-  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai"}}})"),
+  EXPECT_EQ(probe(R"({"aiBackend":"openai"})"), diag::DpapiState::NotRequired);  // No consent.
+  EXPECT_EQ(probe(R"({"privacy":{"externalAiConsent":true},"aiBackend":"openai"})"),
             diag::DpapiState::MissingKey);
-  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"default":{"aiBackend":"openai"}}})"),
-            diag::DpapiState::MissingKey);
-  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"default":{"aiBackend":"openai","privacyMode":"private"},"app.exe":{"privacyMode":"normal"}}})"),
-            diag::DpapiState::MissingKey);
+  EXPECT_EQ(
+      probe(
+          R"({"privacy":{"externalAiConsent":true},"aiBackend":"openai","openAiApiKey":"legacy-key"})"),
+      diag::DpapiState::Plaintext);
+  EXPECT_EQ(
+      probe(
+          R"({"privacy":{"externalAiConsent":true},"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai"}}})"),
+      diag::DpapiState::MissingKey);
+  EXPECT_EQ(
+      probe(
+          R"({"privacy":{"externalAiConsent":true},"aiBackend":"none","profilesByApp":{"default":{"aiBackend":"openai"}}})"),
+      diag::DpapiState::MissingKey);
+  EXPECT_EQ(
+      probe(
+          R"({"privacy":{"externalAiConsent":true},"aiBackend":"none","profilesByApp":{"default":{"aiBackend":"openai","privacyMode":"private"},"app.exe":{"privacyMode":"normal"}}})"),
+      diag::DpapiState::MissingKey);
   EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"private"}}})"),
             diag::DpapiState::NotRequired);
   EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"secure"}}})"),
@@ -334,16 +344,18 @@ TEST(DiagnosticsTest, DpapiRequiresKeyOnlyForEffectiveOpenAiBackends) {
 TEST(DiagnosticsTest, DpapiProbeDistinguishesDecryptionFailureAndUnavailableWithoutLeakingKey) {
   MockDpapiCrypto crypto;
   constexpr std::string_view settings =
-      R"({"aiBackend":"openai","openAiApiKey":"dpapi:AQID"})";
+      R"({"privacy":{"externalAiConsent":true},"aiBackend":"openai","openAiApiKey":"dpapi:AQID"})";
   EXPECT_EQ(diag::ProbeDpapiSettingsJson(settings, crypto), diag::DpapiState::Decrypted);
   crypto.decrypt_succeeds = false;
   EXPECT_EQ(diag::ProbeDpapiSettingsJson(settings, crypto), diag::DpapiState::DecryptFailed);
   crypto.available = false;
   EXPECT_EQ(diag::ProbeDpapiSettingsJson(settings, crypto), diag::DpapiState::Unavailable);
   EXPECT_EQ(crypto.decrypt_calls, 2);
-  EXPECT_EQ(diag::ProbeDpapiSettingsJson(
-                R"({"aiBackend":"openai","openAiApiKey":"dpapi:invalid"})", crypto),
-            diag::DpapiState::DecryptFailed);
+  EXPECT_EQ(
+      diag::ProbeDpapiSettingsJson(
+          R"({"privacy":{"externalAiConsent":true},"aiBackend":"openai","openAiApiKey":"dpapi:invalid"})",
+          crypto),
+      diag::DpapiState::DecryptFailed);
   EXPECT_EQ(diag::ProbeDpapiSettingsJson("{", crypto), diag::DpapiState::Unavailable);
 
   diag::Snapshot snapshot;

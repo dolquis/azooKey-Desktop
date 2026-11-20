@@ -333,7 +333,7 @@ secure と分けない。SafeMode による停止は Host が担う（`docs/host
 | 学習許可 | `privacy.custom.learning` | `false` |
 | 予測許可 | `privacy.custom.prediction` | `true` |
 | AI 候補生成許可 | `privacy.custom.aiCandidate` | `true` |
-| 外部 AI 許可 | `privacy.custom.externalAi ∧ privacy.custom.aiCandidate` | `false` |
+| 外部 AI 許可 | `privacy.externalAiConsent ∧ privacy.custom.externalAi ∧ privacy.custom.aiCandidate` | `false` |
 | 詳細ログ許可 | `privacy.custom.detailedLogging ∧ ¬privacy.redactLogs` | `false`（`redactLogs` 既定 `true` のため） |
 
 **解決順（precedence）**:
@@ -358,6 +358,14 @@ secure と分けない。SafeMode による停止は Host が担う（`docs/host
    `privacy.custom.detailedLogging = true` でも `redactLogs = true` の間は本文系フィールドを
    redact し続ける（`docs/observability-spec.md` §7.6 の設定解決に従う）。
    これにより Debug + `AZOOKEY_LOG_BODY=1` であっても、`redactLogs` が有効な限り入力本文は出力されない。
+5. **`privacy.externalAiConsent` は外部 AI 許可の floor**: 外部 AI 許可は `custom.externalAi` 単独では
+   true にならず、外部 AI への明示同意 `privacy.externalAiConsent = true`（既定 `false`）を併せて満たす場合のみ
+   true になる（`docs/ai-backend-spec.md` §14.2）。
+
+**同意と各モード**: `privacy.externalAiConsent` は `custom` に限らず全モードに掛かる。`normal` の外部 AI 許可は
+同意の値そのものであり、`private` / `offline` / `secure` は同意によらず外部 AI 不許可である。キーが無い設定
+（旧版の settings.json を含む）は同意なしとして解決する。真偽値でない値は外部 AI に加えて AI 候補生成も不許可にする。
+同意はグローバル設定だけが持ち、app profile は上書きできない（app profile は許可を狭めるだけである。§5.1.1）。
 
 **既定の意味**: per-axis 既定（learning OFF / prediction ON / aiCandidate ON / externalAi OFF /
 detailedLogging OFF）は §2「fail closed」に沿った private 相当の安全側であり、軸を 1 つも
@@ -366,7 +374,7 @@ fallback する扱いと後方互換である。
 
 **他設定との関係**: `disableLearningInPrivateMode` / `disableExternalAIInPrivateMode`（§7）は
 `private` モード専用のトグルであり、`custom` には適用しない（`custom` では `privacy.custom.*`
-が唯一の権威）。`docs/app-profile-spec.md` §4.2 の backend 解決は、`custom` でも
+が唯一の権威。ただし外部 AI 許可には全モード共通の `privacy.externalAiConsent` も要る）。`docs/app-profile-spec.md` §4.2 の backend 解決は、`custom` でも
 AI 候補生成許可 / 外部 AI 許可 の 2 クエリ経由で一貫して評価される。
 
 ### 5.3 TSF 左文脈の取得と利用範囲
@@ -451,6 +459,7 @@ private の入力でも送る。外部 AI への送信、
     "disableExternalAIInPrivateMode": true,
     "redactLogs": true,
     "crashReportConsent": "off",
+    "externalAiConsent": false,
     "secureApps": [],
     "secureUrlPatterns": [],
     "privateApps": [],
@@ -462,7 +471,7 @@ private の入力でも送る。外部 AI への送信、
 `secureApps` には §4.1 のバンドル既定を再掲せず、ユーザー追加分のみを保存する
 （既定 `[]`）。実効リストは §4.1 のとおりバンドル既定との和集合で評価する。
 
-`settings/mvp-settings.schema.json` の `privacy` が持つキーは `mode`・`crashReportConsent`・
+`settings/mvp-settings.schema.json` の `privacy` が持つキーは `mode`・`crashReportConsent`・`externalAiConsent`・
 `custom.learning`・`custom.prediction`・`custom.aiCandidate`・`custom.externalAi`・
 `custom.detailedLogging`・`redactLogs`・
 `autoSecureInput`・`secureApps`・`showSecureIndicator` であり、

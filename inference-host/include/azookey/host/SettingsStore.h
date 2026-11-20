@@ -114,7 +114,7 @@ struct RuntimeSettings {
   std::string custom_romaji_table_path{"%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv"};
   bool prediction_enabled{true};
   std::string ai_backend{"none"};
-  core::AiPrivacy ai_privacy{true, true};
+  core::AiPrivacy ai_privacy{true, false};  // No settings file: no external AI consent.
   // Unlike AI external access, offline mode also forbids public asset downloads.
   bool offline_mode{false};
   core::PrivacyPolicy privacy_policy{false, false, true};

@@ -656,6 +656,12 @@ M48 のモード通知 API を前提としない。
 |---|---|---|
 | `openAiTimeoutMs` | `30000` | 外部 API receive と再試行を含む全体期限。1000〜120000 ms（§7.1） |
 
+外部送信の同意（§14.2）:
+
+| キー | 既定 | 意味 |
+|---|---|---|
+| `privacy.externalAiConsent` | `false` | 外部 AI へ本文を送ることへの明示同意。どのモードでも外部 AI 許可（§8）の要件になる。キーが無ければ同意なしとし、真偽値でなければ AI 候補生成も不許可にする（`privacy-and-secure-input-spec.md` §5.2） |
+
 `AiBackend::Transform`はM58-Cから共通利用する。WinHTTPはダウンロードと
 proxy・TLS検証の方針を共有し、AIのPOSTは非同期ハンドルの終了通知まで待って
 キャンセルする。HTTPS以外は数値loopbackのみ許可し、redirectは追従しない。

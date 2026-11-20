@@ -414,9 +414,10 @@ TEST(AiBackendTest, PunctuationOffPreservesOnlyExistingMarks) {
 TEST(AiPrivacyTest, DefaultsAndCustomIntersection) {
   const auto normal = azookey::core::ParseAiPrivacy(j::Object{});
   EXPECT_TRUE(normal.ai);
-  EXPECT_TRUE(normal.external);
+  EXPECT_FALSE(normal.external);  // No externalAiConsent (ai-backend-spec section 14.2).
   for (const auto* mode : {"secure", "unknown"}) {
-    auto p = azookey::core::ParseAiPrivacy(j::Object{{"privacy", j::Object{{"mode", mode}}}});
+    auto p = azookey::core::ParseAiPrivacy(
+        j::Object{{"privacy", j::Object{{"mode", mode}, {"externalAiConsent", true}}}});
     EXPECT_FALSE(p.ai);
     EXPECT_FALSE(p.external);
   }
@@ -425,5 +426,45 @@ TEST(AiPrivacyTest, DefaultsAndCustomIntersection) {
                             {"custom", j::Object{{"aiCandidate", false}, {"externalAi", true}}}}}});
   EXPECT_FALSE(p.ai);
   EXPECT_FALSE(p.external);
+}
+
+// ai-backend-spec section 14.2 and privacy-and-secure-input-spec section 5.2:
+// external AI is consent AND the mode's own permission; secure stays first.
+TEST(AiPrivacyTest, ExternalAiNeedsConsentInEveryMode) {
+  const auto parse = [](j::Object privacy) {
+    return azookey::core::ParseAiPrivacy(j::Object{{"privacy", std::move(privacy)}});
+  };
+  auto p = parse(j::Object{{"mode", "normal"}});
+  EXPECT_TRUE(p.ai);
+  EXPECT_FALSE(p.external);
+  p = parse(j::Object{{"mode", "normal"}, {"externalAiConsent", false}});
+  EXPECT_TRUE(p.ai);
+  EXPECT_FALSE(p.external);
+  p = parse(j::Object{{"mode", "normal"}, {"externalAiConsent", true}});
+  EXPECT_TRUE(p.ai);
+  EXPECT_TRUE(p.external);
+  p = parse(j::Object{{"externalAiConsent", true}});  // A missing mode is normal.
+  EXPECT_TRUE(p.ai);
+  EXPECT_TRUE(p.external);
+  for (const auto* mode : {"private", "offline"}) {
+    p = parse(j::Object{{"mode", mode}, {"externalAiConsent", true}});
+    EXPECT_TRUE(p.ai) << mode;
+    EXPECT_FALSE(p.external) << mode;
+  }
+  const auto custom = [&](bool consent, bool external_ai) {
+    return parse(j::Object{{"mode", "custom"},
+                           {"externalAiConsent", consent},
+                           {"custom", j::Object{{"externalAi", external_ai}}}});
+  };
+  EXPECT_FALSE(custom(false, true).external);
+  EXPECT_FALSE(custom(true, false).external);
+  EXPECT_TRUE(custom(true, true).ai);
+  EXPECT_TRUE(custom(true, true).external);
+  // A consent value that is not a boolean turns AI off altogether.
+  for (const auto& value : {j::Value("true"), j::Value(1), j::Value()}) {
+    p = parse(j::Object{{"mode", "normal"}, {"externalAiConsent", value}});
+    EXPECT_FALSE(p.ai);
+    EXPECT_FALSE(p.external);
+  }
 }
 }  // namespace

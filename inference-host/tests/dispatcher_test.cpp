@@ -3209,7 +3209,8 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   EXPECT_EQ(calls, before_override);
   {
     std::ofstream file(path);
-    file << R"({"aiBackend":"none","openAiApiKey":"test-only-placeholder"})";
+    file
+        << R"({"aiBackend":"none","openAiApiKey":"test-only-placeholder","privacy":{"externalAiConsent":true}})";
   }
   settings.Reload();
   request.ai_backend = "openai";

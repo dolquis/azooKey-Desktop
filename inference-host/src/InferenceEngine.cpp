@@ -87,6 +87,16 @@ size_t LatticePathCount(uint32_t effective_max_candidates, bool live) {
              : (std::min)(kLatticeMaxPaths, static_cast<size_t>(effective_max_candidates));
 }
 
+// Code points of `utf8`; nullopt when it is not valid UTF-8.
+std::optional<uint32_t> CountCodepoints(std::string_view utf8) {
+  uint32_t count = 0;
+  for (size_t offset = 0; offset < utf8.size(); ++count) {
+    char32_t codepoint = 0;
+    if (!core::DecodeNextUtf8(utf8, offset, codepoint)) return std::nullopt;
+  }
+  return count;
+}
+
 // Whether a request gets the lattice's N-best (lattice-conversion-spec sections 3.2 and 3.3).
 // `model_answered` is a request the model converter answered without falling back.
 bool LatticeApplies(const LatticeConfig& config, bool model_answered) {
@@ -950,14 +960,28 @@ void InferenceEngine::LogLatticeConnectionsLocked(std::optional<learning::LayerI
 }
 
 std::vector<core::Candidate> InferenceEngine::LatticeCandidatesLocked(
-    const std::string& kana, size_t max_paths, const std::atomic<bool>* cancel,
-    std::optional<std::chrono::steady_clock::time_point> deadline,
+    const std::string& kana, const std::string& remaining_reading, size_t max_paths,
+    const std::atomic<bool>* cancel, std::optional<std::chrono::steady_clock::time_point> deadline,
     core::LatticeStatus& status) const {
   core::LatticeQuery query;
   query.max_paths = max_paths;
   query.limits.cancel = cancel;
   query.limits.deadline = deadline;
-  const auto result = dictionaries_.ConvertLattice(kana, query);
+  // segment-editing-spec section 5.3: a first segment's request searches the first segment and
+  // the remaining reading together, with a word boundary at the first segment's end e, and its
+  // candidates are the surfaces before e (lattice-conversion-spec section 7.3). Over 64 code
+  // points together, the first segment alone. NormalizeReading maps code points one to one, so
+  // e counts the first segment's code points.
+  std::string reading = kana;
+  const auto head_length = CountCodepoints(kana);
+  const auto rest_length = CountCodepoints(remaining_reading);
+  if (!remaining_reading.empty() && head_length && rest_length && *head_length > 0 &&
+      *head_length + *rest_length <= core::kMaxLatticeReading) {
+    reading += remaining_reading;
+    query.constraints.word_boundaries = {*head_length};
+    query.head_only = true;
+  }
+  const auto result = dictionaries_.ConvertLattice(reading, query);
   status = result.status;
   std::vector<core::Candidate> candidates;
   const double scale = dictionaries_.LatticeScoreScale();
@@ -2022,6 +2046,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   const auto request_time_left = [&request_deadline] {
     return !request_deadline || std::chrono::steady_clock::now() < *request_deadline;
   };
+  // segment-editing-spec section 5.3: only the lattice reads a first segment's remaining reading.
+  static const std::string kNoRemainingReading;
+  const std::string& remaining_reading = mixed ? mixed->remaining_reading : kNoRemainingReading;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     converter = active_converter_;
@@ -2053,7 +2080,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     if (lattice_allowed && !using_model_converter && LatticeApplies(config.lattice, false) &&
         request_time_left()) {
       lattice = LatticeCandidatesLocked(
-          kana,
+          kana, remaining_reading,
           LatticePathCount(EffectiveMaxCandidates(config.max_candidates, max_candidates), live),
           cancel, request_deadline, lattice_status.emplace());
     }
@@ -2204,8 +2231,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
             std::chrono::nanoseconds(lattice_fallback_budget_ns_.load(std::memory_order_relaxed)));
     if (request_deadline) deadline = (std::min)(deadline, *request_deadline);
     std::lock_guard<std::mutex> lock(state_mutex_);
-    lattice = LatticeCandidatesLocked(kana, LatticePathCount(effective_max_candidates, live),
-                                      cancel, deadline, lattice_status.emplace());
+    lattice = LatticeCandidatesLocked(kana, remaining_reading,
+                                      LatticePathCount(effective_max_candidates, live), cancel,
+                                      deadline, lattice_status.emplace());
   }
   // Section 3.6: each degradation of the request, by its result only (never the reading or a
   // surface). A canceled request returns nothing, so its cut-off is not one.

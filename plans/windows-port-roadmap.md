@@ -1803,7 +1803,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 語の境目を 1 つ持つ制約で取り出した先頭の区間の候補が、全列挙の結果と一致し、後ろの区間の経路が多くても N 件そろう
     （`docs/lattice-conversion-spec.md` §11）
   - `input_state_test`・`keymap_test`・`onkeydown_preedit_test`・`display_attribute_test`・`payloads_test`・
-    `dispatcher_test`・`engine_test` とラティスの部品の試験に、上記の検証がある
+    `dispatcher_test`・`engine_lattice_test` とラティスの部品の試験に、上記の検証がある
   - 実機での確認（Notepad・Word・Edge・VS Code と UI-less の構成、モデルあり・なし、`gate:human-required`）
 - **参照**: `docs/segment-editing-spec.md`、`docs/legacy-parity-spec.md` §1.1・§1.2・§1.4、
   `docs/tsf-deep-integration-spec.md` §3.6・§5.3〜§5.5、`docs/lattice-conversion-spec.md` §7.3・§11

@@ -225,6 +225,79 @@ TEST(EngineLattice, TheRequestsOwnDeadlineBoundsTheLattice) {
   EXPECT_FALSE(LatticeCandidates(in_time.candidates).empty());
 }
 
+// The options the Dispatcher gives a first segment's request (segment-editing-spec section 5.3);
+// an empty remaining reading is an ordinary request converted as typed.
+azookey::host::MixedConversionOptions FirstSegment(const std::string& remaining) {
+  azookey::host::MixedConversionOptions options;
+  options.typo_correction = false;
+  options.remaining_reading = remaining;
+  return options;
+}
+
+std::vector<Candidate> QueryFirstSegment(InferenceEngine& engine, const std::string& reading,
+                                         const std::string& remaining) {
+  const auto options = FirstSegment(remaining);
+  return engine.QueryCandidatesEx(reading, "", kNow, nullptr, 0, false, nullptr, nullptr, &options)
+      .candidates;
+}
+
+// M66 (segment-editing-spec section 5.3, lattice-conversion-spec section 7.3): with a remaining
+// reading, the lattice searches both with a word boundary at e and gives the surfaces before e.
+// B(r) enters the costs: お|京 is 4000 behind お|今日 (B(20) - B(10) = 1000) instead of 3000.
+TEST(EngineLattice, AFirstSegmentsCandidatesAreItsSurfacesBeforeTheRemainingReading) {
+  const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
+  const std::string head = "おきょう";
+  const std::string rest = "はいいてんきです";
+  const auto score_of = [](const std::vector<Candidate>& lattice, const std::string& surface) {
+    const auto found = std::find_if(lattice.begin(), lattice.end(),
+                                    [&](const Candidate& c) { return c.surface == surface; });
+    return found == lattice.end() ? -1.0 : found->score;
+  };
+
+  // Without the remaining reading: the first segment's reading alone (path costs 13500, 16500).
+  const auto alone = LatticeCandidates(QueryFirstSegment(*engine, head, ""));
+  ASSERT_GE(alone.size(), 2U);
+  EXPECT_EQ(alone[0].surface, "お今日");
+  EXPECT_DOUBLE_EQ(alone[0].score, 1.0);
+  EXPECT_DOUBLE_EQ(score_of(alone, "お京"), 0.7);
+
+  // Path costs 31000 and 35000: each adds B of its last word's right id.
+  const auto first = LatticeCandidates(QueryFirstSegment(*engine, head, rest));
+  ASSERT_GE(first.size(), 2U);
+  ASSERT_LE(first.size(), 8U);
+  EXPECT_EQ(first[0].surface, "お今日");
+  EXPECT_DOUBLE_EQ(first[0].score, 1.0);
+  EXPECT_DOUBLE_EQ(score_of(first, "お京"), 0.6);
+  for (size_t i = 0; i < first.size(); ++i) {
+    // Section 3.4 with the first segment's reading as the request's (segment-editing 5.3).
+    EXPECT_EQ(first[i].reading, head);
+    EXPECT_EQ(first[i].source, CandidateSource::SystemDictionary);
+    EXPECT_EQ(first[i].debug_info, std::string(kLatticePrefix) + std::to_string(i + 1));
+    EXPECT_EQ(first[i].surface.find("は"), std::string::npos) << first[i].surface;
+  }
+
+  // Over 64 code points together: the first segment alone. Up to 64: still together.
+  const auto padded = [&](size_t total) {
+    std::string padding;
+    for (size_t i = 4 + 8; i < total; ++i) padding += "て";
+    return rest + padding;
+  };
+  EXPECT_DOUBLE_EQ(
+      score_of(LatticeCandidates(QueryFirstSegment(*engine, head, padded(64))), "お京"), 0.6);
+  EXPECT_EQ(Describe(LatticeCandidates(QueryFirstSegment(*engine, head, padded(65)))),
+            Describe(alone));
+}
+
+// segment-editing-spec section 10: a request without the remaining reading keeps its candidates.
+TEST(EngineLattice, ARequestWithoutTheRemainingReadingKeepsItsCandidates) {
+  const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
+  const auto typed = engine->QueryCandidatesEx(kSentence, "", kNow, nullptr, 0, false).candidates;
+  EXPECT_EQ(Describe(QueryFirstSegment(*engine, kSentence, "")), Describe(typed));
+  const auto lattice = LatticeCandidates(typed);
+  ASSERT_FALSE(lattice.empty());
+  EXPECT_EQ(lattice.front().surface, "今日はいい天気です");
+}
+
 TEST(EngineLattice, SafeModeConvertsWithoutTheModelAndGetsTheLattice) {
   const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
   engine->RestoreHealthState(azookey::host::HealthState::SafeMode);
@@ -343,6 +416,44 @@ TEST(EngineLattice, ModelFallbacksGetTheLatticeAndAnsweredRequestsDoNot) {
   const auto spent = engine->QueryCandidates(kSentence, "", kNow);
   ASSERT_FALSE(spent.empty());
   EXPECT_TRUE(LatticeCandidates(spent).empty());
+  std::error_code ec;
+  std::filesystem::remove(model, ec);
+}
+
+// M66 (segment-editing-spec section 5.3): a first segment the model fell back on gets the
+// first segment's lattice candidates; one the model answered is converted as without the
+// remaining reading.
+TEST(EngineLattice, AFirstSegmentFollowsTheModelPathRules) {
+  const auto model = UniqueTempPath("azookey_engine_lattice_first_segment", ".gguf");
+  {
+    std::ofstream out(model, std::ios::binary);
+    out.write("GGUF\x03\x00\x00\x00", 8);
+  }
+  const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
+  azookey::host::ModelLoadOptions options;
+  options.path = model.string();
+  options.mock_zenzai_candidates_for_tests = true;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  engine->SetLatticeFallbackBudgetForTests(std::chrono::hours(1));
+
+  // The mock generates nothing for おきょう: zenzai-degraded, and the lattice of section 5.3.
+  const auto degraded = QueryFirstSegment(*engine, "おきょう", "はいいてんきです");
+  EXPECT_TRUE(std::any_of(degraded.begin(), degraded.end(), [](const Candidate& c) {
+    return c.debug_info.find("zenzai-degraded") != std::string::npos;
+  }));
+  const auto lattice = LatticeCandidates(degraded);
+  ASSERT_GE(lattice.size(), 2U);
+  EXPECT_EQ(lattice[0].surface, "お今日");
+  EXPECT_EQ(lattice[0].reading, "おきょう");
+  EXPECT_EQ(lattice[1].surface, "お京");
+  EXPECT_DOUBLE_EQ(lattice[1].score, 0.6);
+
+  // The model answered: no lattice, and the remaining reading changes nothing.
+  const auto answered = QueryFirstSegment(*engine, "にほんご", "です");
+  ASSERT_FALSE(answered.empty());
+  EXPECT_EQ(answered.front().source, CandidateSource::Model);
+  EXPECT_TRUE(LatticeCandidates(answered).empty());
+  EXPECT_EQ(Describe(answered), Describe(QueryFirstSegment(*engine, "にほんご", "")));
   std::error_code ec;
   std::filesystem::remove(model, ec);
 }

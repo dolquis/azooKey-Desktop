@@ -4486,12 +4486,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             candidate_window_show_pending_ = true;
           }
           ShowCandidateWindowFromCache();
-        } else if (batch_query_in_progress_ && !IpcHostUnavailable()) {
+        } else if (const bool host_unavailable = BatchHostUnavailable();
+                   batch_query_in_progress_ && !host_unavailable) {
           // Batch conversion is already waiting for a response.  Eat repeated
           // Space presses without re-sending the same request.
-        } else if (IpcHostUnavailable() && (batch_query_in_progress_ ||
-                                            ipc_connection_state_.load(std::memory_order_acquire) !=
-                                                IpcConnectionState::Degraded)) {
+        } else if (host_unavailable && (batch_query_in_progress_ ||
+                                        ipc_connection_state_.load(std::memory_order_acquire) !=
+                                            IpcConnectionState::Degraded)) {
           // No Host to convert with: offer the TIP-local candidates at once
           // instead of leaving the batch waiting (and Enter swallowed) until
           // the Host comes back. A batch that was already waiting when the Host
@@ -4652,7 +4653,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT commit_hr = CommitSelected(context);
         if (FAILED(commit_hr)) return commit_hr;
         *eaten = TRUE;
-      } else if (BatchRomajiEnabled() && batch_query_in_progress_ && !IpcHostUnavailable()) {
+      } else if (BatchRomajiEnabled() && batch_query_in_progress_ && !BatchHostUnavailable()) {
         *eaten = TRUE;
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
         // With the Host gone a waiting batch never answers, so Enter commits
@@ -7125,9 +7126,10 @@ void TextService::StartIpcWorker() {
   ipc_host_unavailable_.store(false, std::memory_order_release);
   {
     // A worker stopped right after its own drop leaves the mark; this one's
-    // first connect follows no drop (DEV-2084).
+    // first connect follows no drop (DEV-2084, DEV-2140).
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     ipc_reconnect_after_own_drop_ = false;
+    ipc_reconnect_after_batch_drop_ = false;
   }
   {
     std::lock_guard<std::mutex> lock(health_state_mtx_);
@@ -8873,6 +8875,17 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
   };
   uint64_t active_id = generation;
   std::wstring failure_notice;
+  // The Host serves a connection in order, so a batch no one waits for any
+  // more is canceled and the connection dropped. The reconnect that follows is
+  // the TIP's own: the batch Space and Enter wait for it (spec §8.3, DEV-2140).
+  const auto drop_to_cancel = [&] {
+    SendCancelOutOfBand(active_id, trace_id);
+    {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      ipc_reconnect_after_batch_drop_ = true;
+    }
+    ipc_client_.Disconnect();
+  };
   for (const auto& chunk : chunks) {
     if (failed) break;
     {
@@ -8932,8 +8945,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
         stale = ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_;
       }
       if (stale) {
-        SendCancelOutOfBand(active_id, trace_id);
-        ipc_client_.Disconnect();
+        drop_to_cancel();
         std::lock_guard<std::mutex> lock(ipc_mtx_);
         ipc_inflight_id_ = 0;
         ipc_inflight_trace_id_.clear();
@@ -8972,10 +8984,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       }
       if (!result && std::chrono::steady_clock::now() >= deadline)
         ipc_client_.FinishTraceRequest(active_id, core::EtwResult::Timeout);
-      if (!result || !result->canceled) {
-        SendCancelOutOfBand(active_id, trace_id);
-        ipc_client_.Disconnect();
-      }
+      if (!result || !result->canceled) drop_to_cancel();
       failed = true;
       break;
     }
@@ -11686,6 +11695,9 @@ void TextService::FinishReconnectAttempt(bool established) {
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     const bool after_own_drop = std::exchange(ipc_reconnect_after_own_drop_, false);
+    // The batch Space and Enter go back to treating the Host as lost, or not,
+    // by the state alone (DEV-2140).
+    ipc_reconnect_after_batch_drop_ = false;
     if (!established && after_own_drop)
       unsent = std::exchange(ipc_transform_request_, std::nullopt);
   }
@@ -11696,6 +11708,13 @@ void TextService::FinishReconnectAttempt(bool established) {
         TransformOutcome{unsent->generation, std::nullopt, PromptFailure::NoAnswer};
   }
   candidate_ui_.PostCandidatesReady();
+}
+
+bool TextService::BatchHostUnavailable() {
+  // Under ipc_mtx_: Ready clears ipc_host_unavailable_ before the reconnect
+  // clears the mark, so a set flag without the mark is a Host really lost.
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  return IpcHostUnavailable() && !ipc_reconnect_after_batch_drop_;
 }
 
 HRESULT TextService::StartSelectionReconversion(ITfContext* context,

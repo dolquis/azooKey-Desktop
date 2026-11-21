@@ -19510,6 +19510,153 @@ TEST(TsfTipMagicConversionTest, AQueuedRequestWaitsForTheHostWhenAConnectNotAfte
   }
 }
 
+namespace {
+
+// A Host for batch conversion. It leaves the first QueryBatchConversion
+// unanswered, so Esc on it makes the TIP drop the connection itself (the
+// stale branch of ConvertBatch), and answers the later ones with 二.
+class BatchHost {
+ public:
+  bool Start(const std::string& pipe_name) {
+    using namespace azookey::ipc;
+    return server_.Start(pipe_name, [this](const Envelope& request) -> std::optional<Envelope> {
+      auto response = request;
+      if (request.type == MessageType::Handshake) {
+        HandshakeResponse handshake;
+        handshake.host_version = "test-host";
+        handshake.accepted = true;
+        handshake.batch_romaji_conversion = true;
+        response.payload_json = BuildHandshakeResponse(handshake);
+        return response;
+      }
+      if (request.type != MessageType::QueryBatchConversion) return std::nullopt;
+      if (batches_.fetch_add(1) == 0) return std::nullopt;
+      QueryBatchConversionResponse answer;
+      answer.full_surface = "二";
+      response.payload_json = BuildQueryBatchConversionResponse(answer);
+      return response;
+    });
+  }
+  void Stop() { server_.Stop(); }
+  int batches() const { return batches_.load(); }
+
+ private:
+  std::atomic<int> batches_{0};
+  azookey::ipc::NamedPipeServer server_;
+};
+
+}  // namespace
+
+// DEV-2140: Esc on a waiting batch makes the TIP cancel it and drop the
+// connection itself. A Space and an Enter pressed while the worker reconnects
+// wait for the reconnect, though the Host is flagged absent meanwhile, instead
+// of withdrawing the batch for the local candidates or committing the kana.
+TEST(TsfTipOnKeyDownPreeditTest, BatchKeysWaitForTheReconnectAfterTheTipsOwnDrop) {
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-batch-own-drop-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  BatchHost host;
+  ASSERT_TRUE(host.Start(pipe_name));
+  ReconnectGate gate;  // Outlives the harness, whose worker runs the hook.
+  TextServiceHarness handshake_token_guard;
+  {
+    DocumentPreeditHarness h;
+    ReleaseGateOnExit release{gate};
+    ConfigureTypoHarness(h);
+    h.service.set_batch_romaji_options_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.set_ipc_state_published_hook_for_test(&ReconnectGate::Hook, &gate);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] {
+      return h.service.ipc_connection_state_for_test() == azookey::tsf::IpcConnectionState::Ready;
+    }));
+    ASSERT_TRUE(h.Press('N'));
+    ASSERT_TRUE(h.Press('I'));
+    ASSERT_EQ(h.service.preedit_kana_, "に");
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(h.service.batch_query_in_progress_for_test());
+    ASSERT_TRUE(WaitUntil([&] { return host.batches() == 1; }, std::chrono::seconds(10)));
+
+    // Esc cancels the waiting batch; the worker drops the connection and is
+    // held in the reconnect's Connecting.
+    gate.Arm();
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    ASSERT_EQ(h.service.preedit_kana_, "に");
+    ASSERT_FALSE(h.service.batch_query_in_progress_for_test());
+    ASSERT_TRUE(gate.WaitHeld());
+    ASSERT_TRUE(h.service.ipc_host_unavailable_for_test());
+
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    EXPECT_TRUE(h.service.batch_query_in_progress_for_test());
+    EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+    EXPECT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.service.preedit_kana_, "に");
+    EXPECT_TRUE(h.service.batch_query_in_progress_for_test());
+
+    gate.Release();
+    ASSERT_TRUE(WaitUntil([&] { return host.batches() == 2; }, std::chrono::seconds(10)));
+    ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); },
+                          std::chrono::seconds(10)));
+    h.service.show_candidate_window_from_cache_for_test();
+    EXPECT_FALSE(h.service.batch_query_in_progress_for_test());
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_FALSE(shown.empty());
+    EXPECT_EQ(shown[0].surface, "二");
+    h.service.stop_ipc_worker_for_test();
+  }
+  host.Stop();
+}
+
+// DEV-2140: once the reconnect after the TIP's own drop fails, the Host is
+// lost as any other: the batch Space offers the local candidates at once.
+TEST(TsfTipOnKeyDownPreeditTest,
+     BatchSpaceOffersLocalCandidatesOnceTheReconnectAfterItsOwnDropFails) {
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-batch-own-drop-failed-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  BatchHost host;
+  ASSERT_TRUE(host.Start(pipe_name));
+  ReconnectGate gate;  // Outlives the harness, whose worker runs the hook.
+  TextServiceHarness handshake_token_guard;
+  {
+    DocumentPreeditHarness h;
+    ReleaseGateOnExit release{gate};
+    ConfigureTypoHarness(h);
+    h.service.set_batch_romaji_options_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.set_ipc_state_published_hook_for_test(&ReconnectGate::Hook, &gate);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] {
+      return h.service.ipc_connection_state_for_test() == azookey::tsf::IpcConnectionState::Ready;
+    }));
+    ASSERT_TRUE(h.Press('N'));
+    ASSERT_TRUE(h.Press('I'));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil([&] { return host.batches() == 1; }, std::chrono::seconds(10)));
+    gate.Arm();
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    ASSERT_TRUE(gate.WaitHeld());
+    const int attempts = [&] {
+      const std::lock_guard<std::mutex> lock(gate.mutex);
+      return gate.attempts;
+    }();
+
+    // The Host goes away before the worker reconnects.
+    host.Stop();
+    gate.Release();
+    ASSERT_TRUE(gate.WaitAttempts(attempts + 1));
+    ASSERT_TRUE(h.service.ipc_host_unavailable_for_test());
+
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    EXPECT_FALSE(h.service.batch_query_in_progress_for_test());
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_FALSE(shown.empty());
+    EXPECT_EQ(shown[0].surface, "に");
+    EXPECT_EQ(shown[0].source, "fallback");
+    h.service.stop_ipc_worker_for_test();
+  }
+}
+
 // --- M69 commit undo (docs/commit-undo-spec.md) ---
 namespace {
 constexpr LPARAM kKeyRepeat = LPARAM{1} << 30;

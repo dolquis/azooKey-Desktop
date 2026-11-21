@@ -1813,3 +1813,24 @@ TEST(SettingsStoreTest, BenchmarkHistoryReplacementFailurePreservesOriginal) {
   }
 }
 #endif
+
+// M73 (docs/homophone-notes-spec.md section 6): off by default, follows each
+// load, and reads a value other than a boolean as the default.
+TEST(SettingsStoreTest, HomophoneNotesDefaultsOffAndFollowsEachLoad) {
+  ScopedTempDirectory temp("azookey_settings_homophone_notes");
+  const auto path = temp.path() / "settings.json";
+  azookey::host::SettingsStore store(path);
+  EXPECT_FALSE(store.Load().settings.homophone_notes);  // No file.
+  EXPECT_FALSE(store.homophone_notes_enabled());
+  WriteText(path, R"({"homophoneNotes": true})");
+  EXPECT_TRUE(store.Reload().settings.homophone_notes);
+  EXPECT_TRUE(store.homophone_notes_enabled());
+  WriteText(path, R"({"homophoneNotes": "true"})");
+  EXPECT_FALSE(store.Reload().settings.homophone_notes);
+  EXPECT_FALSE(store.homophone_notes_enabled());
+  WriteText(path, R"({"homophoneNotes": true})");
+  ASSERT_TRUE(store.Reload().settings.homophone_notes);
+  WriteText(path, R"({})");
+  EXPECT_FALSE(store.Reload().settings.homophone_notes);
+  EXPECT_FALSE(store.homophone_notes_enabled());
+}

@@ -434,6 +434,10 @@
       "type": "string", "default": "",
       "description": "絵文字 TSV のパス。空文字列は Host と同階層の data/emoji.tsv"
     },
+    "homophoneNotes": {
+      "type": "boolean", "default": false,
+      "description": "M73: true で、同じ読みの候補が候補窓に 2 つ以上並ぶとき、同梱の data/homophone-notes.tsv にある候補へ使い分けの注記を付ける。false のとき Host は注記データを読まない。docs/homophone-notes-spec.md section 6"
+    },
     "typoCorrectionMode": {
       "type": "string",
       "enum": ["off", "suggest", "auto_replace"],

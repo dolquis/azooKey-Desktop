@@ -14,6 +14,7 @@ add_library(azookey_core STATIC
   src/DateTimeRewriter.cpp
   src/DoubleArrayTrie.cpp
   src/EtwLogger.cpp
+  src/HomophoneNotes.cpp
   src/InputState.cpp
   src/KanaInput.cpp
   src/KatakanaRewriter.cpp

@@ -120,6 +120,7 @@ std::vector<SettingField> BuildFields() {
       Integer("emojiMaxCandidates", Pane::Candidates, "Rewriters", 12, 1.0, 50.0, emoji),
       Integer("emojiTriggerMinQueryLength", Pane::Candidates, "Rewriters", 1, 1.0, 8.0, emoji),
       Text("emojiDataPath", Pane::Candidates, "Rewriters", "", emoji, true),
+      Bool("homophoneNotes", Pane::Candidates, "Rewriters", false),
 
       // The form of brackets and other symbols typed (bracket-pairing-spec section 4.4).
       Enum("inputMode", Pane::Candidates, "Brackets", "hiragana",

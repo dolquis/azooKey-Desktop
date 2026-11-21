@@ -10,6 +10,7 @@ add_executable(core_tests
   custom_romaji_test.cpp
   date_time_rewriter_test.cpp
   etw_logger_test.cpp
+  homophone_notes_test.cpp
   input_state_test.cpp
   kana_input_test.cpp
   katakana_rewriter_test.cpp

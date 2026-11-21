@@ -22,7 +22,7 @@ if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
 endif()
 
 add_executable(host_dispatcher_tests dispatcher_test.cpp ai_backend_test.cpp host_etw_test.cpp
-  anomaly_detector_test.cpp benchmark_worker_test_main.cpp)
+  anomaly_detector_test.cpp benchmark_worker_test_main.cpp homophone_notes_test.cpp)
 # Both dispatcher_test.cpp and host_etw_test.cpp define ThrowingConverter.
 set_source_files_properties(host_etw_test.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(host_dispatcher_tests PRIVATE

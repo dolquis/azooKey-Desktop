@@ -1471,6 +1471,8 @@ STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
     *ppvObj = static_cast<ITfKeyEventSink*>(this);
   } else if (riid == IID_ITfThreadMgrEventSink) {
     *ppvObj = static_cast<ITfThreadMgrEventSink*>(this);
+  } else if (riid == IID_ITfThreadFocusSink) {
+    *ppvObj = static_cast<ITfThreadFocusSink*>(this);
   } else if (riid == IID_ITfTextEditSink) {
     *ppvObj = static_cast<ITfTextEditSink*>(this);
   } else if (riid == IID_ITfCompartmentEventSink) {
@@ -1862,8 +1864,19 @@ HRESULT TextService::AdviseTextServiceSinks() {
 
   hr = source->AdviseSink(IID_ITfThreadMgrEventSink, static_cast<ITfThreadMgrEventSink*>(this),
                           &thread_mgr_sink_cookie_);
+  if (FAILED(hr)) {
+    source->Release();
+    return hr;
+  }
+  // Best effort (DEV-2094): without it the prediction keeps the old behavior
+  // when the focus leaves the thread.
+  thread_focus_lost_ = false;
+  if (FAILED(source->AdviseSink(IID_ITfThreadFocusSink, static_cast<ITfThreadFocusSink*>(this),
+                                &thread_focus_sink_cookie_))) {
+    thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "thread_focus_sink_advise_failed");
+  }
   source->Release();
-  if (FAILED(hr)) return hr;
   return S_OK;
 }
 
@@ -1885,6 +1898,21 @@ HRESULT TextService::UnadviseTextServiceSinks() {
       thread_mgr_sink_cookie_ = TF_INVALID_COOKIE;
     }
   }
+  if (thread_mgr_ && thread_focus_sink_cookie_ != TF_INVALID_COOKIE) {
+    ITfSource* source = nullptr;
+    HRESULT hr = thread_mgr_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source));
+    if (SUCCEEDED(hr) && source) {
+      hr = source->UnadviseSink(thread_focus_sink_cookie_);
+      source->Release();
+    }
+    if (FAILED(hr)) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "thread_focus_sink_unadvise_failed");
+      result = hr;
+    } else {
+      thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
+    }
+  }
+  thread_focus_lost_ = false;
 
   UnregisterProofreadPreservedKey();
   UnregisterDebugPreservedKey();
@@ -2778,6 +2806,27 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) try {
 } catch (...) {
   LogComBoundaryException("TextService::OnSetFocus", E_FAIL);
   return E_FAIL;
+}
+
+// tsf-deep-integration-spec section 4.5 (DEV-2094): an app may keep its
+// composition when the focus moves to another process, and no other sink tells
+// the TIP. The prediction window goes, a result on its way is dropped with the
+// generation, and nothing asks again until the thread has the focus back; the
+// next key there asks. The candidate window and the composition stay.
+STDMETHODIMP TextService::OnKillThreadFocus() try {
+  AZOOKEY_ASSERT_UI_THREAD();
+  thread_focus_lost_ = true;
+  ClearPrediction();
+  return S_OK;
+} catch (...) {
+  LogComBoundaryException("TextService::OnKillThreadFocus", E_FAIL);
+  return E_FAIL;
+}
+
+STDMETHODIMP TextService::OnSetThreadFocus() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  thread_focus_lost_ = false;
+  return S_OK;
 }
 
 HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
@@ -10698,6 +10747,12 @@ void TextService::ClearPrediction() {
 
 void TextService::RefreshPrediction(ITfContext* context) {
   AZOOKEY_ASSERT_UI_THREAD();
+  // A settings reload or a retry while the thread is without the focus asks
+  // nothing (tsf-deep-integration-spec section 4.5, DEV-2094).
+  if (thread_focus_lost_) {
+    ClearPrediction();
+    return;
+  }
   // The focused app's profile decides over the global switch (DEV-1985); the
   // menu still shows the global one (tsf-deep-integration-spec §4.5).
   const auto prediction =

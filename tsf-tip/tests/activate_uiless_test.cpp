@@ -358,8 +358,16 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
   }
 
   // ITfSource — only the thread-manager-event-sink advise needs to succeed.
+  // The thread focus sink is taken only when accept_thread_focus_sink is set.
   STDMETHODIMP AdviseSink(REFIID riid, IUnknown* punk, DWORD* cookie) override {
     if (!punk || !cookie) return E_POINTER;
+    if (riid == IID_ITfThreadFocusSink && accept_thread_focus_sink) {
+      ++focus_sink_advise_count;
+      focus_sink_ = punk;
+      focus_sink_->AddRef();
+      *cookie = kFocusSinkCookie;
+      return S_OK;
+    }
     if (riid != IID_ITfThreadMgrEventSink) return E_NOINTERFACE;
     thread_sink_ = punk;
     thread_sink_->AddRef();
@@ -367,9 +375,20 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
     return S_OK;
   }
   STDMETHODIMP UnadviseSink(DWORD cookie) override {
+    if (cookie == kFocusSinkCookie) {
+      if (focus_sink_) {
+        focus_sink_->Release();
+        focus_sink_ = nullptr;
+      }
+      return S_OK;
+    }
     if (thread_sink_) { thread_sink_->Release(); thread_sink_ = nullptr; }
     return cookie == kSinkCookie ? S_OK : E_INVALIDARG;
   }
+
+  bool accept_thread_focus_sink{false};
+  int focus_sink_advise_count{0};
+  bool has_focus_sink() const { return focus_sink_ != nullptr; }
 
   TfClientId client_id{7};
   MockKeyboardCompartment keyboard_compartment;
@@ -398,10 +417,12 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
 
  private:
   static constexpr DWORD kSinkCookie = 0x515;
+  static constexpr DWORD kFocusSinkCookie = 0x516;
   LONG ref_count_{1};
   DWORD active_flags_{0};
   ITfKeyEventSink* key_sink_{nullptr};
   IUnknown* thread_sink_{nullptr};
+  IUnknown* focus_sink_{nullptr};
 };
 
 // Document manager that only needs a COM identity: OnSetFocus compares and
@@ -698,6 +719,20 @@ TEST(TsfTipActivateUiLessTest, LangBarItemIsAddedOnActivateAndReleasedOnDeactiva
   }
   // Only the mock's own reference is left, so no one else leaked one.
   EXPECT_EQ(langbar.DropItem(), 0u);
+}
+
+// DEV-2094 (tsf-deep-integration-spec §4.5): the thread focus sink is advised
+// on activation and unadvised on deactivation. A host that refuses it still
+// activates (the other tests' mock refuses it).
+TEST(TsfTipActivateUiLessTest, ThreadFocusSinkIsAdvisedOnActivateAndUnadvisedOnDeactivate) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  mock.accept_thread_focus_sink = true;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(mock.focus_sink_advise_count, 1);
+  EXPECT_TRUE(mock.has_focus_sink());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_FALSE(mock.has_focus_sink());
 }
 
 TEST(TsfTipActivateUiLessTest, FailedLangBarAddDoesNotFailActivation) {

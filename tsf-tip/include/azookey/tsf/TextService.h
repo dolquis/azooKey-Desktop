@@ -1396,6 +1396,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // read by the TIP thread to switch to TIP-local candidates (spec §8.3).
   std::atomic<bool> ipc_host_unavailable_{false};
   bool IpcHostUnavailable() const { return ipc_host_unavailable_.load(std::memory_order_acquire); }
+  // IpcHostUnavailable for the batch Space and Enter: not while the worker
+  // reconnects after it dropped the connection itself to cancel a batch
+  // (spec §8.3, DEV-2140). Takes ipc_mtx_.
+  bool BatchHostUnavailable();
   // Silent-Host detection (spec §8.3). The Host is probed with Health only after
   // the worker has had nothing to send for ipc_health_interval_ms_. A missed
   // deadline (Health within ipc_health_timeout_ms_, QueryCandidates, batch)
@@ -1576,6 +1580,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // request, and the reconnect has neither succeeded nor failed yet: a request
   // sent meanwhile waits for it instead of failing as for a lost Host (DEV-2084).
   bool ipc_reconnect_after_own_drop_{false};  // ipc_mtx_
+  // The same for a batch, whose request the worker canceled by dropping the
+  // connection (stale, past its deadline, or answered incompletely). Only the
+  // batch Space and Enter look at it; the prompt window does not (DEV-2140).
+  bool ipc_reconnect_after_batch_drop_{false};  // ipc_mtx_
   struct TransformOutcome {
     uint64_t generation{0};
     std::optional<ipc::TransformSelectedTextResponse> response;

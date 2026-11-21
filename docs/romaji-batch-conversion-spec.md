@@ -109,6 +109,7 @@ Host が使えない間（接続・Handshake の失敗、切断、`Degraded`。`
 1 文節とする TIP 内ローカル候補で Selecting に入る（`Degraded` では最初の Space だけ Host へ送る）。
 BatchConverting の Space は in-flight を `Cancel` してローカル候補で Selecting に入り、Enter は
 読み（かな）をそのまま確定する。応答が来ない Host を待ち続けて入力が止まることを防ぐためである。
+TIP が要求を取り消すために自分で接続を切った直後の再接続の間は、この例外に当たらない（同 §8.3）。
 
 `batchRomajiConversion == false` のときは従来どおり Composing / Previewing に
 遷移し、本状態は使われない。ライブ変換（M14）・予測（M15）は

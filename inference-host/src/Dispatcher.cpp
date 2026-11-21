@@ -27,6 +27,7 @@
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/CrashReporting.h"
 #include "azookey/core/EtwLogger.h"
+#include "azookey/core/HomophoneNotes.h"
 #include "azookey/core/MixedRomajiSplitter.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/RomajiKanaConverter.h"
@@ -1117,6 +1118,22 @@ bool Dispatcher::LearningDataTransferBlocked() const {
   return HostLearningBlocked(privacy);
 }
 
+void Dispatcher::AddHomophoneNotes(std::vector<ipc::CandidateField>& candidates) const {
+  // Section 7: nothing is read while homophoneNotes is false, and a load that
+  // failed leaves the descriptions as they are.
+  if (candidates.empty() || !config_.homophone_notes || !settings_store_ ||
+      !settings_store_->homophone_notes_enabled())
+    return;
+  const auto index = config_.homophone_notes->Get(runtime_logger_);
+  if (!index) return;
+  std::vector<core::HomophoneNoteQuery> queries;
+  queries.reserve(candidates.size());
+  for (const auto& c : candidates) queries.push_back({c.reading, c.surface, c.description});
+  const auto notes = core::SelectHomophoneNotes(*index, queries);
+  for (size_t i = 0; i < candidates.size(); ++i)
+    if (!notes[i].empty()) candidates[i].description = std::string(notes[i]);
+}
+
 void Dispatcher::SetClientId(std::string client_id) {
   if (client_id == client_id_) return;
 
@@ -1444,6 +1461,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
       res.candidates.size() > parsed->max_candidates) {
     res.candidates.resize(parsed->max_candidates);
   }
+  // homophone-notes-spec section 4: after the candidates and rewriters merge,
+  // on the list the reply carries.
+  AddHomophoneNotes(res.candidates);
   res.partial = false;
   res.corrected_reading = std::move(corrected_reading);
   trace.Finish(core::EtwResult::Success, res.candidates.size());
@@ -2263,6 +2283,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     res = {};
     res.canceled = true;
   }
+  // homophone-notes-spec section 4: each segment's list is one candidate list.
+  for (auto& segment : res.segments) AddHomophoneNotes(segment.candidates);
   completion.Complete();
   uint64_t candidate_count = 0;
   for (const auto& segment : res.segments) candidate_count += segment.candidates.size();

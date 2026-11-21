@@ -21,6 +21,7 @@ add_library(azookey_host STATIC
   src/EnglishDictionaryStore.cpp
   src/Dispatcher.cpp
   src/HealthStateMachine.cpp
+  src/HomophoneNotesData.cpp
   src/HostArgs.cpp
   src/HostStartup.cpp
   src/HttpDownloader.cpp
@@ -120,11 +121,13 @@ endif()
 
 add_executable(azookey_inference_host src/main.cpp)
 set_property(TARGET azookey_inference_host APPEND PROPERTY LINK_DEPENDS
-  "${PROJECT_SOURCE_DIR}/data/symbol.tsv" "${PROJECT_SOURCE_DIR}/data/emoji.tsv")
+  "${PROJECT_SOURCE_DIR}/data/symbol.tsv" "${PROJECT_SOURCE_DIR}/data/emoji.tsv"
+  "${PROJECT_SOURCE_DIR}/data/homophone-notes.tsv")
 add_custom_command(TARGET azookey_inference_host POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:azookey_inference_host>/data"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${PROJECT_SOURCE_DIR}/data/symbol.tsv" "${PROJECT_SOURCE_DIR}/data/emoji.tsv"
+    "${PROJECT_SOURCE_DIR}/data/homophone-notes.tsv"
     "$<TARGET_FILE_DIR:azookey_inference_host>/data"
 )
 target_link_libraries(azookey_inference_host

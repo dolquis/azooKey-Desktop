@@ -11,6 +11,7 @@
 
 #include "azookey/host/CatalogFetchService.h"
 #include "azookey/host/CatalogModelMatcher.h"
+#include "azookey/host/HomophoneNotesData.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/NeologdLayerState.h"
 #include "azookey/host/RequestScheduler.h"
@@ -70,6 +71,10 @@ struct DispatcherConfig {
   std::chrono::milliseconds mixed_english_conversion_deadline{650};
   // Section 15.2: false keeps every in-sentence English segment low confidence.
   bool mixed_english_inline_high_confidence{true};
+  // M73 (docs/homophone-notes-spec.md sections 4 and 7): the notes data, shared
+  // by every connection and read only while homophoneNotes is true. nullptr
+  // leaves the notes out.
+  std::shared_ptr<HomophoneNotesData> homophone_notes{std::make_shared<HomophoneNotesData>()};
   // Tests only: runs in the AI entries (ai-cleanup, TransformSelectedText,
   // DetectAnomalies) after their privacy checks and before they take
   // update_config_mutex, so a test can reload settings in between.
@@ -158,6 +163,9 @@ class Dispatcher {
   // HostLearningBlocked under a fresh privacy lock, for ExportLearningData and
   // ImportLearningData (learning-data-management-spec section 8).
   bool LearningDataTransferBlocked() const;
+  // homophone-notes-spec section 4 on one candidate list of a reply; a no-op
+  // while homophoneNotes is false or the data could not be loaded.
+  void AddHomophoneNotes(std::vector<ipc::CandidateField>& candidates) const;
 
   InferenceEngine* engine_;
   RequestScheduler* scheduler_;

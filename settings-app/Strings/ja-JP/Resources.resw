@@ -237,6 +237,7 @@
   <data name="Setting_emojiMaxCandidates" xml:space="preserve"><value>絵文字候補の最大数</value></data>
   <data name="Setting_emojiTriggerMinQueryLength" xml:space="preserve"><value>絵文字検索を始める最小文字数</value></data>
   <data name="Setting_emojiDataPath" xml:space="preserve"><value>絵文字データのパス</value></data>
+  <data name="Setting_homophoneNotes" xml:space="preserve"><value>同音異義語の使い分けの注記</value></data>
   <data name="Setting_bracketPairing" xml:space="preserve"><value>カッコを自動で閉じる</value></data>
   <data name="Setting_bracketPairingTrigger" xml:space="preserve"><value>閉じカッコを入れるタイミング</value></data>
   <data name="Setting_bracketSkipOverClosing" xml:space="preserve"><value>閉じカッコの入力で既存の閉じカッコを飛び越す</value></data>
@@ -350,6 +351,7 @@
   <data name="SettingNote_symbolDataPath" xml:space="preserve"><value>空欄なら同梱のデータを使います。</value></data>
   <data name="SettingNote_emojiTriggerSearch" xml:space="preserve"><value>ひらがなモードのときだけ働きます。</value></data>
   <data name="SettingNote_emojiDataPath" xml:space="preserve"><value>空欄なら同梱のデータを使います。</value></data>
+  <data name="SettingNote_homophoneNotes" xml:space="preserve"><value>「制作」と「製作」のように読みが同じ候補が並ぶとき、候補の右に使い分けの短い注記を出します。注記は japanese-usage-dictionary（BSD-2-Clause）に基づきます。予測候補と確定する文字列には入りません。</value></data>
   <data name="SettingNote_bracketPairingAppPolicy" xml:space="preserve"><value>「指定したアプリでは使わない」には、組み込みのアプリ（Visual Studio Code など）も含まれます。</value></data>
   <data name="SettingNote_bracketPairingApps" xml:space="preserve"><value>1 行に 1 つ、実行ファイル名（例: Code.exe）を書きます。大文字と小文字は区別しません。</value></data>
   <data name="SettingNote_bracketPairsPath" xml:space="preserve"><value>空欄なら %LOCALAPPDATA%\azooKey\bracket-pairs.tsv を使います。</value></data>

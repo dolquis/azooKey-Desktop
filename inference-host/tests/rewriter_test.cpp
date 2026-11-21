@@ -8,8 +8,10 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/core/HomophoneNotes.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
+#include "azookey/host/HomophoneNotesData.h"
 #include "azookey/host/RewriterData.h"
 #include "azookey/ipc/Payloads.h"
 
@@ -394,6 +396,23 @@ TEST_F(RewriterHostTest, BundledDataRoundTripsAndFitsIndexBudget) {
   EXPECT_EQ(emoji->LookupReading("わらい")[0].surface, "😄");
   EXPECT_EQ(emoji->SearchTrigger("smile", 1)[0].surface, "😄");
   EXPECT_LE(emoji->EstimatedMemoryBytes(), 8u * 1024u * 1024u);
+}
+
+// M73 (docs/homophone-notes-spec.md section 3.2): every row of the bundled notes
+// data parses, and the Host loader takes it whole.
+TEST(HomophoneNotesBundledDataTest, EveryRowParsesAndTheLoaderTakesIt) {
+  const auto path = std::filesystem::path(AZOOKEY_REWRITER_DATA_DIR) / "homophone-notes.tsv";
+  std::ifstream stream(path, std::ios::binary);
+  ASSERT_TRUE(stream.is_open());
+  const std::string bytes{std::istreambuf_iterator<char>(stream), {}};
+  core::HomophoneNoteIndex index;
+  EXPECT_EQ(index.Parse(bytes), 0u);
+  EXPECT_GT(index.size(), 1000u);
+  EXPECT_EQ(index.Find("あおい", "青い"), "晴れているときの空や海の色");
+  HomophoneNotesData data(path);
+  const auto loaded = data.Get(nullptr);
+  ASSERT_TRUE(loaded);
+  EXPECT_EQ(loaded->size(), index.size());
 }
 }  // namespace
 }  // namespace azookey::host

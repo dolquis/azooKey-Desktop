@@ -34,6 +34,9 @@
           <Component Id="EnglishWordsDataComponent" Guid="*">
             <File Id="EnglishWordsDataFile" Source="$(RewriterDataDir)\english-words.tsv" KeyPath="yes" />
           </Component>
+          <Component Id="HomophoneNotesDataComponent" Guid="*">
+            <File Id="HomophoneNotesDataFile" Source="$(RewriterDataDir)\homophone-notes.tsv" KeyPath="yes" />
+          </Component>
         </Directory>
         <!-- The host loads static dictionary layers from <exe>\dict (DEV-1487). -->
         <Directory Id="DictionaryFolder" Name="dict">
@@ -179,6 +182,7 @@
       <ComponentRef Id="SymbolDataComponent" />
       <ComponentRef Id="EmojiDataComponent" />
       <ComponentRef Id="EnglishWordsDataComponent" />
+      <ComponentRef Id="HomophoneNotesDataComponent" />
       <ComponentRef Id="VCRuntimeComponent" />
       <ComponentRef Id="VCOpenMPComponent" />
       <ComponentRef Id="LicenseComponent" />

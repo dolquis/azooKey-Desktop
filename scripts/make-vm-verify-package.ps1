@@ -944,8 +944,8 @@ function Export-VmVerifyPackage {
   $compatExe = Join-Path $configuration.BinaryDir "compat-test\compat_test.exe"
   $compatWatchdogExe = Join-Path $configuration.BinaryDir "compat-test\compat_host_hang_watchdog.exe"
   $compatTargets = Join-Path $repository "compat-test\targets"
-  # The same three files the MSI installs under data\ (RewriterDataDir in pkg/msi/Package.wxs).
-  $rewriterDataFiles = @("english-words.tsv", "symbol.tsv", "emoji.tsv")
+  # The same four files the MSI installs under data\ (RewriterDataDir in pkg/msi/Package.wxs).
+  $rewriterDataFiles = @("english-words.tsv", "symbol.tsv", "emoji.tsv", "homophone-notes.tsv")
   $requiredArtifacts = @($tipDll, $hostExe, $diagExe, $imeSwitchExe)
   foreach ($dataFile in $rewriterDataFiles) {
     $requiredArtifacts += Join-Path $repository "data\$dataFile"

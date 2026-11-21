@@ -165,6 +165,16 @@ void ClearTranslateAsciiDecimalDigitForTest();
 // (input-style-spec §4.1). nullptr restores MapVirtualKeyExW with the current layout.
 using MapVirtualKeyToScanCodeFnForTest = UINT (*)(UINT);
 void SetMapVirtualKeyToScanCodeForTest(MapVirtualKeyToScanCodeFnForTest map);
+// DEV-1828: the key state TextService reads (GetKeyState, GetKeyboardState) and
+// writes (SetKeyboardState, when it replays a held key). The OS can sync the
+// thread's key state with real input on the desktop at any time, so a test
+// pins the state here instead. nullptr restores the Win32 calls.
+struct KeyStateHooksForTest {
+  SHORT (*get_key_state)(int vk);
+  BOOL (*get_keyboard_state)(PBYTE state);
+  BOOL (*set_keyboard_state)(LPBYTE state);
+};
+void SetKeyStateHooksForTest(const KeyStateHooksForTest* hooks);
 void SetCaretWin32ApiForTest(
     GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
     GetPhysicalCursorPosFnForTest get_physical_cursor_pos,

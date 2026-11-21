@@ -394,7 +394,36 @@ std::vector<azookey::ipc::CandidateField> HostCandidateFields(
   return fields;
 }
 
-bool IsVirtualKeyDown(int vk) { return (GetKeyState(vk) & 0x8000) != 0; }
+#ifdef AZOOKEY_TSF_TESTING
+std::atomic<const azookey::tsf::testing::KeyStateHooksForTest*> g_key_state_hooks{nullptr};
+#endif
+
+// The thread's key state, which tests pin through KeyStateHooksForTest (DEV-1828).
+SHORT TipGetKeyState(int vk) {
+#ifdef AZOOKEY_TSF_TESTING
+  if (const auto* hooks = g_key_state_hooks.load(std::memory_order_acquire))
+    return hooks->get_key_state(vk);
+#endif
+  return GetKeyState(vk);
+}
+
+BOOL TipGetKeyboardState(PBYTE state) {
+#ifdef AZOOKEY_TSF_TESTING
+  if (const auto* hooks = g_key_state_hooks.load(std::memory_order_acquire))
+    return hooks->get_keyboard_state(state);
+#endif
+  return GetKeyboardState(state);
+}
+
+BOOL TipSetKeyboardState(LPBYTE state) {
+#ifdef AZOOKEY_TSF_TESTING
+  if (const auto* hooks = g_key_state_hooks.load(std::memory_order_acquire))
+    return hooks->set_keyboard_state(state);
+#endif
+  return SetKeyboardState(state);
+}
+
+bool IsVirtualKeyDown(int vk) { return (TipGetKeyState(vk) & 0x8000) != 0; }
 
 uint32_t CurrentKeyModifiers() {
   uint32_t modifiers = 0;
@@ -604,7 +633,7 @@ std::optional<char> TranslateAsciiDecimalDigit(WPARAM virtual_key, LPARAM key_da
   if (virtual_key < '0' || virtual_key > '9') return std::nullopt;
 
   std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (!TipGetKeyboardState(keyboard_state.data())) return std::nullopt;
 
   const HKL keyboard_layout = GetKeyboardLayout(0);
   UINT scan_code = static_cast<UINT>((static_cast<ULONG_PTR>(key_data) >> 16) & 0xff);
@@ -753,7 +782,7 @@ std::string ApplyDefaultCompositionPunctuation(const std::string& text) {
 std::optional<WCHAR> TranslateKeyboardCharacter(WPARAM virtual_key, LPARAM key_data) {
   if (virtual_key > 255) return std::nullopt;
   std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (!TipGetKeyboardState(keyboard_state.data())) return std::nullopt;
 
   const HKL keyboard_layout = GetKeyboardLayout(0);
   UINT scan_code = static_cast<UINT>((static_cast<ULONG_PTR>(key_data) >> 16) & 0xff);
@@ -941,7 +970,7 @@ std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual
   // A layout the TIP cannot read still types the long vowel mark with the
   // unshifted key; a Shift or dead key without a character goes to the app.
   if (!translated) {
-    if (virtual_key == VK_OEM_MINUS && (GetKeyState(VK_SHIFT) & 0x8000) == 0)
+    if (virtual_key == VK_OEM_MINUS && (TipGetKeyState(VK_SHIFT) & 0x8000) == 0)
       return OemCompositionSymbol{'-', "ー"};
     return std::nullopt;
   }
@@ -1335,6 +1364,10 @@ void ClearTranslateCustomRomajiCharacterForTest() {
 
 void SetMapVirtualKeyToScanCodeForTest(MapVirtualKeyToScanCodeFnForTest map) {
   g_map_virtual_key_to_scan_code = map;
+}
+
+void SetKeyStateHooksForTest(const KeyStateHooksForTest* hooks) {
+  g_key_state_hooks.store(hooks, std::memory_order_release);
 }
 
 std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_key,
@@ -5293,7 +5326,7 @@ void TextService::HoldRetryWaitingKey(ITfContext* context, WPARAM key, LPARAM ke
   }
   RetryWaitingKey waiting{ComIdentity(context), key, key_data, {}};
   // The key means what it meant when pressed (Shift, the OEM symbol).
-  if (!GetKeyboardState(waiting.key_state.data())) {
+  if (!TipGetKeyboardState(waiting.key_state.data())) {
     log_drop("key_state_unavailable");
     return;
   }
@@ -5695,7 +5728,7 @@ void TextService::HoldWindowWaitingKey(ITfContext* context, WPARAM key, LPARAM k
     return;
   }
   RetryWaitingKey waiting{ComIdentity(context), key, key_data, {}, tracked};
-  if (!GetKeyboardState(waiting.key_state.data())) {
+  if (!TipGetKeyboardState(waiting.key_state.data())) {
     log_drop("key_state_unavailable");
     return;
   }
@@ -5711,7 +5744,7 @@ HRESULT TextService::ReplayWindowWaitingKeys(ITfContext* context) {
   window_waiting_keys_.clear();
   if (!context) return S_OK;
   std::array<BYTE, 256> current_state{};
-  if (!GetKeyboardState(current_state.data())) {
+  if (!TipGetKeyboardState(current_state.data())) {
     try {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "window_waiting_key_dropped",
                  {{"reason", SafeLogText("key_state_unavailable")}});
@@ -5723,7 +5756,7 @@ HRESULT TextService::ReplayWindowWaitingKeys(ITfContext* context) {
     if (waiting.context != ComIdentity(context)) continue;
     BOOL replay_eaten = FALSE;
     HRESULT hr = S_OK;
-    (void)SetKeyboardState(waiting.key_state.data());
+    (void)TipSetKeyboardState(waiting.key_state.data());
     try {
       // A window key was tracked for typo and undo when it was pressed; a key
       // held with Enter is tracked now, after the commit it waited for.
@@ -5733,10 +5766,10 @@ HRESULT TextService::ReplayWindowWaitingKeys(ITfContext* context) {
       }
       hr = OnKeyDown(context, waiting.key, waiting.key_data, &replay_eaten);
     } catch (...) {
-      (void)SetKeyboardState(current_state.data());
+      (void)TipSetKeyboardState(current_state.data());
       throw;
     }
-    (void)SetKeyboardState(current_state.data());
+    (void)TipSetKeyboardState(current_state.data());
     if (hr == E_OUTOFMEMORY) return hr;
   }
   return S_OK;
@@ -5758,24 +5791,24 @@ HRESULT TextService::ReplayRetryWaitingKeys(ITfContext* context, WPARAM retry_ke
   auto keys = std::move(retry_waiting_keys_);
   retry_waiting_keys_.clear();
   std::array<BYTE, 256> current_state{};
-  const bool restore_state = GetKeyboardState(current_state.data()) != FALSE;
+  const bool restore_state = TipGetKeyboardState(current_state.data()) != FALSE;
   for (auto& waiting : keys) {
     if (!restore_state) break;
     // A key typed in another context is not shown there either; drop it.
     if (waiting.context != ComIdentity(context)) continue;
     BOOL replay_eaten = FALSE;
     HRESULT hr = S_OK;
-    (void)SetKeyboardState(waiting.key_state.data());
+    (void)TipSetKeyboardState(waiting.key_state.data());
     try {
       // The key was tracked for typo and undo when it was pressed.
       typo_test_key_context_ = context;
       typo_test_key_ = waiting.key;
       hr = OnKeyDown(context, waiting.key, waiting.key_data, &replay_eaten);
     } catch (...) {
-      (void)SetKeyboardState(current_state.data());
+      (void)TipSetKeyboardState(current_state.data());
       throw;
     }
-    (void)SetKeyboardState(current_state.data());
+    (void)TipSetKeyboardState(current_state.data());
     if (hr == E_OUTOFMEMORY) return hr;
   }
   BOOL retry_eaten = FALSE;

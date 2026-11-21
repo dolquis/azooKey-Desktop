@@ -3886,6 +3886,29 @@ TEST(TsfTipOnKeyDownPreeditTest, HarnessRepinsModifiersBeforeEachPress) {
   EXPECT_NE(GetKeyState(VK_CONTROL) & 0x8000, 0);
 }
 
+// DEV-1828: the OS can sync the thread's key state with a modifier held on the
+// desktop after the harness re-pinned it, right before the key. TextService
+// reads the harness's pinned modifiers, so the key is still taken.
+TEST(TsfTipOnKeyDownPreeditTest, KeysIgnoreAModifierTheThreadPicksUpAfterTheHarnessPinsIt) {
+  DocumentPreeditHarness h;
+  // The fixed app and privacy of ConfigureTypoHarness, defined further down.
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  for (const WPARAM key : {static_cast<WPARAM>('K'), static_cast<WPARAM>('A')}) {
+    h.keyboard_state.Reapply();
+    std::array<BYTE, 256> state{};
+    ASSERT_TRUE(GetKeyboardState(state.data()));
+    state[VK_MENU] = 0x80;
+    state[VK_LMENU] = 0x80;
+    ASSERT_TRUE(SetKeyboardState(state.data()));
+    ASSERT_NE(GetKeyState(VK_MENU) & 0x8000, 0);
+    BOOL eaten = FALSE;
+    ASSERT_EQ(RecordedKeyDown(h.service, &h.context, key, 0, &eaten, false, h.created), S_OK);
+    EXPECT_TRUE(eaten);
+  }
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+}
+
 // DEV-1173: the worker walks the spec §8.2 state machine on real pipe events:
 // no Ready without an accepted handshake, out of Ready when the Host stops, and
 // back to Ready when it restarts.

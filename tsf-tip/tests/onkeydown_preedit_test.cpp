@@ -70,7 +70,7 @@ bool CurrentKeyboardLayoutProduces(WPARAM virtual_key, bool shift, WCHAR expecte
 
 std::optional<WCHAR> TranslateDefaultOemCompositionCharacterForTest(WPARAM virtual_key, LPARAM) {
   std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (!KeyboardStateGuard::ReadKeyboardState(keyboard_state.data())) return std::nullopt;
   const bool shift_down = (keyboard_state[VK_SHIFT] & 0x80) != 0;
   switch (virtual_key) {
     case VK_OEM_COMMA:
@@ -96,7 +96,7 @@ std::optional<WCHAR> TranslateWithoutExclamationForTest(WPARAM virtual_key, LPAR
 // keys, unshifted and shifted (DEV-1811). 0 is a key without a character.
 std::optional<WCHAR> TranslateLayoutForTest(WPARAM key, bool jis) {
   std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (!KeyboardStateGuard::ReadKeyboardState(keyboard_state.data())) return std::nullopt;
   const bool shift = (keyboard_state[VK_SHIFT] & 0x80) != 0;
   static constexpr struct {
     WPARAM key;
@@ -149,7 +149,7 @@ class OemCompositionTranslationGuard {
 
 std::optional<WCHAR> TranslateCustomRomajiForTest(WPARAM key, LPARAM) {
   std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (!KeyboardStateGuard::ReadKeyboardState(keyboard_state.data())) return std::nullopt;
   if (key == '2' && (keyboard_state[VK_SHIFT] & 0x80) != 0) return L'@';
   if (key == '1' || key == '2') return static_cast<WCHAR>(key);
   if (key == VK_OEM_PERIOD) return L'。';
@@ -179,7 +179,7 @@ std::optional<char> TranslateDefaultAsciiDecimalDigitForTest(WPARAM virtual_key,
   if (virtual_key < '0' || virtual_key > '9') return std::nullopt;
 
   std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (!KeyboardStateGuard::ReadKeyboardState(keyboard_state.data())) return std::nullopt;
   const bool shift_down = (keyboard_state[VK_SHIFT] & 0x80) != 0 ||
                           (keyboard_state[VK_LSHIFT] & 0x80) != 0 ||
                           (keyboard_state[VK_RSHIFT] & 0x80) != 0;
@@ -815,8 +815,9 @@ class FakeMouseTracker final : public ITfMouseTracker {
 };
 
 // DEV-1828: Shift / Ctrl / Alt / Win as four 0/1 digits, from the calling
-// thread's key state (what TextService reads and the harness pins) or from
-// GetAsyncKeyState (the keys held on the desktop right now).
+// thread's real key state (TextService in the test build reads the guard's
+// pinned modifiers instead) or from GetAsyncKeyState (the keys held on the
+// desktop right now).
 std::string ModifierDigits(bool async) {
   const auto down = [async](int vk) {
     return ((async ? GetAsyncKeyState(vk) : GetKeyState(vk)) & 0x8000) != 0;
@@ -3886,6 +3887,29 @@ TEST(TsfTipOnKeyDownPreeditTest, HarnessRepinsModifiersBeforeEachPress) {
   EXPECT_NE(GetKeyState(VK_CONTROL) & 0x8000, 0);
 }
 
+// DEV-1828: the OS can sync the thread's key state with a modifier held on the
+// desktop after the harness re-pinned it, right before the key. TextService
+// reads the harness's pinned modifiers, so the key is still taken.
+TEST(TsfTipOnKeyDownPreeditTest, KeysIgnoreAModifierTheThreadPicksUpAfterTheHarnessPinsIt) {
+  DocumentPreeditHarness h;
+  // The fixed app and privacy of ConfigureTypoHarness, defined further down.
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  for (const WPARAM key : {static_cast<WPARAM>('K'), static_cast<WPARAM>('A')}) {
+    h.keyboard_state.Reapply();
+    std::array<BYTE, 256> state{};
+    ASSERT_TRUE(GetKeyboardState(state.data()));
+    state[VK_MENU] = 0x80;
+    state[VK_LMENU] = 0x80;
+    ASSERT_TRUE(SetKeyboardState(state.data()));
+    ASSERT_NE(GetKeyState(VK_MENU) & 0x8000, 0);
+    BOOL eaten = FALSE;
+    ASSERT_EQ(RecordedKeyDown(h.service, &h.context, key, 0, &eaten, false, h.created), S_OK);
+    EXPECT_TRUE(eaten);
+  }
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+}
+
 // DEV-1173: the worker walks the spec §8.2 state machine on real pipe events:
 // no Ready without an accepted handshake, out of Ready when the Host stops, and
 // back to Ready when it restarts.
@@ -4034,7 +4058,7 @@ std::optional<WCHAR> TranslateUsApostropheForTest(WPARAM key, LPARAM) {
 
 std::optional<WCHAR> TranslateJisApostropheForTest(WPARAM key, LPARAM) {
   std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (!KeyboardStateGuard::ReadKeyboardState(keyboard_state.data())) return std::nullopt;
   if (key == '7') return (keyboard_state[VK_SHIFT] & 0x80) != 0 ? L'\'' : L'7';
   if (key >= 'A' && key <= 'Z') return static_cast<WCHAR>(key + ('a' - 'A'));
   return std::nullopt;
@@ -6837,6 +6861,34 @@ TEST(TsfTipOnKeyDownPreeditTest, Win32DigitTranslationMatchesCompatibleKeyboardL
   keyboard_state.SetDown(VK_LSHIFT, true);
   EXPECT_EQ(azookey::tsf::testing::TranslateAsciiDecimalDigitUsingWin32ForTest('1', 0),
             std::nullopt);
+}
+
+// DEV-1828: the Win32 translation reads the Shift the guard pins, not one the
+// OS syncs into the thread's key state from the desktop.
+TEST(TsfTipOnKeyDownPreeditTest, Win32DigitTranslationReadsTheGuardsShiftNotTheThreads) {
+  KeyboardStateGuard keyboard_state;
+  if (!CurrentKeyboardLayoutProduces('1', false, L'1') ||
+      !CurrentKeyboardLayoutProduces('1', true, L'!')) {
+    GTEST_SKIP() << "requires a keyboard layout where 1 and Shift+1 produce 1 and !";
+  }
+  const auto set_thread_shift = [](bool down) {
+    std::array<BYTE, 256> state{};
+    ASSERT_TRUE(GetKeyboardState(state.data()));
+    for (const int vk : {VK_SHIFT, VK_LSHIFT}) state[static_cast<size_t>(vk)] = down ? 0x80 : 0;
+    ASSERT_TRUE(SetKeyboardState(state.data()));
+  };
+
+  keyboard_state.SetDown(VK_SHIFT, true);
+  keyboard_state.SetDown(VK_LSHIFT, true);
+  set_thread_shift(false);
+  EXPECT_EQ(azookey::tsf::testing::TranslateAsciiDecimalDigitUsingWin32ForTest('1', 0),
+            std::nullopt);
+
+  keyboard_state.SetDown(VK_SHIFT, false);
+  keyboard_state.SetDown(VK_LSHIFT, false);
+  set_thread_shift(true);
+  EXPECT_EQ(azookey::tsf::testing::TranslateAsciiDecimalDigitUsingWin32ForTest('1', 0),
+            std::optional<char>('1'));
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterCommitsSurfaceWithoutAnnotation) {
@@ -16523,7 +16575,7 @@ namespace {
 // A layout whose Shift makes the digit (AZERTY).
 std::optional<char> TranslateShiftedDigitForTest(WPARAM key, LPARAM) {
   std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (!KeyboardStateGuard::ReadKeyboardState(keyboard_state.data())) return std::nullopt;
   if (key < '0' || key > '9' || (keyboard_state[VK_SHIFT] & 0x80) == 0) return std::nullopt;
   return static_cast<char>(key);
 }

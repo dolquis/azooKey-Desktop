@@ -99,6 +99,8 @@ enum class PredictionLogReason : uint8_t {
   CandidateWindow,
   NotComposing,
   SecureInput,
+  // The TIP's thread is without the UI focus (DEV-2094).
+  ThreadFocusLost,
   Queued,
   HostUnsupported,
   ResponseDropped,
@@ -187,6 +189,7 @@ struct TipCandidate {
 class TextService final : public ITfTextInputProcessorEx,
                           public ITfKeyEventSink,
                           public ITfThreadMgrEventSink,
+                          public ITfThreadFocusSink,
                           public ITfTextEditSink,
                           public ITfCompartmentEventSink,
                           public ITfFunctionProvider,
@@ -219,6 +222,11 @@ class TextService final : public ITfTextInputProcessorEx,
   STDMETHODIMP OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) override;
   STDMETHODIMP OnPushContext(ITfContext* pic) override;
   STDMETHODIMP OnPopContext(ITfContext* pic) override;
+  // ITfThreadFocusSink: the thread loses or regains the UI focus, as when the
+  // focus moves to another process while the app keeps its composition
+  // (tsf-deep-integration-spec section 4.5, DEV-2094).
+  STDMETHODIMP OnSetThreadFocus() override;
+  STDMETHODIMP OnKillThreadFocus() override;
   STDMETHODIMP OnEndEdit(ITfContext* context, TfEditCookie cookie, ITfEditRecord* record) override;
 
   STDMETHODIMP OnChange(REFGUID rguid) override;
@@ -402,6 +410,11 @@ class TextService final : public ITfTextInputProcessorEx,
     prediction_left_context_ = std::move(context);
   }
   bool prediction_window_visible_for_test() const { return candidate_ui_.IsShowingPredictions(); }
+  bool thread_focus_lost_for_test() const { return thread_focus_lost_; }
+  // As settings.json changing on disk does; the next OnCandidatesReady re-asks.
+  void mark_prediction_settings_changed_for_test() {
+    prediction_settings_changed_.store(true, std::memory_order_release);
+  }
   const CandidateWindow& candidate_window_for_test() const {
     return candidate_ui_.own_window_for_test();
   }
@@ -1050,6 +1063,10 @@ class TextService final : public ITfTextInputProcessorEx,
   TfClientId client_id_{TF_CLIENTID_NULL};
   bool key_event_sink_advised_{false};
   DWORD thread_mgr_sink_cookie_{TF_INVALID_COOKIE};
+  DWORD thread_focus_sink_cookie_{TF_INVALID_COOKIE};
+  // Set while the thread is without the UI focus (OnKillThreadFocus until
+  // OnSetThreadFocus): the prediction is neither asked for nor shown (DEV-2094).
+  bool thread_focus_lost_{false};  // UI thread only.
   ITfCompartment* keyboard_open_compartment_{nullptr};
   DWORD keyboard_open_sink_cookie_{TF_INVALID_COOKIE};
   bool keyboard_open_{true};

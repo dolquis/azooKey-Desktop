@@ -1011,11 +1011,12 @@ TIP は予測を照会する前と、届いた予測を表示する前に、入�
 予測が窓に届くまでの経過は `AZOOKEY_LOG` の info ログ `prediction_state` で追える。
 `reason` は止まった箇所または結果を表し、照会しない理由（`disabled` / `app_profile_disabled` / `not_allowed` /
 `no_context` / `keyboard_closed` / `alphanumeric_mode` / `candidate_window` / `not_composing` /
-`secure_input`）、照会の経過（`queued` / `host_unsupported` / `response_dropped`）、
+`secure_input` / `thread_focus_lost`）、照会の経過（`queued` / `host_unsupported` / `response_dropped`）、
 応答の破棄（`stale_reading` / `stale_context` / `stale_generation`）、
 表示の結果（`no_acceptable_prediction` / `window_create_failed` / `window_show_failed` / `shown`。
 1 秒キャッシュからの表示を含む）のいずれかをとる。
 `disabled` は全体の `predictionEnabled` が、`app_profile_disabled` は入力先のアプリのプロファイル（§3.6）が予測を止めたことを表す。
+`thread_focus_lost` は TIP のスレッドが UI のフォーカスを失っている間に照会しなかったことを表す（`docs/tsf-deep-integration-spec.md` §4.5）。
 `window_create_failed` と `window_show_failed` は失敗した初期化・描画の段階 `stage` と `hresult` を持つ。
 各 `reason` は composition ごとに 1 回だけ出し、打鍵ごとには出さない。
 composition の開始と TIP の deactivate で記録済みの `reason` を戻すので、次の入力でも同じ `reason` を出す。

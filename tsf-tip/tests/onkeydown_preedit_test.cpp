@@ -16231,6 +16231,39 @@ TEST(TsfTipPredictionModeTest, ArrivedPredictionIsNotShownOnceTheAppsProfileTurn
   server.Stop();
 }
 
+// DEV-2094 (tsf-deep-integration-spec §4.5): an app may keep its composition
+// while the focus moves to another process. Losing the thread focus hides the
+// prediction window and drops the queued query, and a settings reload meanwhile
+// asks nothing. Once the thread has the focus back, a reload asks again.
+TEST(TsfTipPredictionModeTest, LosingTheThreadFocusStopsThePredictionUntilItComesBack) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  h.service.set_prediction_enabled_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "か");
+  ASSERT_NE(h.service.pending_prediction_generation_for_test(), 0u);
+  h.service.show_prediction_for_test({"可能", "かのう", 1.0, "model", ""});
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+
+  ASSERT_EQ(h.service.OnKillThreadFocus(), S_OK);
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
+  // The composition stays.
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+
+  h.service.mark_prediction_settings_changed_for_test();
+  h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+
+  ASSERT_EQ(h.service.OnSetThreadFocus(), S_OK);
+  h.service.mark_prediction_settings_changed_for_test();
+  h.service.process_candidates_ready_for_test();
+  EXPECT_NE(h.service.pending_prediction_generation_for_test(), 0u);
+}
+
 // DEV-1949 (DEV-1931): leaving the candidate list for the reading hides the
 // window before the predictions appear in it, so the two modes never swap on screen.
 TEST(TsfTipPredictionModeTest, LeavingTheCandidatesHidesTheWindowBeforePredictions) {

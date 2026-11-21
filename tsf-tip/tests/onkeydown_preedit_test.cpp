@@ -19657,6 +19657,86 @@ TEST(TsfTipOnKeyDownPreeditTest,
   }
 }
 
+// DEV-2140: an incomplete ai-cleanup answer makes the TIP drop the connection
+// and ask again in neural mode. While the worker reconnects, the batch is still
+// waiting: Space and Enter wait with it, and the neural answer comes after.
+TEST(TsfTipOnKeyDownPreeditTest, AiCleanupRetryKeepsTheBatchKeysWaitingThroughTheReconnect) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-ai-cleanup-own-drop-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::atomic<int> ai_calls{0}, neural_calls{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.host_version = "test-host";
+      handshake.accepted = true;
+      handshake.batch_romaji_conversion = true;
+      handshake.batch_conversion_mode = "ai-cleanup";
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type != MessageType::QueryBatchConversion) return std::nullopt;
+    const auto batch = ParseQueryBatchConversionRequest(request.payload_json);
+    if (!batch) return std::nullopt;
+    QueryBatchConversionResponse answer;
+    if (batch->mode == "ai-cleanup") {
+      ++ai_calls;
+      answer.partial = true;
+    } else {
+      ++neural_calls;
+      answer.full_surface = "二";
+    }
+    response.payload_json = BuildQueryBatchConversionResponse(answer);
+    return response;
+  }));
+  ReconnectGate gate;  // Outlives the harness, whose worker runs the hook.
+  TextServiceHarness handshake_token_guard;
+  {
+    DocumentPreeditHarness h;
+    ReleaseGateOnExit release{gate};
+    ConfigureTypoHarness(h);
+    h.service.set_batch_romaji_options_for_test(true, false, false, true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.set_ipc_state_published_hook_for_test(&ReconnectGate::Hook, &gate);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] {
+      return h.service.ipc_connection_state_for_test() == azookey::tsf::IpcConnectionState::Ready;
+    }));
+    ASSERT_TRUE(h.Press('N'));
+    ASSERT_TRUE(h.Press('I'));
+    ASSERT_EQ(h.service.preedit_kana_, "に");
+    // The partial answer drops the connection; the reconnect is held.
+    gate.Arm();
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(gate.WaitHeld());
+    ASSERT_EQ(ai_calls.load(), 1);
+    ASSERT_TRUE(h.service.ipc_host_unavailable_for_test());
+    ASSERT_TRUE(h.service.batch_query_in_progress_for_test());
+
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    EXPECT_TRUE(h.service.batch_query_in_progress_for_test());
+    EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+    EXPECT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.service.preedit_kana_, "に");
+    EXPECT_TRUE(h.service.batch_query_in_progress_for_test());
+
+    gate.Release();
+    ASSERT_TRUE(WaitUntil([&] { return neural_calls.load() == 1; }, std::chrono::seconds(10)));
+    ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); },
+                          std::chrono::seconds(10)));
+    h.service.show_candidate_window_from_cache_for_test();
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_FALSE(shown.empty());
+    EXPECT_EQ(shown[0].surface, "二");
+    EXPECT_EQ(ai_calls.load(), 1);
+    h.service.stop_ipc_worker_for_test();
+  }
+  server.Stop();
+}
+
 // --- M69 commit undo (docs/commit-undo-spec.md) ---
 namespace {
 constexpr LPARAM kKeyRepeat = LPARAM{1} << 30;

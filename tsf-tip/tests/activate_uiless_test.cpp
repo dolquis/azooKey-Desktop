@@ -362,9 +362,13 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
   STDMETHODIMP AdviseSink(REFIID riid, IUnknown* punk, DWORD* cookie) override {
     if (!punk || !cookie) return E_POINTER;
     if (riid == IID_ITfThreadFocusSink && accept_thread_focus_sink) {
+      // msctf calls the sink through the interface it asked for.
+      ITfThreadFocusSink* sink = nullptr;
+      if (FAILED(punk->QueryInterface(IID_ITfThreadFocusSink, reinterpret_cast<void**>(&sink))) ||
+          !sink)
+        return E_NOINTERFACE;
       ++focus_sink_advise_count;
-      focus_sink_ = punk;
-      focus_sink_->AddRef();
+      focus_sink_ = sink;
       *cookie = kFocusSinkCookie;
       return S_OK;
     }
@@ -389,6 +393,9 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
   bool accept_thread_focus_sink{false};
   int focus_sink_advise_count{0};
   bool has_focus_sink() const { return focus_sink_ != nullptr; }
+  // What msctf does when the thread loses or regains the UI focus.
+  bool KillThreadFocus() { return focus_sink_ && SUCCEEDED(focus_sink_->OnKillThreadFocus()); }
+  bool SetThreadFocus() { return focus_sink_ && SUCCEEDED(focus_sink_->OnSetThreadFocus()); }
 
   TfClientId client_id{7};
   MockKeyboardCompartment keyboard_compartment;
@@ -422,7 +429,7 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
   DWORD active_flags_{0};
   ITfKeyEventSink* key_sink_{nullptr};
   IUnknown* thread_sink_{nullptr};
-  IUnknown* focus_sink_{nullptr};
+  ITfThreadFocusSink* focus_sink_{nullptr};
 };
 
 // Document manager that only needs a COM identity: OnSetFocus compares and
@@ -730,7 +737,15 @@ TEST(TsfTipActivateUiLessTest, ThreadFocusSinkIsAdvisedOnActivateAndUnadvisedOnD
   mock.accept_thread_focus_sink = true;
   ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
   EXPECT_EQ(mock.focus_sink_advise_count, 1);
-  EXPECT_TRUE(mock.has_focus_sink());
+  ASSERT_TRUE(mock.has_focus_sink());
+  // The sink msctf holds reaches the TIP: a prediction on screen goes.
+  service.show_prediction_for_test({"可能", "かのう", 1.0, "model", ""});
+  ASSERT_TRUE(service.prediction_window_visible_for_test());
+  ASSERT_TRUE(mock.KillThreadFocus());
+  EXPECT_TRUE(service.thread_focus_lost_for_test());
+  EXPECT_FALSE(service.prediction_window_visible_for_test());
+  ASSERT_TRUE(mock.SetThreadFocus());
+  EXPECT_FALSE(service.thread_focus_lost_for_test());
   EXPECT_EQ(service.Deactivate(), S_OK);
   EXPECT_FALSE(mock.has_focus_sink());
 }

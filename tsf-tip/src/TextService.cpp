@@ -1410,6 +1410,8 @@ std::string PredictionLogReasonName(PredictionLogReason reason) {
       return "not_composing";
     case PredictionLogReason::SecureInput:
       return "secure_input";
+    case PredictionLogReason::ThreadFocusLost:
+      return "thread_focus_lost";
     case PredictionLogReason::Queued:
       return "queued";
     case PredictionLogReason::HostUnsupported:
@@ -2815,7 +2817,9 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) try {
 // next key there asks. The candidate window and the composition stay.
 STDMETHODIMP TextService::OnKillThreadFocus() try {
   AZOOKEY_ASSERT_UI_THREAD();
-  thread_focus_lost_ = true;
+  if (!std::exchange(thread_focus_lost_, true))
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "thread_focus_changed",
+               {{"focus", SafeLogText("lost")}});
   ClearPrediction();
   return S_OK;
 } catch (...) {
@@ -2823,10 +2827,15 @@ STDMETHODIMP TextService::OnKillThreadFocus() try {
   return E_FAIL;
 }
 
-STDMETHODIMP TextService::OnSetThreadFocus() {
+STDMETHODIMP TextService::OnSetThreadFocus() try {
   AZOOKEY_ASSERT_UI_THREAD();
-  thread_focus_lost_ = false;
+  if (std::exchange(thread_focus_lost_, false))
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "thread_focus_changed",
+               {{"focus", SafeLogText("regained")}});
   return S_OK;
+} catch (...) {
+  LogComBoundaryException("TextService::OnSetThreadFocus", E_FAIL);
+  return E_FAIL;
 }
 
 HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
@@ -10750,6 +10759,7 @@ void TextService::RefreshPrediction(ITfContext* context) {
   // A settings reload or a retry while the thread is without the focus asks
   // nothing (tsf-deep-integration-spec section 4.5, DEV-2094).
   if (thread_focus_lost_) {
+    LogPredictionOnce(PredictionLogReason::ThreadFocusLost);
     ClearPrediction();
     return;
   }

@@ -99,6 +99,8 @@ enum class PredictionLogReason : uint8_t {
   CandidateWindow,
   NotComposing,
   SecureInput,
+  // The TIP's thread is without the UI focus (DEV-2094).
+  ThreadFocusLost,
   Queued,
   HostUnsupported,
   ResponseDropped,
@@ -408,6 +410,7 @@ class TextService final : public ITfTextInputProcessorEx,
     prediction_left_context_ = std::move(context);
   }
   bool prediction_window_visible_for_test() const { return candidate_ui_.IsShowingPredictions(); }
+  bool thread_focus_lost_for_test() const { return thread_focus_lost_; }
   // As settings.json changing on disk does; the next OnCandidatesReady re-asks.
   void mark_prediction_settings_changed_for_test() {
     prediction_settings_changed_.store(true, std::memory_order_release);

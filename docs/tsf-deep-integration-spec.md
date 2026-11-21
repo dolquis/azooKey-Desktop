@@ -1040,8 +1040,11 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
   決まる。そのため、窓のクラス名の層だけで指定したアプリには注記が出ないことがある（DEV-2071）。
   TIP のスレッドが UI のフォーカスを失うと（`ITfThreadFocusSink::OnKillThreadFocus`）、予測の窓を隠し、届く途中の結果を捨て、
   フォーカスが戻る（`OnSetThreadFocus`）まで設定の再読込や再試行でも予測を照会しない。戻った後は次の打鍵か再読込で照会する。
-  候補窓と composition はそのまま残す。`ITfThreadFocusSink` を advise できないホストでも有効化は失敗させず、
-  `thread_focus_sink_advise_failed` を警告ログに出す（DEV-2094）。
+  候補窓と composition はそのまま残す。フォーカスを失ったときと戻ったときは info ログ `thread_focus_changed`
+  （`focus` は `lost` / `regained`）を出し、この間に照会しなかったことは `prediction_state` の `thread_focus_lost` で表す
+  （`docs/legacy-parity-spec.md` §3.7）。`ITfThreadFocusSink` を advise できないホストでも有効化は失敗させず、
+  `thread_focus_sink_advise_failed` を警告ログに出す。advise できないホストでは、フォーカスが外れている間の再読込で
+  予測を照会しうる（DEV-2094）。
 - 表記: 項目の名前は設定アプリと同じ語にする（`docs/settings-app-spec.md` §3.2「表記規則」）。
 - 書き込み: settings.json の該当するトップレベルのキーだけを書き、他のキーはディスク上のまま残す。
   設定アプリと Host と同じファイルロック（`AcquireExclusiveFileLockForPath`）を取って読み、atomic に

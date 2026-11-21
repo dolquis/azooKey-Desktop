@@ -48,17 +48,40 @@ HEADER = f"""\
 LABELS = re.compile("(〈[^〉]*〉)+")  # One or more 〈...〉 labels and nothing else.
 
 
+OPENERS = {"〈": "〉", "(": ")"}
+CLOSERS = {close: open_ for open_, close in OPENERS.items()}
+
+
 def _before_first_example(text):
-    """Section 3.3 rule 3: the text before the first 「 that is not inside 〈...〉."""
+    """Section 3.3 rule 3: the text before the first 「 outside 〈...〉 and (...).
+
+    When the cut leaves text that ends in neither 。 nor 〉, it goes back to the last 。;
+    with no 。 to go back to, the note is "" and the row is dropped.
+    """
     depth = 0
     for index, char in enumerate(text):
-        if char == "〈":
+        if char in OPENERS:
             depth += 1
-        elif char == "〉":
+        elif char in CLOSERS:
             depth = max(0, depth - 1)
         elif char == "「" and depth == 0:
-            return text[:index]
+            head = text[:index].rstrip()
+            if head.endswith(("。", "〉")):
+                return head
+            stop = head.rfind("。")
+            return head[:stop + 1] if stop >= 0 else ""
     return text
+
+
+def _balanced(text):
+    """Section 3.3: every ( and 〈 is closed by its own bracket, in order."""
+    stack = []
+    for char in text:
+        if char in OPENERS:
+            stack.append(OPENERS[char])
+        elif char in CLOSERS and (not stack or stack.pop() != char):
+            return False
+    return not stack
 
 
 def shorten(gloss):
@@ -76,7 +99,7 @@ def shorten(gloss):
 
 def parse_source(text):
     """The (reading, surface, gloss) rows of usage_dict.txt, in source order."""
-    if text.startswith("﻿"):
+    if text.startswith("\ufeff"):
         text = text[1:]
     rows = []
     for number, line in enumerate(text.splitlines(), 1):
@@ -111,7 +134,7 @@ def _valid_column(column):
 
 def verify(text):
     """Section 3.2 over every row; the number of rows. Raises ValueError otherwise."""
-    if text.startswith("﻿") or "\r" in text or not text.endswith("\n"):
+    if text.startswith("\ufeff") or "\r" in text or not text.endswith("\n"):
         raise ValueError("TSV must be BOM-free UTF-8 with LF endings")
     keys = []
     in_header = True
@@ -124,6 +147,8 @@ def verify(text):
         cols = line.split("\t")
         if len(cols) != 3 or not all(_valid_column(col) for col in cols):
             raise ValueError(f"line {number}: expected three non-empty columns")
+        if not _balanced(cols[2]):
+            raise ValueError(f"line {number}: unbalanced ( ) or 〈 〉 in the note")
         keys.append((cols[0], cols[1]))
     if len(set(keys)) != len(keys):
         raise ValueError("repeated (reading, surface)")

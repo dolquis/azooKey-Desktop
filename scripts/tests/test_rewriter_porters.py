@@ -78,7 +78,8 @@ class RewriterPorterTests(unittest.TestCase):
                     self.assertEqual(normalize_reading(reading), reading)
 
 
-# Rows of usage_dict.txt (tag 2025-01-25), out of order and with a repeated pair.
+# Excerpted rows of usage_dict.txt (tag 2025-01-25) and authored rows, out of order and
+# with a repeated pair.
 USAGE = (
     "すむ\t澄む\t五段・マ行\t(液体が)すきとおる。「この湧き水はとても澄んでいる」\n"
     "すむ\t住む\t五段・マ行\tある場所で生活する。「彼は東京に住んでいる」「森に住むキツネ」\n"
@@ -97,6 +98,10 @@ USAGE = (
     "棚上げする。「この問題はひとまず措くとする」\n"
     "ととのえる\t調える\t一段\t 〈「整える」とも〉(味などを)加減してちょうどいい状態にする。"
     "「塩コショウで味を調える」\n"
+    "ばち\t鉢\t*\t(「はち」の連濁)ふかざら。「すり鉢」\n"
+    "あし\t脚\t*\t足の付け根から足首までを指すときに、「足」と区別して使う。「すらりとした脚」\n"
+    "おじ\t小父\t*\t〈主にかな書き〉(子供から見た)血のつながっていない大人の男性。一般的には"
+    "「さん」をつけて呼ぶ。\n"
 )
 
 
@@ -115,12 +120,16 @@ class HomophoneNotesPorterTests(unittest.TestCase):
             "うんこう\t運航\t(船、航空機が)きまった航路をすすむこと",
             "うんこう\t運行\tきまった路線をすすむこと",
             "おく\t措く\t〈文語体〉〈「置く」とも〉とりあえず考えないことにする。棚上げする",
+            # A cut that ends in neither 。 nor 〉 goes back to the last 。.
+            "おじ\t小父\t〈主にかな書き〉(子供から見た)血のつながっていない大人の男性",
             "かす\t科す\t刑罰を負わせる",
             "すむ\t住む\tある場所で生活する",
             "すむ\t澄む\t(液体が)すきとおる",
             "ととのえる\t調える\t〈「整える」とも〉(味などを)加減してちょうどいい状態にする",
-        ])  # 棲む's note is empty and dropped; the first 科す row wins.
-        self.assertEqual(homophone_notes_porter.verify(result), 11)
+            # A 「 inside ( ) does not start the example.
+            "ばち\t鉢\t(「はち」の連濁)ふかざら",
+        ])  # 棲む's note is empty and 脚's has no 。 to go back to: both dropped.
+        self.assertEqual(homophone_notes_porter.verify(result), 13)
 
     def test_header_carries_the_attribution(self):
         header = [line for line in homophone_notes_porter.convert(USAGE).splitlines()
@@ -144,7 +153,8 @@ class HomophoneNotesPorterTests(unittest.TestCase):
         for text in ["\ufeff" + good, good.replace("\n", "\r\n"), good.rstrip("\n"),
                      "あ\t亜\n", "あ\t\t注記\n", "あ\t亜\t注\x01記\n", "あ\t亜\t注記\t余り\n",
                      body + "あ\t亜\t重複\n", "い\t井\t注記\nあ\t亜\t注記\n",
-                     body + "# late comment\n"]:
+                     body + "# late comment\n", "あ\t亜\t(注記\n", "あ\t亜\t注記〉\n",
+                     "あ\t亜\t(注〈記)〉\n"]:
             with self.subTest(text=text[:20]), self.assertRaises(ValueError):
                 homophone_notes_porter.verify(text)
 

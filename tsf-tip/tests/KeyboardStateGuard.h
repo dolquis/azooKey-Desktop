@@ -33,7 +33,9 @@ class KeyboardStateGuard {
     azookey::tsf::testing::SetKeyStateHooksForTest(&kHooks);
   }
 
+  // Guards nest last-in, first-out only.
   ~KeyboardStateGuard() {
+    EXPECT_EQ(current_, this) << "KeyboardStateGuard destroyed out of order";
     current_ = previous_;
     azookey::tsf::testing::SetKeyStateHooksForTest(current_ ? &kHooks : nullptr);
     if (has_original_) SetKeyboardState(original_.data());
@@ -48,6 +50,10 @@ class KeyboardStateGuard {
     pinned_down_[index] = down;
     Reapply();
   }
+
+  // The key state TextService reads, for a test's own translation hook: the
+  // thread's state with the current guard's modifiers over it.
+  static BOOL ReadKeyboardState(PBYTE state) { return HookGetKeyboardState(state); }
 
   void ClearSystemModifiers() {
     SetDown(VK_CONTROL, false);

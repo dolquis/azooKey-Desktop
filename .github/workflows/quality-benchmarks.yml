@@ -82,15 +82,23 @@ jobs:
           python-version: '3.12'
       # build_bundled verifies the SHA256 pins for raw lexicons and matrix.def.zip, as in release.yml.
       - name: Build bundled dictionaries
+        id: build_dictionaries
+        continue-on-error: true
         run: python dictbuild/build_bundled.py --output build/bundled-dictionaries --cache "${{ runner.temp }}/dictionary-sources"
       - name: Run conversion quality evaluations
         id: run_quality
         shell: bash
+        env:
+          DICTIONARY_OUTCOME: ${{ steps.build_dictionaries.outcome }}
         run: |
           status=0
+          dict_args=()
+          if [[ "$DICTIONARY_OUTCOME" == "success" ]]; then
+            dict_args=(--dict-dir build/bundled-dictionaries/dict)
+          fi
           python scripts/run-quality-bench.py \
             --bench build/quality-benchmark/bench/azookey_bench.exe \
-            --dict-dir build/bundled-dictionaries/dict || status=$?
+            "${dict_args[@]}" || status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - name: Upload conversion quality artifact
         if: always()
@@ -105,7 +113,12 @@ jobs:
         shell: bash
         env:
           QUALITY_STATUS: ${{ steps.run_quality.outputs.status }}
+          DICTIONARY_OUTCOME: ${{ steps.build_dictionaries.outcome }}
         run: |
+          if [[ "$DICTIONARY_OUTCOME" != "success" ]]; then
+            echo "Bundled dictionary generation failed: outcome=$DICTIONARY_OUTCOME"
+            exit 1
+          fi
           if [[ "$QUALITY_STATUS" != "0" ]]; then
             echo "Quality command failed: status=$QUALITY_STATUS"
             exit 1

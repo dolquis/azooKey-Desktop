@@ -628,10 +628,11 @@ warning と終了コードの契約は `build-ci-spec.md` §4.5 を参照する�
 実辞書で検証する場合は `--dict-dir` で同梱辞書を指定する。モデルを指定せず `--lattice off` と `--lattice on` を
 比べる構成は M65 の測定に使う（`docs/lattice-conversion-spec.md` §10）。品質 workflow は release と同じ
 `dictbuild/build_bundled.py --cache` で、SHA256 で固定した raw lexicon と `matrix.def.zip` から同梱辞書を生成する。
-`scripts/run-quality-bench.py --dict-dir <同梱辞書>` は既存の辞書なし採取に加え、`kana_kanji_eval` を
+`scripts/run-quality-bench.py --dict-dir <同梱辞書>` は辞書なし採取に加え、`kana_kanji_eval` を
 `--dict-dir` 付きのラティス off / on で採取する。結果名と `comparison.json` のキーはそれぞれ
 `kana_kanji_eval_lattice_off` / `kana_kanji_eval_lattice_on` とし、結果ファイルの拡張子は `.json` とする。
 同名の baseline と §14.1 の互換キーを照合し、構成間の結果を baseline として混ぜない。
+同梱辞書の生成に失敗した場合は `--dict-dir` を渡さず辞書なし 2 構成を採取し、artifact 保存後に job を失敗させる。
 
 定期採取の CLI 配線は `scripts/run-quality-bench.py` が持つ。`kana_kanji_eval` と `typo_eval` の
 辞書なし構成について次の形で CLI を呼ぶ。追加構成では出力名を分け、`--dict-dir` と `--lattice` を加える。

@@ -336,6 +336,10 @@ class QualityBenchTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(reports["kana_kanji_eval_lattice_off"]["command_exit_code"], 2)
         self.assertEqual(reports["kana_kanji_eval_lattice_on"]["status"], "compared")
+        for name in QUALITY.DATASETS:
+            self.assertEqual(reports[name]["command_exit_code"], 0)
+            self.assertEqual(reports[name]["status"], "compared")
+            self.assertTrue((self.root / "results" / f"{name}.json").is_file())
 
     def test_dictionary_matrix_accepts_legacy_artifact_without_new_baselines(self):
         code, reports, calls = self.run_dictionary_matrix(missing=True)
@@ -352,6 +356,21 @@ class QualityBenchTests(unittest.TestCase):
         self.assertIn('--dict-dir build/bundled-dictionaries/dict', workflow)
         self.assertLess(workflow.index('dictbuild/build_bundled.py'),
                         workflow.index('python scripts/run-quality-bench.py'))
+        build = workflow.split('      - name: Build bundled dictionaries\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('id: build_dictionaries', build)
+        self.assertIn('continue-on-error: true', build)
+        evaluate = workflow.split('      - name: Run conversion quality evaluations\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('DICTIONARY_OUTCOME: ${{ steps.build_dictionaries.outcome }}', evaluate)
+        self.assertIn('dict_args=()', evaluate)
+        self.assertIn('if [[ "$DICTIONARY_OUTCOME" == "success" ]]; then\n'
+                      '            dict_args=(--dict-dir build/bundled-dictionaries/dict)\n'
+                      '          fi', evaluate)
+        self.assertIn('"${dict_args[@]}" || status=$?', evaluate)
+        enforce = workflow.split('      - name: Enforce quality command exit code\n', 1)[1]
+        self.assertIn('if: always()', enforce)
+        self.assertIn('DICTIONARY_OUTCOME: ${{ steps.build_dictionaries.outcome }}', enforce)
+        self.assertIn('if [[ "$DICTIONARY_OUTCOME" != "success" ]]; then', enforce)
+        self.assertRegex(enforce, r'if \[\[ "\$DICTIONARY_OUTCOME" != "success" \]\]; then\n[^\n]+\n\s+exit 1\n\s+fi')
 
     def test_workflow_is_scheduled_not_pr_and_uploads_before_enforcing(self):
         workflow = (ROOT / ".github/workflows/quality-benchmarks.yml").read_text(encoding="utf-8")

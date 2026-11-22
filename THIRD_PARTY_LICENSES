@@ -781,6 +781,28 @@ SOFTWARE.
 > 正典とする（重みは Apache-2.0、語彙 `ku-nlp/gpt2-small-japanese-char` と学習データには
 > CC-BY-SA-4.0 の帰属表記を置き、上流 HF から取得して再ホストしない）。
 
+## 配布物へ同梱する SQLite
+
+<!-- sbom: {"source":"vendored:third_party/sqlite","name":"SQLite","license":"blessing","packages":["base","vulkan-addon"]} -->
+
+- Source: `https://www.sqlite.org/` が配布する amalgamation（`sqlite3.c` と `sqlite3.h`）。版、取得元の zip の
+  URL、zip の SHA256 と SHA3-256、各ファイルの SHA256 は `third_party/sqlite/PROVENANCE.json` に記録する
+- License: blessing（SQLite Blessing。作者は著作権を放棄し、パブリックドメインに置いている）
+- Copyright: なし（The author disclaims copyright to this source code）
+- azooKey path: `third_party/sqlite/` に上流のバイト列のまま commit し、静的ライブラリ `azookey_sqlite3` として
+  `azookey_learning` に静的リンクする。`azookey_learning` をリンクする `azookey_inference_host.exe` と Vulkan add-on の
+  `azookey_inference_host_vulkan.exe` へは、typo v2 ストア（`docs/typo-correction-learning-spec.md` §12.8）を使う
+  コードとともに入る
+- Notes: 帰属表示の義務は無いが、配布物に含むので本節を置く。更新するときは sqlite.org の amalgamation の zip から
+  2 ファイルを置き換え、`PROVENANCE.json` を改める。`scripts/complete-release-sbom.py` は、記録した SHA256 と
+  ファイルが一致しないとき、記録に無いファイルがあるときに失敗する
+
+The author disclaims copyright to this source code. In place of a legal notice, here is a blessing:
+
+    May you do good and not evil.
+    May you find forgiveness for yourself and forgive others.
+    May you share freely, never taking more than you give.
+
 ## 配布物へ同梱する Vulkan-Headers（Vulkan add-on のみ）
 
 <!-- sbom: {"source":"vulkan-sdk:Include/vulkan/vulkan_core.h","name":"Vulkan-Headers","license":"Apache-2.0 OR MIT","packages":["vulkan-addon"]} -->
@@ -993,7 +1015,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ## 想定される追記先（前提整備・現時点では未同梱）
 
-M62-C/D・M53・M55・M56 / M57 で取り込む可能性がある資産と、取り込み時に必要な表記義務の目安。
+M62-C/D・M53・M56 / M57 で取り込む可能性がある資産と、取り込み時に必要な表記義務の目安。
 **実際に取り込む段階で正式に追記する。現時点ではいずれも同梱していない。**
 
 | 想定資産 | 用途（M） | ライセンス | 追記時の要点 |
@@ -1001,8 +1023,7 @@ M62-C/D・M53・M55・M56 / M57 で取り込む可能性がある資産と、取
 | Mozc `symbol.tsv` 由来データ | 記号リライター（M62-C） | BSD-3-Clause © Google | 名前条項（3rd clause）保持・原典表記の全文転記 |
 | Mozc `emoji_data.tsv` 由来データ | 絵文字リライター（M62-D） | BSD-3-Clause © Google | 同上 |
 | Unicode CLDR 由来データ | 絵文字リライター（M62-D） | Unicode License v3 | CLDR データ条項・出典バージョン明記 |
-| SQLite（amalgamation） | typo v2 ストア（M55。`docs/typo-correction-learning-spec.md` §12.8） | Public Domain（SPDX `blessing`） | 帰属の義務は無いが配布物に静的リンクするので節を置く。amalgamation を third_party の下に commit する（版と SHA256 を記録）。sbom 注記と、repo に置いたソースの版と hash を扱う SBOM 生成の拡張を同じ PR で行う |
 | ONNX Runtime（`onnxruntime.dll`、公式 prebuilt） | M56 / M57 の reranker の推論（`docs/neural-reranker-spec.md` §7.3） | MIT © Microsoft | prebuilt に同梱の第三者表記を全文で引き継ぐ。sbom 注記と、URL + SHA256 の pin を扱う SBOM 生成の拡張を同じ PR で行う |
 
 > 上表は**将来取り込みの計画**であり、現時点で該当データを再配布していないことを再掲する。
-> 定義・受け入れ条件の正典は `plans/windows-port-roadmap.md`（M62 / M53 / M55 / M56 / M57）、進捗・状態は Linear。
+> 定義・受け入れ条件の正典は `plans/windows-port-roadmap.md`（M62 / M53 / M56 / M57）、進捗・状態は Linear。

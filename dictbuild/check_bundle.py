@@ -2,8 +2,9 @@
 
 Fails when the payload carries anything but the bundled static layers and lattice_core (in
 particular a standalone neologd_lexicon pack), when it lacks lattice_core, when an artifact's
-layer id differs from its file name, when ThirdPartyNotices.txt lacks a contributing source, or
-when the MSI ships a different set of dictionaries than the payload holds.
+layer id differs from its file name, when the total .azdic size exceeds the bundle budget,
+when ThirdPartyNotices.txt lacks a contributing source, or when the MSI ships a different set of
+dictionaries than the payload holds.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import io
 import json
 from pathlib import Path
 import re
+import stat
 import struct
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -24,6 +26,9 @@ import bundle_provenance
 
 HERE = Path(__file__).resolve().parent
 
+# docs/azdic-physical-layer-spec.md §15.9: 120 MB before installer compression.
+# MB is decimal (1 MB = 10^6 bytes).
+MAX_BUNDLED_AZDIC_BYTES = 120_000_000
 BUNDLED = {f"{layer}.azdic": index for index, layer in enumerate(dictbuild.LAYERS)
            if layer != "neologd_lexicon"}
 # lattice_core holds sudachi_lexicon words, so its header names that layer (azdic spec 15.12).
@@ -129,13 +134,19 @@ def check(bundle: Path, package: Path | None) -> list[str]:
     if not notices.strip():
         errors.append(f"{notices_path}: missing or empty")
     summaries = {}
+    total_size = 0
     for name in found:
-        if name not in BUNDLED:
-            errors.append(f"{name}: not a bundled static layer (neologd_lexicon ships only as "
-                          "a separate download pack)")
-            continue
+        artifact = directory / name
         try:
-            layer, sections, meta = read_summary(directory / name)
+            if artifact.suffix == ".azdic":
+                info = artifact.stat()
+                if stat.S_ISREG(info.st_mode):
+                    total_size += info.st_size
+            if name not in BUNDLED:
+                errors.append(f"{name}: not a bundled static layer (neologd_lexicon ships only as "
+                              "a separate download pack)")
+                continue
+            layer, sections, meta = read_summary(artifact)
             sources = [source["source_id"] for source in meta["sources"]]
         except (OSError, ValueError, KeyError, TypeError, struct.error) as exc:
             errors.append(str(exc))
@@ -145,6 +156,9 @@ def check(bundle: Path, package: Path | None) -> list[str]:
             errors.append(f"{name}: layer id {layer} does not match the file name")
         errors.extend(f"{name}: source {source} is not attributed in ThirdPartyNotices.txt"
                       for source in sources if source not in notices)
+    if total_size > MAX_BUNDLED_AZDIC_BYTES:
+        errors.append(f"bundled .azdic total is {total_size} bytes, "
+                      f"exceeding the limit of {MAX_BUNDLED_AZDIC_BYTES} bytes")
     lattice_name = f"{build_bundled.LATTICE_CORE}.azdic"
     lattice = summaries.get(lattice_name)
     if lattice is not None:

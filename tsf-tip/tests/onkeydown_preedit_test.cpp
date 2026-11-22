@@ -16475,6 +16475,9 @@ TEST(TsfTipWindowWaitTest, ReplayedKeysKeepTheShiftOfTheirPress) {
   AnswerWindow(h);
   EXPECT_EQ(h.context.document->text, L"課！");
   EXPECT_EQ(h.service.preedit_kana_, "！");
+  std::array<BYTE, 256> keyboard_state{};
+  ASSERT_TRUE(KeyboardStateGuard::ReadKeyboardState(keyboard_state.data()));
+  EXPECT_EQ(keyboard_state[VK_SHIFT] & 0x80, 0);
 }
 
 // A commit a replayed key asks for can be refused: the rest of the replay then

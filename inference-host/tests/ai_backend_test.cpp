@@ -347,9 +347,9 @@ TEST(AiBackendTest, UnwrapsOneJsonFenceAroundAnObject) {
 }
 // Any other fenced content stays plain text as it stands.
 TEST(AiBackendTest, KeepsOtherFencedContentAsPlainText) {
-  for (const auto* content :
-       {"```python\nx = 1\n```", "```json\n今日は\n```", "```json\n[\"a\"]\n```",
-        "```json\n{\"result\":\"整文\"}", "```{\"result\":\"整文\"}```"}) {
+  for (const auto* content : {"```python\nx = 1\n```", "```json\n今日は\n```",
+                              "```json\n[\"a\"]\n```", "```json\n{\"result\":\"整文\"}",
+                              "```{\"result\":\"整文\"}```", "```json\n{\"result\":\"整文\"}```"}) {
     const auto result = TransformReplying(Reply(content));
     EXPECT_TRUE(result.ok) << content;
     EXPECT_EQ(result.result, content) << content;

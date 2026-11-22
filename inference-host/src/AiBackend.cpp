@@ -51,6 +51,9 @@ std::string_view WithoutJsonFence(std::string_view content) {
   if (!body.starts_with(kFence) || !body.ends_with(kFence) ||
       opening_end == std::string_view::npos || opening_end + kFence.size() >= body.size())
     return content;
+  // The closing fence stands on a line of its own; otherwise the fence is
+  // unclosed. The opening line's newline bounds the search.
+  if (body[body.find_last_not_of(" \t", body.size() - kFence.size() - 1)] != '\n') return content;
   auto tag = Trim(std::string(body.substr(kFence.size(), opening_end - kFence.size())));
   for (auto& c : tag) {
     if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');

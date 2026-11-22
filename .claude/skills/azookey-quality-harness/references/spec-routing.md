@@ -7,6 +7,7 @@
 | latency smoke と IPC ベンチ | `docs/build-ci-spec.md` §4.5、`docs/debugging.md`「Bench」 | `bench/live_bench.cpp`、`bench/IpcBenchmark.cpp`（target `azookey_bench`） | `azookey_bench_smoke`（CTest の `add_test`、p95 上限付き） |
 | 変換品質評価（top-k、MRR、typo） | `docs/conversion-quality-benchmark-spec.md` §4〜§10、§14 | `bench/ConversionQuality.cpp`、`bench/data/conversion_quality_smoke.jsonl` | `conversion_quality_tests`、`azookey_conversion_quality_smoke` |
 | 結果 JSON と baseline 比較 | `docs/conversion-quality-benchmark-spec.md` §8、§14、`docs/build-ci-spec.md` §4.5 | `bench/BenchmarkResult.cpp`、`bench/BenchmarkCommandLine.cpp` | `benchmark_result_tests` |
+| 個人回帰ベンチ（`--personal-eval`。学習ストアを読み取り専用で評価ケースにする） | `docs/conversion-quality-benchmark-spec.md` §15 | `bench/PersonalEval.cpp`、`bench/live_bench.cpp`、`bench/ConversionQuality.cpp` | `personal_eval_tests`、`azookey_personal_eval_smoke` |
 | bench 用一時学習ファイル | `docs/conversion-quality-benchmark-spec.md` §3 | `bench/TemporaryLearningFile.cpp` | `temporary_learning_file_tests` |
 | Zenzai 推論ベンチ | `docs/zenzai-inference-spec.md`、`azookey-inference-model-workflow` skill | `bench/zenzai_bench.cpp`（target `azookey_zenzai_bench`） | 実モデル label 付き CTest（pin モデルが要る） |
 | NLL 計測 | `docs/decisions/2026-09-08-nll-release-measurement.md`（計測記録。正典ではない）、`docs/modernbert-ja-scoring-spec.md` | `bench/nll_bench.cpp`（target `azookey_nll_bench`）、`bench/data/nll_fixture.*` | 実モデル label 付き CTest |

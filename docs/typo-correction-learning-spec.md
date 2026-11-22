@@ -601,7 +601,7 @@ v2 は TSV の拡張を経ずに SQLite で始める（DEV-1955）。
 #### パス
 
 v2 のファイルと移行した v1 は、v1 の論理パス（既定は `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv`。
-host CLI の `--typo-store` で上書きできる。§5-1）と同じディレクトリに置き、名前は v1 の論理パスから導く。
+host CLI の `--typo-store` で上書きできる。§5-1）と同じディレクトリに置き、名前は下表と次の規則で決める。
 どれも既存の `ReadProtectedText` / `WriteProtectedText`（`learning/include/azookey/learning/DpapiCrypto.h`）に
 論理パスを渡して読み書きし、ディスク上は `<論理パス>.enc` になる。
 
@@ -611,6 +611,9 @@ host CLI の `--typo-store` で上書きできる。§5-1）と同じディレ�
 | v2 のストア | `typo_learning.v2.db` | `typo_learning.v2.db.enc` |
 | 移行した v1（以下「v1 の退避」） | `typo_corrections.v1.tsv.bak` | `typo_corrections.v1.tsv.bak.enc` |
 
+- v2 の名前は、v1 の名前によらず `typo_learning.v2.db` とする。
+- v1 の退避の名前は、v1 のファイル名の拡張子の前に `.v1` を入れ、末尾に `.bak` を付ける。`--typo-store` が
+  `mine.tsv` なら `mine.v1.tsv.bak`、拡張子の無い `typos` なら `typos.v1.bak` である。
 - v1 の退避の論理パスに `typo_corrections.tsv.bak` は使わない。M34 の平文移行が残す平文の退避と同名で、
   `WriteProtectedText` がこれを残った退避（orphan backup）とみなして保存を止めるためである。
 - M34 の平文移行が残す `typo_corrections.tsv.bak`（平文）は M34 の規則に従い、本節の移行と削除の対象に
@@ -642,9 +645,9 @@ v2 のストアはメモリ上の SQLite DB として開き、ディスクへは
 
 #### SQLite の取り込み
 
-- sqlite.org が配布する amalgamation（`sqlite3.c` と `sqlite3.h`）を repo の third_party/sqlite/ ディレクトリに commit する。
-  取得元の zip の版と SHA256 を同じディレクトリに記録する。
-  amalgamation の実物の追加は実装（DEV-2148）で行う。
+- sqlite.org が配布する amalgamation（`sqlite3.c` と `sqlite3.h`）を repo の third_party/sqlite/ ディレクトリに、
+  上流のバイト列のまま commit する（`.gitattributes` で改行を変換しない）。版、取得元の zip の URL と SHA256
+  （sqlite.org が公表する SHA3-256 も）、各ファイルの SHA256 を、同じディレクトリの `PROVENANCE.json` に記録する。
 - 既定の configure は、ネットワークに触れずに成功する（`docs/dev-infrastructure-spec.md` §1 のオフラインビルド原則）。
   そのため `docs/build-ci-spec.md` §3.1 の 2（ビルドが要る依存を opt-in の `FetchContent` で取る）ではなく、
   §3.1 の 4 によりソースを repo に置く。取得のための CMake option は設けない。
@@ -656,9 +659,9 @@ v2 のストアはメモリ上の SQLite DB として開き、ディスクへは
 - OS の `winsqlite3.dll` は使わない。版と compile option を固定できず、OS の更新に左右されるためである。
   vcpkg も使わない（`docs/build-ci-spec.md` §3.1 は vcpkg を必須にしない）。
 - ライセンスは public domain（SPDX `blessing`）で、帰属表示の義務は無い。それでも配布物に含むので、
-  取り込む PR で `THIRD_PARTY_LICENSES` に同梱の節を足す。リリース SBOM の生成
-  （`scripts/complete-release-sbom.py`）は CMake の Git commit の pin しか扱わないため、repo に置いたソースの
-  版と hash を扱えるように同じ PR で広げる。
+  `THIRD_PARTY_LICENSES` に同梱の節を置く。リリース SBOM の生成（`scripts/complete-release-sbom.py`）は、
+  その節の `vendored:` の選択子から `PROVENANCE.json` を読んで版と zip の SHA256 を載せ、記録した SHA256 と
+  ファイルが一致しないとき、記録に無いファイルがあるときに失敗する。
 
 #### 由来の印
 
@@ -805,9 +808,9 @@ Host は起動時にストアを読み、次の順に判定する。状態（あ
 
 #### バックアップと export
 
-`docs/learning-data-management-spec.md` §5・§5.1 の typo の entry（`typo_corrections.tsv.enc`、v1 の TSV）は
-v1 の形式である。v2 を有効にする実装（DEV-2148）は、この entry を v2 に合わせて改める変更を含み、
-改めるまで v2 を有効にしない（DEV-2148 の完了条件）。
+backup の entry は `docs/learning-data-management-spec.md` §5・§5.1 が持つ。v2 の読みの組は item
+`typo_corrections`（v1 の TSV）に、パターンは item `typo_patterns` に書き、`typo_events` は入れない。
+どちらの item もテキストとして解析し、archive のバイト列を SQLite として開かない。
 
 #### 保持上限
 
@@ -872,6 +875,11 @@ confidence = clamp(raw_conf, min_confidence, max_confidence)
   順位付けの強さを表し、件数ゲートは昇格可否を表す（役割を分離する）。
 - `dominant_app(pattern)` は当該パターンの `typo_events`（§12.8）で
   `event_type='typo_accept'` が最多の `app_name`。同数・該当なしは bonus 0。
+- `last_used_at` は採用（`typo_accept`）で更新し、拒否（`typo_reject`）では更新しない。拒否で
+  `recency_bonus` が上がらないようにするためである。採用の無いパターン（`last_used_at` が NULL）は
+  `recency_bonus` を 0 とする。
+- `typo_patterns.confidence` 列には `app_specific_bonus` を含めない値を、イベントと import のたびに求め直して
+  持つ。app の加点は、問い合わせの時点の app で加える。
 - `accept_weight` / `reject_weight` / `B_rec` / `B_app` は初期値であり M52 で
   校正する（§12.16）。`reject_weight > accept_weight` の不変条件は固定する。
 
@@ -996,6 +1004,9 @@ intended_pattern  = 対応する canonical 形（Romaji Variant 正規化後、�
   文字列を誤って取り込まない。
 - `left_context` は §8 と同じく SHA-256 上位 4 bytes の hash で保存する
   （`docs/user-learning-enhancement-spec.md` §8.1 と同一算出式）。
+- ストア（`learning/` の `TypoLearningStore`）は、`observed_pattern` と `intended_pattern` の両方について、
+  上のトークンの文法、§12.13 の `raw_keys` の文字集合、編集 3 つまでという長さを検査し、外れた値を保存しない。
+  `intended_pattern` の canonical 形の決め方は、補正エンジン（§12.4）の実装が定める。
 
 #### 12.12.2 M46 secure 抑止との連携タイミング
 
@@ -1025,6 +1036,10 @@ private の学習停止を理由に予測を停止しない。secure 中は検�
 privacy 対応 TIP は handshake に `secure_flag` を広告し、毎 `QueryCandidates` /
 `ObserveTypo` / `CommitObservation` / `CommitSegmentsObservation` に
 `secure` と `learning_allowed` を載せる。学習ゲートは広告済みでも欠落・型不正を拒否する。
+
+v2 のストアは、呼び出し側が secure の間に書き込みを止める入口を持つ。止めている間は、読みの組の観測と
+パターンのイベントを拒み、保存はファイルに触れずに失敗し、忘却と全削除もファイルに触れずに失敗する。
+Host の学習ゲートに重ねる最後の段で、ゲートの代わりにはしない。
 
 ### 12.13 IPC（protocol v1 の加算的拡張）
 

@@ -139,12 +139,15 @@ def annotation_text(value):
     return str(value).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def evaluate_dataset(executable, dataset, results_dir, baseline_dir):
-    output = results_dir / f"{dataset}.json"
+def evaluate_dataset(executable, dataset, results_dir, baseline_dir, dict_dir=None, lattice=None):
+    name = dataset if lattice is None else f"{dataset}_lattice_{lattice}"
+    output = results_dir / f"{name}.json"
     baseline = baseline_dir / output.name
     args = [str(executable), "--eval", f"bench/data/{dataset}.jsonl",
             "--output", str(output), "--backend", "cpu", "--iterations", "30",
             "--typo-mode", "off"]
+    if dict_dir is not None:
+        args += ["--dict-dir", str(dict_dir), "--lattice", lattice]
     # Generate the current config first. Incompatible baselines must not prevent
     # the evaluator from writing a new result, or turn this run into a regression.
     status = subprocess.run(args, check=False).returncode
@@ -172,9 +175,9 @@ def evaluate_dataset(executable, dataset, results_dir, baseline_dir):
             details = ", ".join(f"{key}={value * 100:+.4f}pp"
                                 for key, value in sorted(regressions.items()))
             print("::warning title=Conversion quality regression::"
-                  + annotation_text(f"{dataset}: {details} versus {commit}"))
+                  + annotation_text(f"{name}: {details} versus {commit}"))
     else:
-        print(f"{dataset}: baseline comparison skipped ({state}: {reason})")
+        print(f"{name}: baseline comparison skipped ({state}: {reason})")
     return report
 
 
@@ -183,18 +186,24 @@ def main():
     parser.add_argument("--bench", type=Path, required=True)
     parser.add_argument("--results-dir", type=Path, default=Path("quality-results"))
     parser.add_argument("--baseline-dir", type=Path, default=Path("quality-baseline"))
+    parser.add_argument("--dict-dir", type=Path,
+                        help="also evaluate kana_kanji with bundled dictionaries and lattice off/on")
     args = parser.parse_args()
     args.results_dir.mkdir(parents=True, exist_ok=True)
     reports = {}
-    for dataset in DATASETS:
+    configurations = [(dataset, None, None) for dataset in DATASETS]
+    if args.dict_dir is not None:
+        configurations += [("kana_kanji_eval", args.dict_dir, lattice) for lattice in ("off", "on")]
+    for dataset, dict_dir, lattice in configurations:
+        name = dataset if lattice is None else f"{dataset}_lattice_{lattice}"
         try:
-            reports[dataset] = evaluate_dataset(
-                args.bench, dataset, args.results_dir, args.baseline_dir)
+            reports[name] = evaluate_dataset(
+                args.bench, dataset, args.results_dir, args.baseline_dir, dict_dir, lattice)
         except (OSError, UnicodeError, ValueError, KeyError, TypeError) as error:
-            reports[dataset] = {"command_exit_code": 2, "status": "evaluation_failed",
+            reports[name] = {"command_exit_code": 2, "status": "evaluation_failed",
                                 "reason": type(error).__name__, "warning": False,
                                 "regressions": {}}
-            print(f"::error::Quality evaluation failed for {dataset}: {type(error).__name__}")
+            print(f"::error::Quality evaluation failed for {name}: {type(error).__name__}")
     (args.results_dir / "comparison.json").write_text(
         json.dumps(reports, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return int(any(report["command_exit_code"] != 0 for report in reports.values()))

@@ -257,6 +257,102 @@ class QualityBenchTests(unittest.TestCase):
     def test_annotations_escape_control_characters(self):
         self.assertEqual(QUALITY.annotation_text("x%\r\ny"), "x%25%0D%0Ay")
 
+    def run_dictionary_matrix(self, mismatch=None, fail_lattice=False, missing=False):
+        results = self.root / "results"
+        baselines = self.root / "baselines"
+        baselines.mkdir(exist_ok=True)
+        names = ["kana_kanji_eval", "typo_eval",
+                 "kana_kanji_eval_lattice_off", "kana_kanji_eval_lattice_on"]
+        for name in names:
+            value = result()
+            if "_lattice_" in name:
+                if missing:
+                    continue
+                value["config"].update(dictionary_bundle_sha256="bundle-hash",
+                                       lattice=name.rsplit("_", 1)[1])
+                if mismatch:
+                    value["config"][mismatch] = "different"
+            (baselines / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+        calls = []
+
+        def run(args, check):
+            calls.append(args)
+            current = result()
+            if "--dict-dir" in args:
+                self.assertEqual(Path(args[args.index("--dict-dir") + 1]), Path("bundled dictionaries/dict"))
+                self.assertEqual(args[args.index("--eval") + 1], "bench/data/kana_kanji_eval.jsonl")
+                lattice = args[args.index("--lattice") + 1]
+                current["config"].update(dictionary_bundle_sha256="bundle-hash", lattice=lattice)
+                if fail_lattice and lattice == "off":
+                    return SimpleNamespace(returncode=2)
+            else:
+                self.assertNotIn("--lattice", args)
+                dataset = Path(args[args.index("--eval") + 1]).stem
+                expected = ["bench.exe", "--eval", f"bench/data/{dataset}.jsonl",
+                            "--output", str(results / f"{dataset}.json"), "--backend", "cpu",
+                            "--iterations", "30", "--typo-mode", "off"]
+                if "--baseline" in args:
+                    expected += ["--baseline", str(baselines / f"{dataset}.json")]
+                self.assertEqual(args, expected)
+            self.assertNotIn("--model", args)
+            self.assertNotIn("--nll", args)
+            output = Path(args[args.index("--output") + 1])
+            if "--baseline" in args:
+                self.assertEqual(Path(args[args.index("--baseline") + 1]), baselines / output.name)
+                current["diff_vs_baseline"] = {"top1_accuracy": -0.01}
+            output.write_text(json.dumps(current), encoding="utf-8")
+            return SimpleNamespace(returncode=0)
+
+        with patch("sys.argv", ["run-quality-bench.py", "--bench", "bench.exe",
+                                "--results-dir", str(results), "--baseline-dir", str(baselines),
+                                "--dict-dir", "bundled dictionaries/dict"]), \
+                patch.object(QUALITY.subprocess, "run", side_effect=run), redirect_stdout(io.StringIO()):
+            code = QUALITY.main()
+        reports = json.loads((results / "comparison.json").read_text(encoding="utf-8"))
+        self.assertEqual(list(reports), names)
+        return code, reports, calls
+
+    def test_dictionary_matrix_compares_separate_baselines_and_preserves_smoke(self):
+        code, reports, calls = self.run_dictionary_matrix()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 8)
+        for report in reports.values():
+            self.assertEqual(report["status"], "compared")
+            self.assertTrue(report["warning"])
+
+    def test_dictionary_matrix_skips_changed_dictionary_or_lattice(self):
+        for key in ("dictionary_bundle_sha256", "lattice"):
+            with self.subTest(key=key):
+                code, reports, calls = self.run_dictionary_matrix(mismatch=key)
+                self.assertEqual(code, 0)
+                self.assertEqual(len(calls), 6)
+                for name, report in reports.items():
+                    self.assertEqual(report["status"], "incompatible" if "_lattice_" in name else "compared")
+                    if "_lattice_" in name:
+                        self.assertFalse(report["warning"])
+
+    def test_dictionary_failure_still_attempts_other_configuration(self):
+        code, reports, _ = self.run_dictionary_matrix(fail_lattice=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(reports["kana_kanji_eval_lattice_off"]["command_exit_code"], 2)
+        self.assertEqual(reports["kana_kanji_eval_lattice_on"]["status"], "compared")
+
+    def test_dictionary_matrix_accepts_legacy_artifact_without_new_baselines(self):
+        code, reports, calls = self.run_dictionary_matrix(missing=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 6)
+        for name in ("kana_kanji_eval_lattice_off", "kana_kanji_eval_lattice_on"):
+            self.assertEqual(reports[name]["status"], "not_provided")
+            self.assertFalse(reports[name]["warning"])
+            self.assertTrue((self.root / "results" / f"{name}.json").is_file())
+
+    def test_workflow_builds_dictionary_before_evaluation(self):
+        workflow = (ROOT / ".github/workflows/quality-benchmarks.yml").read_text(encoding="utf-8")
+        self.assertIn('dictbuild/build_bundled.py --output build/bundled-dictionaries --cache', workflow)
+        self.assertIn('--dict-dir build/bundled-dictionaries/dict', workflow)
+        self.assertLess(workflow.index('dictbuild/build_bundled.py'),
+                        workflow.index('python scripts/run-quality-bench.py'))
+
     def test_workflow_is_scheduled_not_pr_and_uploads_before_enforcing(self):
         workflow = (ROOT / ".github/workflows/quality-benchmarks.yml").read_text(encoding="utf-8")
         events = workflow.split("permissions:", 1)[0]

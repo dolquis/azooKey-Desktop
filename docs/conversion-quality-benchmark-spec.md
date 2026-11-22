@@ -620,17 +620,22 @@ M53〜M57 完了時点で達成する目標:
 main push / 日次 schedule / 手動実行の品質採取と advisory な baseline 比較は
 独立した `quality-benchmarks.yml` の `quality-benchmark` ジョブで行う。実行条件、artifact、比較スキップ、
 warning と終了コードの契約は `build-ci-spec.md` §4.5 を参照する。
-この定期採取はモデルなし CPU 経路の schema / artifact 接続 smoke とする。
+辞書なしの定期採取はモデルなし CPU 経路の schema / artifact 接続 smoke とする。
 `--dict-dir` を付けないので、当該データセットでは top1 / top5 / exact が 0 となり、精度低下の検知を実証できない。
 実品質の回帰検証には実辞書または固定モデルが必要であり、PR 向け回帰ゲートを別途構成する。
 実モデルで検証する場合は `--model` でモデルを指定し、
 §14.1 の config と互換な baseline を用意する必要がある。
 実辞書で検証する場合は `--dict-dir` で同梱辞書を指定する。モデルを指定せず `--lattice off` と `--lattice on` を
-比べる構成は M65 の測定に使う（`docs/lattice-conversion-spec.md` §10）。同梱辞書は品質 workflow では生成しないため、
-この構成を定期採取に入れるには、辞書の生成を workflow に足す必要がある。
+比べる構成は M65 の測定に使う（`docs/lattice-conversion-spec.md` §10）。品質 workflow は release と同じ
+`dictbuild/build_bundled.py --cache` で、SHA256 で固定した raw lexicon と `matrix.def.zip` から同梱辞書を生成する。
+`scripts/run-quality-bench.py --dict-dir <同梱辞書>` は既存の辞書なし採取に加え、`kana_kanji_eval` を
+`--dict-dir` 付きのラティス off / on で採取する。結果名と `comparison.json` のキーはそれぞれ
+`kana_kanji_eval_lattice_off` / `kana_kanji_eval_lattice_on` とし、結果ファイルの拡張子は `.json` とする。
+同名の baseline と §14.1 の互換キーを照合し、構成間の結果を baseline として混ぜない。
 
 定期採取の CLI 配線は `scripts/run-quality-bench.py` が持つ。`kana_kanji_eval` と `typo_eval` の
-それぞれについて次の形で CLI を呼ぶ。baseline は品質 workflow の直前の `main` 成功 run の
+辞書なし構成について次の形で CLI を呼ぶ。追加構成では出力名を分け、`--dict-dir` と `--lattice` を加える。
+baseline は品質 workflow の直前の `main` 成功 run の
 `conversion-quality-results` artifact にある同名の結果 JSON で、§14.1 の互換キーが一致するときだけ
 `--baseline` を付けて評価し直す。
 

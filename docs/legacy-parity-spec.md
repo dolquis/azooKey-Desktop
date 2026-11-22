@@ -1129,10 +1129,12 @@ TIP は `TextService::OnKeyDown` で押下を判定する。同じキーを修�
 案内だけの窓（§4.3）を出す場合が 3 つある。secure の入力先では、`llmMagicConversion` が true で Host が対応して
 いれば出す。外部 AI への明示同意 `privacy.externalAiConsent`（`docs/ai-backend-spec.md` §14.2）だけが欠けている
 ときは、同意があれば外部 AI が許可される状態（`normal`、または `custom` で AI 候補生成と外部 AI が有効）で、入力先が
-secure でなく、アプリのプロファイルが外部 AI を止めておらず、実効 backend が `openai` で、`llmMagicConversion` が
-true で Host が対応していれば出す。選択は読まないので、選択が無くても出す。`private` / `offline`、`custom` の外部 AI
-無効、プロファイルの `privacyMode = private`、実効 backend が `openai` でないことによる不許可では出さない（利用者が
-選んだ制限であり、同意を足しても送れないため）。長すぎる選択では、選択の長さのほかの条件をすべて満たすときに出す。ただし、TIP にキーが届かない入力先
+secure でなく、アプリのプロファイルが外部 AI を止めておらず、プロファイルの `auto` を展開した backend（同意があれば実効
+backend になる値。`docs/app-profile-spec.md` §4.2 の step 1）が `openai` で、`llmMagicConversion` が true で Host が
+対応していれば出す。選択は読まないので、選択が無くても出す。`private` / `offline`、`custom` の外部 AI 無効、
+プロファイルの `privacyMode = private`、展開した backend が `openai` でないこと、AI 候補生成の不許可（`custom` の
+AI 候補生成無効、真偽値でない同意、欄の種類（`IS_PRIVATE` など）、アプリを解決できないことを含む）による不許可では
+出さない（利用者が選んだ制限、または入力先の制限であり、同意を足しても送れないため）。長すぎる選択では、選択の長さのほかの条件をすべて満たすときに出す。ただし、TIP にキーが届かない入力先
 （キーボードが無効の context。`docs/privacy-and-secure-input-spec.md` §4.3）ではダブルタップを数えないので、案内も出さない。
 窓が開いている間のダブルタップは、もう一つの窓を開かない。
 
@@ -1175,7 +1177,7 @@ Win32 のモードレスの窓で出す（`tsf-tip/src/PromptDialog.cpp`。`docs
 +--------------------------------------------------+
 ```
 
-- 開いただけでは何も送らない（legacy は初期プロンプトがあると開いた直後に送る。外部送信の同意は DEV-1965 で決める）。
+- 開いただけでは何も送らない（legacy は初期プロンプトがあると開いた直後に送る。外部への送信には明示同意が要る。`docs/ai-backend-spec.md` §14.2）。
   指示欄で Enter を押すか [変換] を押したときに送る。指示が空なら送らない。
 - 入力先のアプリの `promptPrefix`（`docs/app-profile-spec.md` §4.1）は、窓を開くときに入力先のアプリで解決する。
   前置きは、指示と同じく両端の空白・タブ・改行（CR・LF）・全角空白を除いてから使う。除いた後が空でなければ、送る指示の

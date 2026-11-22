@@ -18940,6 +18940,14 @@ TEST(TsfTipMagicConversionTest, WithoutOnlyTheConsentTheWindowSaysWhereToTurnItO
     expect_consent_notice(m);
   }
   {
+    // The app's profile picks openai over a global none.
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.h.service.set_magic_conversion_for_test(true, "none");
+    m.SetProfiles(R"("profilesByApp":{"notepad.exe":{"aiBackend":"openai"}})");
+    expect_consent_notice(m);
+  }
+  {
     // Nothing is read, so no selection is needed either.
     MagicConversionHarness m;
     m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
@@ -19004,6 +19012,13 @@ TEST(TsfTipMagicConversionTest, OtherCausesThanTheConsentGetNoNotice) {
     expect_no_window(m);
   }
   {
+    // A field that keeps AI out (IS_PRIVATE) without being secure.
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.scope.scope.value = IS_PRIVATE;
+    expect_no_window(m);
+  }
+  {
     // An app the TIP cannot resolve, with automatic secure detection off.
     MagicConversionHarness m;
     m.h.service.set_privacy_settings_for_test(
@@ -19025,10 +19040,10 @@ TEST(TsfTipMagicConversionTest, OtherCausesThanTheConsentGetNoNotice) {
   }
 }
 
-// DEV-2085 (legacy-parity-spec §4.3): the prefix is resolved after the window's
-// checks. A window that may not send (secure, no consent, not allowed) shows its
-// own notice or none even for an app whose prefix is too long; one that may
-// send refuses the prompt with the prefix's notice and sends nothing.
+// DEV-2085 (legacy-parity-spec §4.3): the window's checks come first. A window
+// that may not send (secure, no consent, not allowed) shows its own notice or
+// none, never the prefix's, even for an app whose prefix is too long; one that
+// may send refuses the prompt with the prefix's notice and sends nothing.
 TEST(TsfTipMagicConversionTest, TheAppsPromptPrefixComesAfterTheChecksAndKeepsTheLimit) {
   const auto limit = azookey::ipc::kMaxTransformPromptBytes;
   const auto profiles = [](const std::string& prefix, const char* more = "") {

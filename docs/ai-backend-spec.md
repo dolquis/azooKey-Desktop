@@ -235,8 +235,9 @@ TransformSelectedTextResponse:
 
 要求の id は Envelope の `request_id` を使い、payload には載せない。`selection`・`prompt`・
 `context`・`result` のバイト数の上限は `ipc/include/azookey/ipc/Limits.h` が正典である。
-TIP は、入力先のアプリの `promptPrefix`（`docs/app-profile-spec.md` §4.1）が空でなければ、利用者の指示の前に
-改行で区切って付けて `prompt` に載せる。`prompt` の上限は前置きを含めた長さに掛かる。
+TIP は、入力先のアプリの `promptPrefix`（`docs/app-profile-spec.md` §4.1）の両端の空白・タブ・改行・全角空白を除き、
+除いた後が空でなければ、利用者の指示の前に改行で区切って付けて `prompt` に載せる。`prompt` の上限は、除いた後の
+前置きを含めた長さに掛かる。
 privacy のフィールドが欠けた要求と型が違う要求は、secure で AI 不可の要求として扱う。ほかのフィールドが
 型の違う値で届いた要求は、欠落とみなさず不正な要求とする。
 

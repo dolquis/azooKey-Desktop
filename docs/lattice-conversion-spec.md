@@ -478,7 +478,7 @@ lattice_core の `META` に入るので、`dictionary_bundle_sha256` が変わ�
 
 ### 10.4 定期採取
 
-モデル無効構成を品質 workflow の定期採取で回すには、同梱辞書の生成を workflow に足す必要がある
+品質 workflow は同梱辞書を生成し、§10.1 のモデル無効構成 A / B を定期採取する
 （`docs/conversion-quality-benchmark-spec.md` §10）。定期採取に入っていない構成は、`dictbuild/build_bundled.py` の
 `--cache` に置いた上流アーカイブから手元で辞書を作って測り、結果を PR に記録する。
 

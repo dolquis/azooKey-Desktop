@@ -622,6 +622,8 @@ bench が閾値超過などで非ゼロ終了した場合も、生成済みの J
 
 独立した `quality-benchmarks.yml` の `quality-benchmark` ジョブは Windows hosted runner で、モデルなしの CPU
 経路を使い `kana_kanji_eval.jsonl` と `typo_eval.jsonl` を `--eval` で採取する。
+辞書なし採取に加え、同梱辞書を生成してモデル無効のラティス off / on 構成を採取する。
+辞書の生成・固定と結果名は `conversion-quality-benchmark-spec.md` §10 に従う。
 SHA-256 と NFKC の Windows API を使うため Windows で採取する。baseline は各 workflow の成功 run
 から選び、品質 job とレイテンシ job の成否が互いの baseline 更新に影響しないようにする。
 `scripts/run-quality-bench.py` は評価 JSON の config と品質 workflow の直前の main 成功 run の
@@ -633,11 +635,12 @@ top5_accuracy、NFKC 系とレイテンシはこの品質 warning の対象に�
 品質 JSON と比較状態・理由・差分を含む `comparison.json` は
 `conversion-quality-results` artifact として保存する。
 品質悪化だけでは終了コードを変更せず、CLI の非ゼロ終了は artifact 保存後に job を失敗させる。
+同梱辞書の生成に失敗しても辞書なし 2 構成を採取し、artifact 保存後に job を失敗させる。
 定期 workflow は PR で起動せず、通常 PR の required check に追加しない。
 reporting の Python テストは `windows.yml` の `quality` ジョブで実行し、
 既存の `changes` 分類により docs-only PR では省略する。
 
-このモデルなし採取は、評価 JSON の schema と artifact 保存・比較経路を確認する smoke である。
+辞書なしのモデルなし採取は、評価 JSON の schema と artifact 保存・比較経路を確認する smoke である。
 SimpleConverter の静的辞書では当該データセットの top1 / top5 / exact が 0 となるため、
 精度低下の検知を実証できない。CER の差分は記録できるが、実辞書または固定モデルを用いた
 変換品質回帰の受入検証は別途必要とする。smoke の成功を実品質回帰検知の達成とみなさない。

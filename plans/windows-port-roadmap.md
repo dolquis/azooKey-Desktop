@@ -2803,9 +2803,10 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   結果はどこへも送らない。
 - **前提**: M46（privacy の設定の解決と実効の `secureApps`）、M48（アプリ別プロファイルの解決）、M52（指標・出力形式・
   互換キー）、M54（学習ストアの v2 形式と `app_name` 列）。
-- **変更対象**: `bench/live_bench.cpp`・`bench/BenchmarkCommandLine.cpp`（`--personal-eval` ほかのオプション）、
-  `bench/ConversionQuality.cpp`（ケースの作り方、指標、互換キー `eval_source`・`profile_sha256`）、
-  `bench/CMakeLists.txt`（テスト）、`inference-host/src/InferenceEngine.cpp`（bench から `instruction_profile` を渡す入口。
+- **変更対象**: `bench/live_bench.cpp`（`--personal-eval` ほかのオプション）、
+  `bench/PersonalEval.cpp`・`bench/PersonalEval.h`（学習ストアの読み取りとケースの作り方）、
+  `bench/ConversionQuality.cpp`（指標、互換キー `eval_source`・`profile_sha256`）、
+  `bench/CMakeLists.txt`・`bench/personal_eval_test.cpp`・`bench/AssertPersonalEvalOutput.cmake`（テスト）、`inference-host/src/InferenceEngine.cpp`（bench から `instruction_profile` を渡す入口。
   Host の要求処理からは使わない）、
   `scripts/run-quality-bench.py`（`eval_source` を持たない結果を `bundled`、`profile_sha256` を持たない結果を `none` として
   比べる）、

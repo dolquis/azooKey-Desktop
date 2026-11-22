@@ -16,6 +16,9 @@ target_compile_definitions(azookey_sqlite3 PRIVATE
   SQLITE_TEMP_STORE=3
   # The store also sets PRAGMA secure_delete; this makes it the default.
   SQLITE_SECURE_DELETE
+  # Page-cache memory is allocated (and freed, zeroed) page by page instead of
+  # in a bulk block that is only released when the connection closes.
+  SQLITE_DEFAULT_PCACHE_INITSZ=0
   SQLITE_OMIT_DEPRECATED
   SQLITE_OMIT_SHARED_CACHE
 )

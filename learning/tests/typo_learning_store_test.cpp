@@ -49,9 +49,14 @@ class SwitchableCrypto final : public ByteCrypto {
     return !fail_encrypt && inner_.Encrypt(plain, cipher);
   }
   bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
-    return inner_.Decrypt(cipher, plain);
+    if (!inner_.Decrypt(cipher, plain)) return false;
+    // Refuses only a database (the v2 store), so v1 files still read.
+    static constexpr char kDatabaseHeader[] = "SQLite format 3";
+    return !(fail_database_decrypt && plain.size() >= sizeof(kDatabaseHeader) &&
+             std::memcmp(plain.data(), kDatabaseHeader, sizeof(kDatabaseHeader)) == 0);
   }
   bool fail_encrypt{false};
+  bool fail_database_decrypt{false};
 
  private:
   azookey::learning::test::TestByteCrypto inner_;
@@ -388,20 +393,45 @@ TEST_F(TypoLearningStoreTest, EmptyTruncatedAndSchemalessV2AreCorruptAndLoseNoV1
       {valid.substr(0, valid.size() / 2), ""},
       {WithUserVersion(valid, 0), "schema"},
   };
+  uint64_t now = kNow;
   for (const auto& c : cases) {
     SCOPED_TRACE(c.reason.empty() ? "truncated" : c.reason);
     WriteEncrypted(paths_.v2_store, c.bytes);
+    const auto corrupt_bytes = ReadBytes(EncryptedPathFor(paths_.v2_store));
+    // A start of its own second, so each corrupt file gets its own copy.
+    ++now;
     auto store = MakeStore();
-    const auto result = store->Load(kNow);
+    const auto result = store->Load(now);
     EXPECT_EQ(result.mode, TypoLearningMode::V2);
     EXPECT_TRUE(result.rebuilt_from_corruption);
     if (!c.reason.empty()) {
       EXPECT_EQ(result.corruption_reason, c.reason);
     }
+    auto copy = EncryptedPathFor(paths_.v2_store);
+    copy += ".corrupt-" + std::to_string(now);
+    EXPECT_EQ(ReadBytes(copy), corrupt_bytes);
     // The pairs come back from the v1 backup.
-    EXPECT_EQ(store->LookupReadingPair("こんちには", 3, kNow), "こんにちは");
+    EXPECT_EQ(store->LookupReadingPair("こんちには", 3, now), "こんにちは");
     EXPECT_EQ(store->origin(), TypoStoreOrigin::V1Migrated);
   }
+}
+
+TEST_F(TypoLearningStoreTest, ADifferentCopyFromTheSameSecondStopsSavingInsteadOfDroppingTheFile) {
+  WriteEncrypted(paths_.v2_store, "garbage");
+  const auto corrupt_bytes = ReadBytes(EncryptedPathFor(paths_.v2_store));
+  auto copy = EncryptedPathFor(paths_.v2_store);
+  copy += ".corrupt-" + std::to_string(kNow);
+  WriteBytes(copy, "an earlier corrupt file");
+  auto store = MakeStore();
+  const auto result = store->Load(kNow);
+  EXPECT_EQ(result.mode, TypoLearningMode::Blocked);
+  EXPECT_EQ(result.issue, TypoLearningLoadIssue::CorruptCopyFailed);
+  EXPECT_EQ(ReadBytes(copy), "an earlier corrupt file");
+  EXPECT_EQ(ReadBytes(EncryptedPathFor(paths_.v2_store)), corrupt_bytes);
+  // The same bytes from the same second count as already copied.
+  WriteBytes(copy, corrupt_bytes);
+  auto again = MakeStore();
+  EXPECT_EQ(again->Load(kNow).mode, TypoLearningMode::V2);
 }
 
 TEST_F(TypoLearningStoreTest, CorruptV2WithoutV1FilesIsRebuiltEmptyAndReplaced) {
@@ -926,4 +956,92 @@ TEST(TypoCorrectionStoreRowsTest, WithoutPairRowsKeepsEveryOtherByte) {
   EXPECT_FALSE(store.Put(TypoCorrectionEntry{"あ", "い", TypoCorrectionRecord{1, 1}}));
   EXPECT_FALSE(store.Put(TypoCorrectionEntry{"きょうわ", "きょうは", TypoCorrectionRecord{0, 1}}));
   EXPECT_TRUE(store.Put(TypoCorrectionEntry{"きょうわ", "きょうは", TypoCorrectionRecord{2, 1}}));
+}
+
+TEST_F(TypoLearningStoreTest, AReloadedStoreForgetsAndResetsOnItsDeserializedDatabase) {
+  {
+    auto store = MakeStore();
+    store->Load(kNow);
+    for (int i = 0; i < 3; ++i) store->ObserveReadingPair("こんちには", "こんにちは", kNow);
+    store->ObserveReadingPair("きょうわ", "きょうは", kNow);
+    store->RecordPatternEvent(
+        PatternEvent("j_insert_after_u", "j_delete_after_u", TypoPatternOutcome::Accept, kNow));
+    store->RecordPatternEvent(PatternEvent("z_sub_x", "x_sub_z", TypoPatternOutcome::Accept, kNow));
+    ASSERT_TRUE(store->Save(kNow));
+  }
+  // A second start opens the saved bytes with sqlite3_deserialize.
+  auto store = MakeStore();
+  ASSERT_EQ(store->Load(kNow + 1).mode, TypoLearningMode::V2);
+  EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow + 1),
+            TypoForgetResult::Removed);
+  EXPECT_EQ(store->ForgetPattern("j_insert_after_u", "j_delete_after_u", kNow + 1),
+            TypoForgetResult::Removed);
+  auto saved = *Decrypted(paths_.v2_store);
+  EXPECT_FALSE(Contains(saved, "こんちには"));
+  EXPECT_FALSE(Contains(saved, "j_insert_after_u"));
+  EXPECT_TRUE(Contains(saved, "きょうわ"));
+
+  auto reloaded = MakeStore();
+  ASSERT_EQ(reloaded->Load(kNow + 2).mode, TypoLearningMode::V2);
+  EXPECT_FALSE(reloaded->LookupReadingPair("こんちには", 1, kNow + 2).has_value());
+  EXPECT_EQ(reloaded->Patterns().size(), 1u);
+  ASSERT_TRUE(reloaded->ResetAll(kNow + 2));
+  saved = *Decrypted(paths_.v2_store);
+  EXPECT_FALSE(Contains(saved, "きょうわ"));
+  EXPECT_FALSE(Contains(saved, "z_sub_x"));
+  EXPECT_TRUE(reloaded->ReadingPairs().empty());
+}
+
+TEST_F(TypoLearningStoreTest, AnUnreadableV1StoreFailsTheForgetBeforeTheBackupIsRewritten) {
+  MakeMigratedV2();
+  WriteUnreadable(v1_);
+  const auto backup_bytes = ReadBytes(EncryptedPathFor(paths_.v1_backup));
+  auto store = MakeStore();
+  const auto result = store->Load(kNow);
+  EXPECT_EQ(result.mode, TypoLearningMode::V2);
+  EXPECT_TRUE(result.v1_side_unreadable);
+  EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Failed);
+  EXPECT_EQ(ReadBytes(EncryptedPathFor(paths_.v1_backup)), backup_bytes);
+  EXPECT_EQ(store->LookupReadingPair("こんちには", 3, kNow), "こんにちは");
+}
+
+TEST_F(TypoLearningStoreTest, AnUnreadableBackupAloneIsReportedAsAnUnreadableV1Side) {
+  MakeMigratedV2();
+  WriteUnreadable(paths_.v1_backup);
+  auto store = MakeStore();
+  const auto result = store->Load(kNow);
+  EXPECT_EQ(result.mode, TypoLearningMode::V2);
+  EXPECT_FALSE(result.v1_store_pending);
+  EXPECT_TRUE(result.v1_side_unreadable);
+  EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Failed);
+}
+
+TEST_F(TypoLearningStoreTest, SuspendedWritesTouchNothingWhileReadingV1AsItIs) {
+  WriteEncrypted(v1_, std::string(kHeader) + "こんちには\tこんにちは\t3 1700000000\n");
+  crypto_.fail_encrypt = true;
+  auto store = MakeStore();
+  ASSERT_EQ(store->Load(kNow).mode, TypoLearningMode::V1Fallback);
+  crypto_.fail_encrypt = false;
+  const auto v1_bytes = ReadBytes(EncryptedPathFor(v1_));
+  store->SetWritesSuspended(true);
+  EXPECT_FALSE(store->ObserveReadingPair("こんちには", "こんにちは", kNow));
+  EXPECT_FALSE(store->Save(kNow));
+  EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Failed);
+  EXPECT_FALSE(store->ResetAll(kNow));
+  EXPECT_EQ(ReadBytes(EncryptedPathFor(v1_)), v1_bytes);
+  EXPECT_EQ(store->LookupReadingPair("こんちには", 3, kNow), "こんにちは");
+  EXPECT_FALSE(store->LookupReadingPair("こんちには", 4, kNow).has_value());
+}
+
+TEST_F(TypoLearningStoreTest, AFailedReadBackRemovesTheUnmarkedV2AndReadsV1AsItIs) {
+  WriteEncrypted(v1_, std::string(kHeader) + "こんちには\tこんにちは\t3 1700000000\n");
+  // Step 2 writes the v2 store; step 3 cannot read it back.
+  crypto_.fail_database_decrypt = true;
+  auto store = MakeStore();
+  const auto result = store->Load(kNow);
+  EXPECT_EQ(result.mode, TypoLearningMode::V1Fallback);
+  EXPECT_FALSE(Exists(EncryptedPathFor(paths_.v2_store)));
+  EXPECT_TRUE(Exists(EncryptedPathFor(v1_)));
+  EXPECT_FALSE(Exists(EncryptedPathFor(paths_.v1_backup)));
+  EXPECT_EQ(store->LookupReadingPair("こんちには", 3, kNow), "こんにちは");
 }

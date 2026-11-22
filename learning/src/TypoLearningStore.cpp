@@ -6,7 +6,9 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <locale>
 #include <sstream>
@@ -221,6 +223,14 @@ bool PathExists(const std::filesystem::path& path, bool& exists) {
   return !ec;
 }
 
+// Reads a stored (encrypted) file as it is on disk.
+bool ReadFileBytes(const std::filesystem::path& path, std::string& bytes) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) return false;
+  bytes.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  return !input.bad();
+}
+
 // Section 12.8 "パス": the state of a logical path from ReadProtectedText. For
 // the v1 store, a lone M34 plaintext backup counts as missing.
 FileState ReadState(const std::filesystem::path& logical, const ByteCrypto& crypto,
@@ -425,6 +435,11 @@ class TypoLearningStore::Database {
       return nullptr;
     }
     auto db = std::make_unique<Database>(raw);
+    // Lookaside slots are reused without going through xFree, so they could
+    // keep a bound reading until the connection closes; turn them off.
+    if (sqlite3_db_config(raw, SQLITE_DBCONFIG_LOOKASIDE, nullptr, 0, 0) != SQLITE_OK) {
+      return nullptr;
+    }
     int ignored = 0;
     sqlite3_db_config(raw, SQLITE_DBCONFIG_DEFENSIVE, 1, &ignored);
     sqlite3_db_config(raw, SQLITE_DBCONFIG_TRUSTED_SCHEMA, 0, &ignored);
@@ -790,13 +805,15 @@ void TypoLearningStore::EnterV2(TypoLearningLoadResult& result) {
 }
 
 bool TypoLearningStore::WriteDatabase(bool apply_limits, uint64_t now) {
-  if (!db_) return false;
-  if (apply_limits && db_->Origin() != TypoStoreOrigin::None &&
-      !db_->ApplyRetention(limits_, now)) {
+  return db_ && WriteDatabase(*db_, apply_limits, now);
+}
+
+bool TypoLearningStore::WriteDatabase(Database& db, bool apply_limits, uint64_t now) const {
+  if (apply_limits && db.Origin() != TypoStoreOrigin::None && !db.ApplyRetention(limits_, now)) {
     return false;
   }
   SqliteBuffer buffer;
-  if (!db_->Serialize(buffer)) return false;
+  if (!db.Serialize(buffer)) return false;
   return WriteProtectedText(paths_.v2_store, buffer.view(), *crypto_);
 }
 
@@ -863,15 +880,19 @@ bool TypoLearningStore::SettleV1Store(TypoLearningLoadResult& result) {
   if (backup_state == FileState::Unreadable) return pending(true);
 
   const auto v1_encrypted = EncryptedPathFor(paths_.v1_store);
+  const auto backup_encrypted = EncryptedPathFor(paths_.v1_backup);
   if (backup_state == FileState::Missing) {
     FileLockFailure failure;
     auto v1_lock = AcquireExclusiveFileLockForPath(v1_encrypted, failure);
     auto backup_lock =
-        v1_lock ? AcquireExclusiveFileLockForPath(EncryptedPathFor(paths_.v1_backup), failure)
-                : std::nullopt;
+        v1_lock ? AcquireExclusiveFileLockForPath(backup_encrypted, failure) : std::nullopt;
     if (!backup_lock) return pending(false);
+    // rename replaces an existing target, so the backup is checked again under
+    // its lock: one that appeared meanwhile is never overwritten.
+    bool appeared = true;
+    if (!PathExists(backup_encrypted, appeared) || appeared) return pending(false);
     std::error_code ec;
-    std::filesystem::rename(v1_encrypted, EncryptedPathFor(paths_.v1_backup), ec);
+    std::filesystem::rename(v1_encrypted, backup_encrypted, ec);
     return ec ? pending(false) : true;
   }
 
@@ -958,6 +979,13 @@ TypoLearningLoadResult TypoLearningStore::Load(uint64_t now_epoch_sec) {
   } else if (v1_state == FileState::Unreadable) {
     result.v1_store_pending = true;
     result.v1_side_unreadable = true;
+  } else {
+    // Only the backup is left on the v1 side; a reading-pair forget needs it.
+    std::string backup_text;
+    if (ReadState(paths_.v1_backup, *crypto_, backup_text, false) == FileState::Unreadable) {
+      result.v1_side_unreadable = true;
+    }
+    SecureErase(backup_text);
   }
   EnterV2(result);
   return result;
@@ -1014,11 +1042,20 @@ void TypoLearningStore::RecoverFromCorruption(uint64_t now, const std::string& r
   if (!std::filesystem::exists(stored, ec)) stored = paths_.v2_store;
   auto copy = stored;
   copy += ".corrupt-" + std::to_string(now);
-  const bool kept =
-      !ec &&
-      (std::filesystem::exists(copy, ec) ||
-       (!ec && std::filesystem::copy_file(stored, copy, std::filesystem::copy_options::none, ec) &&
-        !ec));
+  bool kept = false;
+  bool copy_exists = false;
+  if (!ec && PathExists(copy, copy_exists)) {
+    if (copy_exists) {
+      // A copy from the same second counts only if it holds these bytes; a
+      // different corrupt file is never dropped unseen, so saving stops.
+      std::string existing;
+      std::string current;
+      kept = ReadFileBytes(copy, existing) && ReadFileBytes(stored, current) && existing == current;
+    } else {
+      kept =
+          std::filesystem::copy_file(stored, copy, std::filesystem::copy_options::none, ec) && !ec;
+    }
+  }
   if (!kept) {
     EnterBlocked(result, TypoLearningLoadIssue::CorruptCopyFailed);
     return;
@@ -1262,72 +1299,78 @@ size_t TypoLearningStore::EventCount() const {
 // --- Deletion ----------------------------------------------------------------
 
 // Removes the pair's rows from the v1 backup, then from the v1 store if it is
-// still there, keeping every other byte. Fails, changing nothing further, when
-// either cannot be read or written back.
+// still there, keeping every other byte. Both are read before either is
+// written, so an unreadable one fails the forget with no file changed.
 bool TypoLearningStore::RemovePairFromV1Side(const std::string& wrong, const std::string& correct,
                                              bool& removed) {
   removed = false;
+  struct Side {
+    std::filesystem::path path;
+    std::string rewritten;
+    bool removed{false};
+  };
+  std::vector<Side> sides;
+  const auto erase_all = [&] {
+    for (auto& side : sides) SecureErase(side.rewritten);
+  };
   for (const auto& [path, v1_rule] :
        {std::pair{paths_.v1_backup, false}, std::pair{paths_.v1_store, true}}) {
     std::string text;
     const auto state = ReadState(path, *crypto_, text, v1_rule);
     if (state == FileState::Missing) continue;
-    if (state == FileState::Unreadable) return false;
-    bool removed_here = false;
-    auto rewritten = TypoCorrectionStore::WithoutPairRows(text, wrong, correct, removed_here);
+    if (state == FileState::Unreadable) {
+      erase_all();
+      return false;
+    }
+    Side side{path, {}, false};
+    side.rewritten = TypoCorrectionStore::WithoutPairRows(text, wrong, correct, side.removed);
     SecureErase(text);
-    const bool ok = !removed_here || WriteProtectedText(path, rewritten, *crypto_);
-    SecureErase(rewritten);
-    if (!ok) return false;
-    removed = removed || removed_here;
+    sides.push_back(std::move(side));
   }
-  return true;
+  bool ok = true;
+  for (auto& side : sides) {
+    if (ok && side.removed) {
+      ok = WriteProtectedText(side.path, side.rewritten, *crypto_);
+      removed = removed || ok;
+    }
+  }
+  erase_all();
+  return ok;
 }
 
 bool TypoLearningStore::RemoveV1Files() {
   return RemoveProtectedFile(paths_.v1_backup) && RemoveProtectedFile(paths_.v1_store);
 }
 
-std::string TypoLearningStore::SnapshotDatabase() const {
+// A separate copy of the published database, so a change is published only
+// after it has been saved.
+std::unique_ptr<TypoLearningStore::Database> TypoLearningStore::CopyDatabase() const {
   SqliteBuffer buffer;
-  if (!db_ || !db_->Serialize(buffer)) return {};
-  return std::string(buffer.view());
-}
-
-void TypoLearningStore::RestoreDatabase(std::string& snapshot) {
-  std::unique_ptr<Database> restored;
+  if (!db_ || !db_->Serialize(buffer)) return nullptr;
+  std::string bytes(buffer.view());
+  std::unique_ptr<Database> copy;
   std::string reason;
-  if (Database::FromBytes(snapshot, restored, reason) == Database::OpenResult::Ok) {
-    db_ = std::move(restored);
-  }
-  SecureErase(snapshot);
+  // FromBytes erases `bytes`.
+  if (Database::FromBytes(bytes, copy, reason) != Database::OpenResult::Ok) return nullptr;
+  return copy;
 }
 
-// Runs `change` on the database, then VACUUM and a save; a failed save puts
-// the published contents back.
-bool TypoLearningStore::CommitDeletion(uint64_t now, bool& changed,
-                                       const std::function<bool(bool&)>& change) {
-  auto snapshot = SnapshotDatabase();
-  if (snapshot.empty()) return false;
+// Runs `change` on a copy of the database. When it changed anything (or
+// `always_save`), the copy is VACUUMed and saved, and replaces the published
+// database only once the save succeeded; any failure leaves the published
+// contents as they were (section 12.8 "学習の削除").
+bool TypoLearningStore::CommitDeletion(uint64_t now, bool always_save, bool& changed,
+                                       const std::function<bool(Database&, bool&)>& change) {
   changed = false;
-  if (!db_->Exec("BEGIN")) {
-    SecureErase(snapshot);
+  auto copy = CopyDatabase();
+  if (!copy || !copy->Exec("BEGIN")) return false;
+  if (!change(*copy, changed) || !copy->Exec("COMMIT")) {
+    copy->Exec("ROLLBACK");
     return false;
   }
-  if (!change(changed) || !db_->Exec("COMMIT")) {
-    db_->Exec("ROLLBACK");
-    SecureErase(snapshot);
-    return false;
-  }
-  if (!changed) {
-    SecureErase(snapshot);
-    return true;
-  }
-  if (!db_->Exec("VACUUM") || !WriteDatabase(true, now)) {
-    RestoreDatabase(snapshot);
-    return false;
-  }
-  SecureErase(snapshot);
+  if (!changed && !always_save) return true;
+  if (!copy->Exec("VACUUM") || !WriteDatabase(*copy, true, now)) return false;
+  db_ = std::move(copy);
   return true;
 }
 
@@ -1363,17 +1406,17 @@ TypoForgetResult TypoLearningStore::ForgetReadingPair(const std::string& wrong,
 
   if (!RemovePairFromV1Side(wrong, correct, removed_side)) return TypoForgetResult::Failed;
   bool changed = false;
-  const bool ok = CommitDeletion(now_epoch_sec, changed, [&](bool& any) {
+  const bool ok = CommitDeletion(now_epoch_sec, false, changed, [&](Database& db, bool& any) {
     for (const char* sql : {
              "DELETE FROM typo_reading_pairs WHERE wrong_reading = ?1 AND correct_reading = ?2",
              "DELETE FROM typo_events WHERE observed_reading = ?1 AND corrected_reading = ?2",
          }) {
-      auto statement = db_->Prepare(sql);
+      auto statement = db.Prepare(sql);
       if (!statement) return false;
       BindText(statement.get(), 1, wrong);
       BindText(statement.get(), 2, correct);
       if (sqlite3_step(statement.get()) != SQLITE_DONE) return false;
-      any = any || sqlite3_changes(db_->get()) > 0;
+      any = any || sqlite3_changes(db.get()) > 0;
     }
     return true;
   });
@@ -1388,18 +1431,18 @@ TypoForgetResult TypoLearningStore::ForgetPattern(const std::string& observed_pa
   // "v1 のまま読む" keeps no patterns.
   if (mode_ == TypoLearningMode::V1Fallback) return TypoForgetResult::NotFound;
   bool changed = false;
-  const bool ok = CommitDeletion(now_epoch_sec, changed, [&](bool& any) {
+  const bool ok = CommitDeletion(now_epoch_sec, false, changed, [&](Database& db, bool& any) {
     for (const char* sql : {
              "DELETE FROM typo_events WHERE pattern_id IN (SELECT id FROM typo_patterns "
              "WHERE observed_pattern = ?1 AND intended_pattern = ?2)",
              "DELETE FROM typo_patterns WHERE observed_pattern = ?1 AND intended_pattern = ?2",
          }) {
-      auto statement = db_->Prepare(sql);
+      auto statement = db.Prepare(sql);
       if (!statement) return false;
       BindText(statement.get(), 1, observed_pattern);
       BindText(statement.get(), 2, intended_pattern);
       if (sqlite3_step(statement.get()) != SQLITE_DONE) return false;
-      any = any || sqlite3_changes(db_->get()) > 0;
+      any = any || sqlite3_changes(db.get()) > 0;
     }
     return true;
   });
@@ -1423,22 +1466,14 @@ bool TypoLearningStore::ResetAll(uint64_t now_epoch_sec) {
   }
   // 2. The v1 files go first, so a later rebuild cannot bring the rows back.
   if (!RemoveV1Files()) return false;
-  // 3. Empty the learned tables (typo_settings is not learning) and save.
-  auto snapshot = SnapshotDatabase();
-  if (snapshot.empty()) return false;
-  if (!db_->Exec("BEGIN") || !db_->Exec("DELETE FROM typo_patterns") ||
-      !db_->Exec("DELETE FROM typo_events") || !db_->Exec("DELETE FROM typo_reading_pairs") ||
-      !db_->Exec("COMMIT")) {
-    db_->Exec("ROLLBACK");
-    SecureErase(snapshot);
-    return false;
-  }
-  if (!db_->Exec("VACUUM") || !WriteDatabase(true, now_epoch_sec)) {
-    RestoreDatabase(snapshot);
-    return false;
-  }
-  SecureErase(snapshot);
-  return true;
+  // 3. Empty a copy of the learned tables (typo_settings is not learning) and
+  // save it; the published contents stay until the save succeeds.
+  bool changed = false;
+  return CommitDeletion(now_epoch_sec, true, changed, [](Database& db, bool& any) {
+    any = true;
+    return db.Exec("DELETE FROM typo_patterns") && db.Exec("DELETE FROM typo_events") &&
+           db.Exec("DELETE FROM typo_reading_pairs");
+  });
 }
 
 // --- Backup items ------------------------------------------------------------

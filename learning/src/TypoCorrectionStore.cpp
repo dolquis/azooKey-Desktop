@@ -472,8 +472,11 @@ std::string TypoCorrectionStore::WithoutPairRows(std::string_view text, const st
         std::string row_wrong(line.substr(0, first_tab));
         std::string row_correct(line.substr(first_tab + 1, second_tab - first_tab - 1));
         if (escaped_fields) {
-          row_wrong = UnescapeTsvField(row_wrong);
-          row_correct = UnescapeTsvField(row_correct);
+          for (auto* field : {&row_wrong, &row_correct}) {
+            auto unescaped = UnescapeTsvField(*field);
+            SecureErase(*field);
+            *field = std::move(unescaped);
+          }
         }
         drop = row_wrong == wrong && row_correct == correct;
         SecureErase(row_wrong);

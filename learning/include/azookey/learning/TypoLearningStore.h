@@ -227,9 +227,10 @@ class TypoLearningStore {
   void EnterV2(TypoLearningLoadResult& result);
   bool StartEmpty(TypoStoreOrigin origin, uint64_t now);
   bool WriteDatabase(bool apply_limits, uint64_t now);
-  std::string SnapshotDatabase() const;
-  void RestoreDatabase(std::string& snapshot);
-  bool CommitDeletion(uint64_t now, bool& changed, const std::function<bool(bool&)>& change);
+  bool WriteDatabase(Database& db, bool apply_limits, uint64_t now) const;
+  std::unique_ptr<Database> CopyDatabase() const;
+  bool CommitDeletion(uint64_t now, bool always_save, bool& changed,
+                      const std::function<bool(Database&, bool&)>& change);
   bool RemovePairFromV1Side(const std::string& wrong, const std::string& correct, bool& removed);
   bool RemoveV1Files();
 };

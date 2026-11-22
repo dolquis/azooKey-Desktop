@@ -5,6 +5,8 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdlib>
+#include <mutex>
 
 #include "azookey/tsf/TextService.h"
 
@@ -21,9 +23,12 @@ namespace azookey::tsf::test {
 // runs (DEV-1828). So the guard also serves TextService's key-state reads and
 // writes through KeyStateHooksForTest: the modifiers it manages come from the
 // guard alone, and every other key from the thread as before.
+// The hooks are process-wide, but active guards belong to a single thread.
 class KeyboardStateGuard {
  public:
   KeyboardStateGuard() {
+    const std::lock_guard lock(current_mutex_);
+    if (current_ && !current_->CheckOwnerThread()) std::abort();
     has_original_ = GetKeyboardState(original_.data()) != FALSE;
     EXPECT_TRUE(has_original_) << "GetKeyboardState failed: " << GetLastError();
     for (const int vk : kModifierKeys) managed_[static_cast<size_t>(vk)] = true;
@@ -35,6 +40,8 @@ class KeyboardStateGuard {
 
   // Guards nest last-in, first-out only.
   ~KeyboardStateGuard() {
+    if (!CheckOwnerThread()) std::abort();
+    const std::lock_guard lock(current_mutex_);
     EXPECT_EQ(current_, this) << "KeyboardStateGuard destroyed out of order";
     current_ = previous_;
     azookey::tsf::testing::SetKeyStateHooksForTest(current_ ? &kHooks : nullptr);
@@ -45,6 +52,7 @@ class KeyboardStateGuard {
   KeyboardStateGuard& operator=(const KeyboardStateGuard&) = delete;
 
   void SetDown(int vk, bool down) {
+    if (!CheckOwnerThread()) return;
     const auto index = static_cast<size_t>(vk);
     managed_[index] = true;
     pinned_down_[index] = down;
@@ -56,6 +64,7 @@ class KeyboardStateGuard {
   static BOOL ReadKeyboardState(PBYTE state) { return HookGetKeyboardState(state); }
 
   void ClearSystemModifiers() {
+    if (!CheckOwnerThread()) return;
     SetDown(VK_CONTROL, false);
     SetDown(VK_LCONTROL, false);
     SetDown(VK_RCONTROL, false);
@@ -70,6 +79,7 @@ class KeyboardStateGuard {
   // key state and into the state TextService reads, keeping the toggle bits
   // and every other key as they are.
   void Reapply() {
+    if (!CheckOwnerThread()) return;
     down_ = pinned_down_;
     std::array<BYTE, 256> state{};
     if (!GetKeyboardState(state.data())) {
@@ -86,6 +96,14 @@ class KeyboardStateGuard {
       VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL,
       VK_MENU,  VK_LMENU,  VK_RMENU,  VK_LWIN,    VK_RWIN};
 
+  bool CheckOwnerThread() const {
+    const DWORD caller = GetCurrentThreadId();
+    if (caller == owner_thread_id_) return true;
+    ADD_FAILURE() << "KeyboardStateGuard belongs to thread " << owner_thread_id_
+                  << " but was accessed on thread " << caller;
+    return false;
+  }
+
   void Overlay(BYTE* state) const {
     for (size_t index = 0; index < down_.size(); ++index) {
       if (!managed_[index]) continue;
@@ -95,6 +113,8 @@ class KeyboardStateGuard {
   }
 
   static SHORT HookGetKeyState(int vk) {
+    const std::lock_guard lock(current_mutex_);
+    if (current_ && !current_->CheckOwnerThread()) return 0;
     const SHORT real = GetKeyState(vk);
     const auto index = static_cast<size_t>(vk) & 0xff;
     if (!current_ || !current_->managed_[index]) return real;
@@ -103,6 +123,8 @@ class KeyboardStateGuard {
   }
 
   static BOOL HookGetKeyboardState(PBYTE state) {
+    const std::lock_guard lock(current_mutex_);
+    if (current_ && !current_->CheckOwnerThread()) return FALSE;
     if (!GetKeyboardState(state)) return FALSE;
     if (current_) current_->Overlay(state);
     return TRUE;
@@ -111,7 +133,9 @@ class KeyboardStateGuard {
   // A replayed key runs with the key state saved for it, then the current one
   // is put back; the managed modifiers follow both.
   static BOOL HookSetKeyboardState(LPBYTE state) {
+    const std::lock_guard lock(current_mutex_);
     if (current_) {
+      if (!current_->CheckOwnerThread()) return FALSE;
       for (size_t index = 0; index < current_->down_.size(); ++index)
         if (current_->managed_[index]) current_->down_[index] = (state[index] & 0x80) != 0;
     }
@@ -120,8 +144,11 @@ class KeyboardStateGuard {
 
   static constexpr azookey::tsf::testing::KeyStateHooksForTest kHooks{
       &HookGetKeyState, &HookGetKeyboardState, &HookSetKeyboardState};
+  // A hook can already be in flight when the guard unregisters it.
+  static inline std::mutex current_mutex_;
   static inline KeyboardStateGuard* current_ = nullptr;
 
+  const DWORD owner_thread_id_ = GetCurrentThreadId();
   std::array<BYTE, 256> original_{};
   bool has_original_{false};
   std::array<bool, 256> managed_{};

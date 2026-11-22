@@ -3,6 +3,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "azookey/core/AiPrivacy.h"
@@ -318,6 +319,40 @@ TEST(AiBackendTest, RejectsValidJsonWithoutAStringResult) {
   for (const auto* content : {R"(["a"])", R"({"result":1})", R"({"result":null})",
                               R"({"results":"x"})", R"({"result":["a"]})"}) {
     EXPECT_EQ(TransformReplying(Reply(content)).error_class, AiErrorClass::Parse) << content;
+  }
+}
+// DEV-2163: a JSON scalar is plain text, not structured output; the trimmed
+// content is the result as it stands, quotes included.
+TEST(AiBackendTest, AcceptsJsonScalarContentAsPlainText) {
+  const std::vector<std::pair<std::string, std::string>> cases{
+      {"42", "42"}, {" true\n", "true"}, {"null", "null"}, {R"("引用")", R"("引用")"}};
+  for (const auto& [content, expected] : cases) {
+    const auto result = TransformReplying(Reply(content));
+    EXPECT_TRUE(result.ok) << content;
+    EXPECT_EQ(result.result, expected) << content;
+  }
+}
+// DEV-2163: a content that is one ``` fence, untagged or tagged json in any
+// case, around a JSON object is that object, under the structured-output rules.
+TEST(AiBackendTest, UnwrapsOneJsonFenceAroundAnObject) {
+  for (const auto* content :
+       {"```json\n{\"result\":\"整文\"}\n```", "```\n{\"result\":\"整文\"}\n```",
+        "  ```JSON \r\n{\"result\":\"整文\"}\r\n```\n"}) {
+    const auto result = TransformReplying(Reply(content));
+    EXPECT_TRUE(result.ok) << content;
+    EXPECT_EQ(result.result, "整文") << content;
+  }
+  EXPECT_EQ(TransformReplying(Reply("```json\n{\"result\":1}\n```")).error_class,
+            AiErrorClass::Parse);
+}
+// Any other fenced content stays plain text as it stands.
+TEST(AiBackendTest, KeepsOtherFencedContentAsPlainText) {
+  for (const auto* content :
+       {"```python\nx = 1\n```", "```json\n今日は\n```", "```json\n[\"a\"]\n```",
+        "```json\n{\"result\":\"整文\"}", "```{\"result\":\"整文\"}```"}) {
+    const auto result = TransformReplying(Reply(content));
+    EXPECT_TRUE(result.ok) << content;
+    EXPECT_EQ(result.result, content) << content;
   }
 }
 TEST(AiBackendTest, OnlyStopOrAbsentFinishReasonIsAccepted) {

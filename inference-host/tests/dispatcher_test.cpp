@@ -2919,6 +2919,51 @@ TEST_F(DispatcherTest, QueryLiveConversionInsertsPunctuationOnlyWhenAskedAndEnab
   EXPECT_TRUE(disabled->segments.empty());
 }
 
+// DEV-2178: invalid lines of the rules file are reported to the Dispatcher's
+// logger, which writes under the Host's logs directory (`--data-root` moves it).
+TEST_F(DispatcherTest, PunctuationRulesWarningGoesToTheDispatcherLogger) {
+  const auto root = std::filesystem::path(temp_directory.File("punctuation_root"));
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() { RemovePathNoThrow(path); }
+  } cleanup{root};
+  std::filesystem::create_directories(root);
+  const auto rules_path = root / "punctuation.tsv";
+  {
+    std::ofstream out(rules_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(out);
+    out << "not a rule\n";
+  }
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = root / "logs";
+  azookey::logging::RuntimeLogger logger(options);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   nullptr, nullptr, &logger);
+  auto config = engine.config();
+  config.dynamic_punctuation = true;
+  config.punctuation_rules_path = azookey::core::PathToUtf8(rules_path);
+  engine.ApplyConfig(config);
+
+  ipc::QueryLiveConversionRequest request{"きょうはいいてんきです", ""};
+  request.auto_punctuation = true;
+  ASSERT_TRUE(target
+                  .Dispatch(MakeReq(1406, ipc::MessageType::QueryLiveConversion,
+                                    ipc::BuildQueryLiveConversionRequest(request)))
+                  .has_value());
+
+  std::string log_text;
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(root / "logs", ec)) {
+    if (entry.path().extension() != ".jsonl") continue;
+    std::ifstream input(entry.path());
+    log_text.append(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(log_text.find("\"event\":\"punctuation_rules_invalid_lines\""), std::string::npos)
+      << log_text;
+}
+
 TEST_F(DispatcherTest, QueryLiveConversionDoesNotSaturateUserWordScore) {
   azookey::learning::UserWord word;
   word.word = "独自語";

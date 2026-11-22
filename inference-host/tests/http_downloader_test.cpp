@@ -28,6 +28,7 @@
 #include "azookey/host/HttpDownloader.h"
 #include "azookey/host/TrendingWordFetcher.h"
 #include "azookey/host/UpdateChecker.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 namespace {
 
@@ -644,6 +645,43 @@ TEST(AiHttpTest, HttpFailuresRemainStatusesAndDoNotExposeProviderBodies) {
     EXPECT_EQ(result.error, azookey::host::AiErrorClass::None);
     EXPECT_TRUE(result.body.empty());
   }
+}
+// DEV-2178: the default transport logs to the logger the Host passes, which
+// writes under the Host's logs directory (`--data-root` moves it).
+TEST(AiHttpTest, DefaultTransportLogsToTheGivenLogger) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  azookey::logging::RuntimeLoggerOptions logger_options;
+  logger_options.enabled = true;
+  logger_options.component = "host";
+  logger_options.logs_directory = temp.path() / "logs";
+  azookey::logging::RuntimeLogger logger(logger_options);
+  LocalHttpServer server("must not propagate provider text", false, 1, 0, 400);
+  ASSERT_TRUE(server.ok());
+  azookey::host::AiBackendOptions options;
+  options.backend = "openai";
+  const auto url = server.url();
+  options.endpoint = std::string(url.begin(), url.end());
+  options.api_key = "test-only-placeholder";
+  azookey::host::AiTransformRequest request;
+  request.text = "text";
+  request.ai_allowed = true;
+  request.external_allowed = true;
+  const azookey::host::AiBackend backend({}, &logger);
+  EXPECT_EQ(backend.Transform(request, options).error_class, azookey::host::AiErrorClass::Parse);
+  server.Wait();
+
+  std::string log_text;
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(temp.path() / "logs", ec)) {
+    if (entry.path().extension() != ".jsonl") continue;
+    std::ifstream input(entry.path(), std::ios::binary);
+    log_text.append(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(log_text.find("\"event\":\"ai_http_status\""), std::string::npos) << log_text;
+  EXPECT_NE(log_text.find("\"status\":400"), std::string::npos) << log_text;
+  EXPECT_EQ(log_text.find("must not propagate"), std::string::npos) << log_text;
 }
 TEST(AiHttpTest, RejectsNonLoopbackPlainHttpBeforeConnecting) {
   azookey::host::AiBackendOptions options;

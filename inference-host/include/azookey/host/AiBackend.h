@@ -7,6 +7,10 @@
 
 #include "azookey/host/RequestScheduler.h"
 
+namespace azookey::logging {
+class RuntimeLogger;
+}
+
 namespace azookey::host {
 
 // Anomalies: proofread-view-spec §1 detection for the view of proofread-view-spec §2. It and
@@ -65,7 +69,9 @@ using AiLocalTransform = std::function<AiTransformResult(const AiTransformReques
 // One synchronous entry point; the network transport is cancellable asynchronous WinHTTP.
 class AiBackend {
  public:
-  explicit AiBackend(AiHttpTransport transport = {});
+  // `logger` takes the default transport's HTTP failure records, so the Host
+  // passes its own to keep them in its logs directory; null records none.
+  explicit AiBackend(AiHttpTransport transport = {}, logging::RuntimeLogger* logger = nullptr);
   AiTransformResult Transform(AiTransformRequest request, const AiBackendOptions& options,
                               const AiCancellationFlag* cancel = nullptr,
                               const AiLocalTransform& local = {}) const;
@@ -74,7 +80,9 @@ class AiBackend {
   AiHttpTransport transport_;
 };
 
+// Failures go to ETW and, when `logger` is set, to that RuntimeLogger.
 AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& body,
-                          const std::atomic<bool>* cancel, AiDeadline deadline);
+                          const std::atomic<bool>* cancel, AiDeadline deadline,
+                          logging::RuntimeLogger* logger = nullptr);
 std::string BuildAiInstruction(const AiTransformRequest& request);
 }  // namespace azookey::host

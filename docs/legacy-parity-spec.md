@@ -77,6 +77,7 @@ enum class UserAction : uint16_t {
 
     // デバッグ
     ToggleDebugWindow,  // F10（読みが無いとき）
+    ToggleAlnum,        // 英数キー
 
     // 字種指定確定（docs/tsf-deep-integration-spec.md §3.6、DEV-1812）
     CommitHiragana,           // F6

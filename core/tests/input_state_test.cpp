@@ -67,6 +67,12 @@ constexpr UserAction kAllActions[] = {
     UserAction::StartKanaDouble,
     UserAction::Forget,
     UserAction::ToggleDebugWindow,
+    UserAction::ToggleAlnum,
+    UserAction::CommitHiragana,
+    UserAction::CommitKatakana,
+    UserAction::CommitHalfwidthKatakana,
+    UserAction::CommitFullwidthRoman,
+    UserAction::CommitHalfwidthRoman,
     UserAction::UndoCommit,
     UserAction::ShrinkSegment,
     UserAction::ExtendSegment,
@@ -87,19 +93,23 @@ struct Row {
   K expected[kActionCount];
 };
 
-// Next kind for every (state, UserAction) pair, in kAllActions order.
+// Next kind for each representative state fixture, in kAllActions order.
+// Selecting uses the whole reading. F6-F10 after resizing are covered by
+// SegmentEditingTest.CharacterFormKeysWhileResizedAskForTheRemainingReading.
 const Row kTransitionTable[] = {
     {"Idle",
      [] { return InputState{}; },
-     {K::Composing,    K::Composing, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
-      K::Idle,         K::Idle,      K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
-      K::UnicodeInput, K::Idle,      K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle}},
+     {K::Composing, K::Composing, K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
+      K::Idle,      K::Idle,      K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
+      K::Idle,      K::Idle,      K::UnicodeInput, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
+      K::Idle,      K::Idle,      K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle}},
     {"Composing",
      Composing,
      {K::Composing,    K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
       K::Composing,    K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
       K::Composing,    K::Composing, K::Idle,      K::Idle,      K::Composing, K::Composing,
       K::UnicodeInput, K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
+      K::Composing,    K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
       K::Composing,    K::Composing}},
     {"Previewing",
      Previewing,
@@ -107,6 +117,7 @@ const Row kTransitionTable[] = {
       K::Previewing,   K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing,
       K::Previewing,   K::Previewing, K::Idle,       K::Idle,       K::Previewing, K::Previewing,
       K::UnicodeInput, K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing,
+      K::Previewing,   K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing,
       K::Previewing,   K::Previewing}},
     {"Selecting",
      Selecting,
@@ -114,6 +125,7 @@ const Row kTransitionTable[] = {
       K::Selecting,    K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Idle,      K::Idle,      K::Idle,      K::Selecting, K::Selecting,
       K::UnicodeInput, K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
+      K::Selecting,    K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Selecting}},
     {"UnicodeInput",
      UnicodeInput,
@@ -122,7 +134,8 @@ const Row kTransitionTable[] = {
       K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::Idle,
       K::Idle,         K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
       K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
-      K::UnicodeInput}},
+      K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
+      K::UnicodeInput, K::UnicodeInput}},
 };
 
 TEST(InputStateTest, FixtureStatesHaveExpectedKinds) {

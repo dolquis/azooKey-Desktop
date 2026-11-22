@@ -848,6 +848,24 @@ class BundleGuardTests(unittest.TestCase):
             package = self.write_package(path, "technical_terms_lexicon.azdic", "lattice_core.azdic")
             self.assertEqual(check_bundle.check(bundle, package), [])
 
+    def test_accepts_bundle_at_or_below_dictionary_size_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = self.make_bundle(Path(temporary))
+            total = sum(path.stat().st_size for path in (bundle / "dict").glob("*.azdic"))
+            for limit in (total, total + 1):
+                with self.subTest(limit=limit), \
+                        mock.patch.object(check_bundle, "MAX_BUNDLED_AZDIC_BYTES", limit):
+                    self.assertEqual(check_bundle.check(bundle, None), [])
+
+    def test_rejects_bundle_over_dictionary_size_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = self.make_bundle(Path(temporary))
+            total = sum(path.stat().st_size for path in (bundle / "dict").glob("*.azdic"))
+            limit = total - 1
+            with mock.patch.object(check_bundle, "MAX_BUNDLED_AZDIC_BYTES", limit):
+                self.assertEqual(check_bundle.check(bundle, None),
+                                 [f"bundled .azdic total is {total} bytes, exceeding the limit of {limit} bytes"])
+
     def test_rejects_neologd_pack_wrong_layer_missing_notice_and_package_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)

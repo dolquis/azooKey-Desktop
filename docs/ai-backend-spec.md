@@ -555,7 +555,9 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
 - M16 は失敗時、原文を維持し、プロンプト窓の状態行に分類ごとの固定の案内（§7.2）を出す
   （`docs/legacy-parity-spec.md` §4.3。文言は `tsf-tip/src/PromptDialogModel.cpp`）。secure 由来の抑止は
   「セーフ入力のため AI変換を使用しません」を明示する（混乱回避）。Host の SafeMode（`error=safe_mode`）は
-  secure と別の案内「安全モードのため AI変換を使用しません」にする。
+  secure と別の案内「安全モードのため AI変換を使用しません」にする。外部 AI への明示同意（§14.2）だけが欠けているとき
+  は、TIP が選択を読まずに案内だけの窓を出し、「OpenAI への送信がオフのため AI変換を使用しません。設定の「AI サービス」で
+  オンにすると使えます。」を出す。出す条件と、案内を出さない他の不許可は `docs/legacy-parity-spec.md` §4.1 が定める。
 - M58-C は neural fallback の候補表示中、候補の下に分類別の固定案内を表示する。
   app 描画の UI-less 経路では候補 UIElement の説明として同じ案内を公開する。
   ホストアプリが説明を実際に描くかはアプリの実機確認対象とする。候補 UI を閉じるか

@@ -18633,6 +18633,16 @@ struct MagicConversionHarness {
     h.context.document->start = start;
     h.context.document->end = end;
   }
+  // The app profiles from settings members beside "aiBackend":"openai".
+  void SetProfiles(const std::string& members) {
+    const auto json =
+        azookey::ipc::json::Parse(std::string(R"({"aiBackend":"openai",)") + members + "}");
+    ASSERT_TRUE(json);
+    azookey::core::BracketSettings settings;
+    settings.profiles = std::make_shared<const azookey::core::AppProfileResolver>(
+        azookey::core::AppProfileResolver::FromSettings(*json));
+    h.service.set_bracket_settings_for_test(settings);
+  }
   // Two presses `gap_ms` apart; the window opens on the next candidate message.
   void DoubleTap(WPARAM key, uint64_t gap_ms = 200) {
     h.service.set_double_tap_now_for_test(1000);
@@ -18740,6 +18750,19 @@ TEST(TsfTipMagicConversionTest, TheAppsPromptPrefixGoesBeforeThePromptWhenSent) 
       {R"("profilesByApp":{"notepad.exe":{"promptPrefix":""}},)"
        R"("promptPrefixByApp":{"notepad.exe":"敬体で"})",
        "英語に翻訳"},
+      // DEV-2085: the window class layer (app-profile-spec §5) under the process
+      // name and over "default".
+      {R"("profilesByApp":{"Notepad":{"promptPrefix":"丁寧語で"}})", "丁寧語で\n英語に翻訳"},
+      {R"("profilesByApp":{"default":{"promptPrefix":"既定で"},)"
+       R"("Notepad":{"promptPrefix":"丁寧語で"}})",
+       "丁寧語で\n英語に翻訳"},
+      {R"("profilesByApp":{"Notepad":{"promptPrefix":"丁寧語で"},)"
+       R"("notepad.exe":{"promptPrefix":"敬体で"}})",
+       "敬体で\n英語に翻訳"},
+      // DEV-2085 (legacy-parity-spec §4.3): the prefix is trimmed; blanks alone add nothing.
+      {R"("profilesByApp":{"notepad.exe":{"promptPrefix":" \t丁寧語で\r\n"}})",
+       "丁寧語で\n英語に翻訳"},
+      {R"("profilesByApp":{"notepad.exe":{"promptPrefix":" \n "}})", "英語に翻訳"},
   };
   for (const auto& item : cases) {
     SCOPED_TRACE(item.profiles);
@@ -18844,14 +18867,6 @@ TEST(TsfTipMagicConversionTest, TheWindowNeedsTheSettingTheHostAnExternalAiAndAS
     EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
   }
   {
-    // ai-backend-spec section 14.2 (DEV-2161): normal without externalAiConsent sends nothing.
-    MagicConversionHarness m;
-    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
-    m.DoubleTap(kAlnumKey);
-    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
-    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
-  }
-  {
     MagicConversionHarness m;
     m.Select(L"Good morning.", 4, 4);
     m.DoubleTap(kAlnumKey);
@@ -18893,6 +18908,189 @@ TEST(TsfTipMagicConversionTest, SecureFieldsAndLongSelectionsGetANoticeOnly) {
     ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
     EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->state,
               azookey::tsf::PromptDialogState::Editing);
+  }
+}
+
+// ai-backend-spec section 7.5 (DEV-2177): when privacy.externalAiConsent is all
+// external AI lacks, the window only says where to turn it on. The selection is
+// not read, even when there is none, and nothing is sent; secure still comes first.
+TEST(TsfTipMagicConversionTest, WithoutOnlyTheConsentTheWindowSaysWhereToTurnItOn) {
+  const auto expect_consent_notice = [](MagicConversionHarness& m) {
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    const auto view = m.h.service.magic_conversion_view_for_test();
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Notice);
+    EXPECT_EQ(view->status,
+              azookey::tsf::PromptNoticeMessage(azookey::tsf::PromptNotice::ConsentRequired));
+    EXPECT_TRUE(view->selection.empty());
+    EXPECT_TRUE(m.h.service.magic_conversion_selection_for_test().empty());
+    EXPECT_TRUE(m.h.service.magic_conversion_request_for_test()->selection.empty());
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  };
+  for (const char* settings : {
+           R"({"privacy":{"mode":"normal"}})",
+           R"({"privacy":{"mode":"normal","externalAiConsent":false}})",
+           R"({})",  // An older file without privacy has no consent.
+           R"({"privacy":{"mode":"custom","custom":{"aiCandidate":true,"externalAi":true}}})",
+       }) {
+    SCOPED_TRACE(settings);
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(settings);
+    expect_consent_notice(m);
+  }
+  {
+    // Nothing is read, so no selection is needed either.
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.Select(L"Good morning.", 4, 4);
+    expect_consent_notice(m);
+    // Closing the notice leaves no session; with the consent the window opens.
+    m.h.service.cancel_magic_conversion_for_test();
+    ASSERT_FALSE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.set_privacy_settings_for_test(
+        R"({"privacy":{"mode":"normal","externalAiConsent":true}})");
+    m.Select(L"前 Good morning. 後", 2, 15);
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->state,
+              azookey::tsf::PromptDialogState::Editing);
+  }
+  {
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.scope.scope.value = IS_PASSWORD;
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->status,
+              azookey::tsf::PromptNoticeMessage(azookey::tsf::PromptNotice::Secure));
+  }
+}
+
+// DEV-2177: the consent notice is only for a missing consent. Another cause
+// (the mode, custom, the app's profile, the backend, the field) keeps the keys'
+// usual effect alone, as do the other conditions of the window.
+TEST(TsfTipMagicConversionTest, OtherCausesThanTheConsentGetNoNotice) {
+  const auto expect_no_window = [](MagicConversionHarness& m) {
+    m.DoubleTap(kAlnumKey);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  };
+  for (const char* settings : {
+           R"({"privacy":{"mode":"private"}})",
+           R"({"privacy":{"mode":"offline"}})",
+           R"({"privacy":{"mode":"custom","custom":{"aiCandidate":true,"externalAi":false}}})",
+           R"({"privacy":{"mode":"custom","custom":{"aiCandidate":false,"externalAi":true}}})",
+           R"({"privacy":{"mode":"normal","externalAiConsent":"yes"}})",
+       }) {
+    SCOPED_TRACE(settings);
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(settings);
+    expect_no_window(m);
+  }
+  for (const char* profile : {R"({"privacyMode":"private"})", R"({"aiBackend":"local-zenzai"})",
+                              R"({"aiBackend":"none"})"}) {
+    SCOPED_TRACE(profile);
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.SetProfiles(std::string(R"("profilesByApp":{"notepad.exe":)") + profile + "}");
+    expect_no_window(m);
+  }
+  for (const char* backend : {"none", "local-zenzai"}) {
+    SCOPED_TRACE(backend);
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.h.service.set_magic_conversion_for_test(true, backend);
+    expect_no_window(m);
+  }
+  {
+    // An app the TIP cannot resolve, with automatic secure detection off.
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(
+        R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+    m.h.service.set_foreground_app_for_test({"", "", false});
+    expect_no_window(m);
+  }
+  {
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.h.service.set_magic_conversion_for_test(false, "openai");
+    expect_no_window(m);
+  }
+  {
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.h.service.set_host_transform_capability_for_test(false);
+    expect_no_window(m);
+  }
+}
+
+// DEV-2085 (legacy-parity-spec §4.3): the prefix is resolved after the window's
+// checks. A window that may not send (secure, no consent, not allowed) shows its
+// own notice or none even for an app whose prefix is too long; one that may
+// send refuses the prompt with the prefix's notice and sends nothing.
+TEST(TsfTipMagicConversionTest, TheAppsPromptPrefixComesAfterTheChecksAndKeepsTheLimit) {
+  const auto limit = azookey::ipc::kMaxTransformPromptBytes;
+  const auto profiles = [](const std::string& prefix, const char* more = "") {
+    return std::string(R"("profilesByApp":{"notepad.exe":{"promptPrefix":")") + prefix + "\"" +
+           more + "}}";
+  };
+  const std::string too_long(limit - 1, 'p');
+  {
+    MagicConversionHarness m;
+    m.SetProfiles(profiles(too_long, R"(,"privacyMode":"secure")"));
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->status,
+              azookey::tsf::PromptNoticeMessage(azookey::tsf::PromptNotice::Secure));
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  }
+  {
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    m.SetProfiles(profiles(too_long));
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->status,
+              azookey::tsf::PromptNoticeMessage(azookey::tsf::PromptNotice::ConsentRequired));
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  }
+  {
+    MagicConversionHarness m;
+    m.SetProfiles(profiles(too_long, R"(,"privacyMode":"private")"));
+    m.DoubleTap(kAlnumKey);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+  {
+    // A prefix that leaves no room is fixed in the settings.
+    MagicConversionHarness m;
+    m.SetProfiles(profiles(too_long));
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+    const auto view = m.h.service.magic_conversion_view_for_test();
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+    EXPECT_EQ(view->status, L"アプリ別の前置きが長すぎます。設定で短くしてください。");
+  }
+  {
+    // A prefix that fits, with a prompt that does not fit beside it.
+    MagicConversionHarness m;
+    const std::string prefix(4000, 'p');
+    m.SetProfiles(profiles(prefix));
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.submit_magic_conversion_for_test(std::wstring(limit - prefix.size(), L'q'));
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+    const auto view = m.h.service.magic_conversion_view_for_test();
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+    EXPECT_EQ(view->status, L"アプリ別の前置きと合わせると指示が長すぎます。短くしてください。");
+    // One byte less fits and is sent with the prefix.
+    m.h.service.submit_magic_conversion_for_test(std::wstring(limit - prefix.size() - 1, L'q'));
+    ASSERT_TRUE(m.h.service.has_queued_transform_for_test());
+    EXPECT_EQ(m.h.service.magic_conversion_request_for_test()->prompt.size(), limit);
   }
 }
 

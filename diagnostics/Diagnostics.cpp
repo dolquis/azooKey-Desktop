@@ -396,10 +396,14 @@ j::Value RedactSettingsValue(const j::Value& value, const j::Value* schema,
     return j::Value(std::move(redacted));
   }
   if (!KeepSettingsScalar(value, schema, sensitive)) return j::Value("***redacted***");
-  if (value.IsString() && IsEndpointSettingName(key)) {
-    return j::Value(RedactUrlCredentials(value.AsString()));
+  if (!value.IsString()) return value;
+  // The free-text redaction runs on each kept string value, not on the serialized document: map
+  // keys such as "task-x.exe" must stay as they are, and rewriting a key could collide with
+  // another key.
+  if (IsEndpointSettingName(key)) {
+    return j::Value(core::RedactFreeText(RedactUrlCredentials(value.AsString())));
   }
-  return value;
+  return j::Value(core::RedactFreeText(value.AsString()));
 }
 
 struct SettingsProbe {
@@ -1908,7 +1912,7 @@ std::string RedactSettingsJson(std::string_view json) {
   // Without a parsed schema every path is unknown: only numbers and booleans under names the
   // body-field test does not match survive.
   static const auto schema = j::Parse(kSettingsSchemaJson);
-  return RedactFreeText(j::Stringify(RedactSettingsValue(*value, schema ? &*schema : nullptr)));
+  return j::Stringify(RedactSettingsValue(*value, schema ? &*schema : nullptr));
 }
 
 std::string RedactFreeText(std::string text) { return core::RedactFreeText(std::move(text)); }

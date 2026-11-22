@@ -63,3 +63,11 @@ target_link_libraries(atomic_file_tests
   PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
 )
 azookey_discover_tests(atomic_file_tests)
+
+# Links SQLite directly to craft fixture databases (an unmarked v2 store).
+add_executable(typo_learning_store_tests typo_learning_store_test.cpp)
+target_link_libraries(typo_learning_store_tests
+  PRIVATE azookey_learning azookey_sqlite3 GTest::gtest_main azookey_project_options
+    azookey_project_warnings
+)
+azookey_discover_tests(typo_learning_store_tests)

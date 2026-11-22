@@ -436,6 +436,60 @@ ImportCounts TypoCorrectionStore::Merge(const TypoCorrectionStore& other,
   return counts;
 }
 
+bool TypoCorrectionStore::Put(const TypoCorrectionEntry& entry) {
+  if (entry.record.count == 0 || !IsLearnablePair(entry.wrong_reading, entry.correct_reading)) {
+    return false;
+  }
+  table_[entry.wrong_reading][entry.correct_reading] = entry.record;
+  return true;
+}
+
+std::string TypoCorrectionStore::WithoutPairRows(std::string_view text, const std::string& wrong,
+                                                 const std::string& correct, bool& removed) {
+  std::string kept;
+  kept.reserve(text.size());
+  removed = false;
+  bool escaped_fields = false;
+  bool first_line = true;
+  size_t begin = 0;
+  while (begin < text.size()) {
+    const size_t newline = text.find('\n', begin);
+    const size_t content_end = newline == std::string_view::npos ? text.size() : newline;
+    const size_t end = newline == std::string_view::npos ? text.size() : newline + 1;
+    const std::string_view segment = text.substr(begin, end - begin);
+    const std::string_view line = text.substr(begin, content_end - begin);
+    begin = end;
+    bool drop = false;
+    // The same line rules as ParseText: the header only on the first line,
+    // later '#' lines (including appended headers) are comments.
+    if (first_line && line == kTypoCorrectionStoreEscapedTsvHeader) {
+      escaped_fields = true;
+    } else if (!line.empty() && line.front() != '#') {
+      const size_t first_tab = line.find('\t');
+      const size_t second_tab =
+          first_tab == std::string_view::npos ? first_tab : line.find('\t', first_tab + 1);
+      if (second_tab != std::string_view::npos) {
+        std::string row_wrong(line.substr(0, first_tab));
+        std::string row_correct(line.substr(first_tab + 1, second_tab - first_tab - 1));
+        if (escaped_fields) {
+          row_wrong = UnescapeTsvField(row_wrong);
+          row_correct = UnescapeTsvField(row_correct);
+        }
+        drop = row_wrong == wrong && row_correct == correct;
+        SecureErase(row_wrong);
+        SecureErase(row_correct);
+      }
+    }
+    first_line = false;
+    if (drop) {
+      removed = true;
+    } else {
+      kept.append(segment);
+    }
+  }
+  return kept;
+}
+
 void TypoCorrectionStore::Reset() { table_.clear(); }
 
 size_t TypoCorrectionStore::size() const {

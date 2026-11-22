@@ -274,8 +274,8 @@ RuntimeSettings SettingsForEngineConfig(RuntimeSettings settings, bool engine_sa
 // true when a writer outside the file lock replaced the file in between and the
 // flag is gone, so the Host writes it once more (DEV-2165). A flag turned off
 // on this same entry (enteredAt unchanged) is the user's clear, and a file that
-// cannot be read or is gone (another writer may have quarantined it) gets no
-// fresh write, so none of them counts.
+// cannot be read is not written, so neither counts. A file that is gone is
+// written again, as the entry itself creates a missing file.
 bool SafeModeFlagLostAfterEntry(const SettingsLoadResult& reloaded, std::string_view entered_at);
 
 // Sampled when runtime settings are applied; model reloads reuse the resolved value.

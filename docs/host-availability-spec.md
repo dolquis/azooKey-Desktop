@@ -466,11 +466,11 @@ Host は `SafeMode` に入るとき、`settings.json` のファイルロック�
 `safeMode` オブジェクトだけを合成して atomic に書き戻す（他のキーは保つ）。ファイルが
 存在するのに読めない、または JSON として解釈できない場合は書き換えず、その起動では
 `SafeMode` に入らない（`safe_mode_entered` を `result: "error"` で記録する）。書き戻した直後の
-再読込で、読めたファイルに flag が無く、`enteredAt` も Host が書いた値でないとき（ファイルロックの外の書き手がその間に
+再読込で flag が無く、`enteredAt` も Host が書いた値でないとき（ファイルロックの外の書き手がその間に
 ファイルを置き換えたとき）は、同じ `enteredAt` と `lastCrashCount` でもう 1 回だけ書き戻して読み直し、
 `safe_mode_flag_rewritten`（`result`）として記録する。放置すると、最初の `UpdateConfig` が flag の欠落を
 利用者の解除と読むためである。`enteredAt` が同じで `enabled=false` なら利用者の解除として書き戻さず、
-読めないファイルを書き換えず、消えたファイル（他の書き手が隔離したことがある）の代わりも書かない。書き直しに失敗したときは `result: "error"`（`error_code`）として記録し、
+読めないファイルも書き換えない。消えたファイルは、突入時と同じく作り直す。書き直しに失敗したときは `result: "error"`（`error_code`）として記録し、
 flag の無いまま起動を続ける（engine は SafeMode に入り、上の engine の状態による判定と設定への強制が当たる）。書き込みは
 TIP の設定監視にも届き、TIP は通常の設定変更と同じく Handshake をやり直す。
 スキーマと Host 側の読み書きパスは同じ PR / コミットで揃え、永続化されない不整合状態を

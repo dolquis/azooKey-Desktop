@@ -1585,10 +1585,10 @@ TEST(SettingsStoreTest, SafeModeClearedOnTheSameEntryIsNotALostFlag) {
   EXPECT_FALSE(azookey::host::SafeModeFlagLostAfterEntry(reloaded, "2026-09-22T01:02:03Z"));
 }
 
-// A file that cannot be read after the entry is not written over, nor is one
-// put where the file went away (another writer may have quarantined it), for
-// the reason the entry itself leaves such a file alone (section 8.5.3).
-TEST(SettingsStoreTest, SafeModeFlagIsNotRewrittenOverAnUnreadableOrMissingFile) {
+// A file that cannot be read after the entry is not written over, for the
+// reason the entry itself leaves it alone; a file that is gone is written
+// again, as the entry itself creates a missing file (section 8.5.3).
+TEST(SettingsStoreTest, SafeModeFlagIsNotRewrittenOverAnUnreadableFile) {
   ScopedTempDirectory temp("azookey_settings_safe_mode_flag_unreadable");
   const auto path = temp.path() / "settings.json";
   azookey::host::SettingsStore store(path);
@@ -1602,7 +1602,9 @@ TEST(SettingsStoreTest, SafeModeFlagIsNotRewrittenOverAnUnreadableOrMissingFile)
   std::filesystem::remove(path);
   const auto missing = store.Load();
   ASSERT_EQ(missing.status, azookey::host::SettingsLoadStatus::Missing);
-  EXPECT_FALSE(azookey::host::SafeModeFlagLostAfterEntry(missing, "2026-09-22T01:02:03Z"));
+  EXPECT_TRUE(azookey::host::SafeModeFlagLostAfterEntry(missing, "2026-09-22T01:02:03Z"));
+  ASSERT_TRUE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
+  EXPECT_TRUE(store.Load().settings.safe_mode.enabled);
 }
 
 TEST(SettingsStoreTest, BenchmarkHistoryRetainsSevenResultsAndLatestDiskSettings) {

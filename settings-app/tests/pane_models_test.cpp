@@ -290,6 +290,9 @@ TEST(LearningPaneModelTest, EveryErrorStoreAndConflictOptionHasAString) {
   }
   EXPECT_TRUE(names.contains("LearningError_other"));
   EXPECT_EQ(azookey::settings::LearningErrorResource("brand_new"), "LearningError_other");
+  // The host returns ipc::kLearningDataErrorBlocked; the pane must resolve that same value.
+  EXPECT_EQ(azookey::settings::LearningErrorResource(azookey::ipc::kLearningDataErrorBlocked),
+            "LearningError_blocked");
   for (const auto& tab : azookey::settings::kLearningStoreTabs) {
     EXPECT_TRUE(names.contains(std::string(tab.resource))) << tab.resource;
   }

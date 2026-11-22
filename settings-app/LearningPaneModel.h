@@ -47,13 +47,13 @@ inline constexpr std::array<std::string_view, 3> kConflictResolutions{"merge", "
 // Error categories the four responses carry (learning-data-management-spec section 4.5), the
 // payload constants in ipc/Payloads.h, and the BackupErrorCode names of archive failures. Each
 // has a "LearningError_<code>" string; any other falls back to "LearningError_other".
-inline constexpr std::array<std::string_view, 17> kLearningErrorCodes{
+inline constexpr std::array<std::string_view, 18> kLearningErrorCodes{
     "invalid_request",     "not_authenticated", "store_unavailable",
-    "save_failed",         "unsupported",       "invalid_path",
-    "destination_exists",  "source_missing",    "io",
-    "too_large",           "not_archive",       "bad_manifest",
-    "unsupported_version", "missing_item",      "checksum_mismatch",
-    "decrypt_failed",      "bad_item"};
+    "save_failed",         "unsupported",       "blocked",
+    "invalid_path",        "destination_exists", "source_missing",
+    "io",                  "too_large",         "not_archive",
+    "bad_manifest",        "unsupported_version", "missing_item",
+    "checksum_mismatch",   "decrypt_failed",    "bad_item"};
 
 std::string LearningErrorResource(std::string_view error);
 

@@ -494,6 +494,7 @@
   <data name="LearningError_store_unavailable" xml:space="preserve"><value>対象のデータを変換エンジンが開けません。</value></data>
   <data name="LearningError_save_failed" xml:space="preserve"><value>保存できませんでした。</value></data>
   <data name="LearningError_unsupported" xml:space="preserve"><value>この操作には対応していません。</value></data>
+  <data name="LearningError_blocked" xml:space="preserve"><value>プライバシーの設定またはセーフモードのため、学習データの書き出しと取り込みを止めています。</value></data>
   <data name="LearningError_invalid_path" xml:space="preserve"><value>ファイルの場所が正しくありません（絶対パスの .zip を指定してください）。</value></data>
   <data name="LearningError_destination_exists" xml:space="preserve"><value>同じ名前のファイルが既にあります。別の名前を選んでください。</value></data>
   <data name="LearningError_source_missing" xml:space="preserve"><value>取り込むファイルが見つかりません。</value></data>

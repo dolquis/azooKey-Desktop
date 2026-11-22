@@ -762,12 +762,15 @@ std::optional<CancelCatalogFetchRequest> ParseCancelCatalogFetchRequest(const st
 
 // Error codes carried in the `error` field of the four responses. Archive
 // failures use the BackupErrorCode strings ("invalid_path", "decrypt_failed",
-// ...) instead.
+// ...) instead. kLearningDataErrorBlocked is the export and import refusal of
+// section 8 (secure input, privacy settings or SafeMode); the name is also the
+// one user-dictionary-pos-spec section 6.8 uses.
 inline constexpr std::string_view kLearningDataErrorInvalidRequest = "invalid_request";
 inline constexpr std::string_view kLearningDataErrorNotAuthenticated = "not_authenticated";
 inline constexpr std::string_view kLearningDataErrorStoreUnavailable = "store_unavailable";
 inline constexpr std::string_view kLearningDataErrorSaveFailed = "save_failed";
 inline constexpr std::string_view kLearningDataErrorUnsupported = "unsupported";
+inline constexpr std::string_view kLearningDataErrorBlocked = "blocked";
 
 struct ListLearningEntriesRequest {
   // "learning" | "user_dict" | "typo" | "auto_word"; required.

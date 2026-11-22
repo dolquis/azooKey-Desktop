@@ -41,9 +41,6 @@ namespace azookey::host {
 namespace {
 
 constexpr std::int32_t kGenericFailureHresult = static_cast<std::int32_t>(0x80004005u);
-// learning-data-management-spec section 4.5: export and import refused by the
-// section 8 stop (the name user-dictionary-pos-spec section 6.8 also uses).
-constexpr std::string_view kLearningDataErrorBlocked = "blocked";
 
 logging::RuntimeLogger& DispatcherLogger(logging::RuntimeLogger* configured) {
   if (configured) return *configured;
@@ -2045,7 +2042,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Env
   ipc::ExportLearningDataResponse res;
   const auto reply = [&]() { return MakeResponse(req, ipc::BuildExportLearningDataResponse(res)); };
   if (LearningDataTransferBlocked()) {
-    res.error = std::string(kLearningDataErrorBlocked);
+    res.error = std::string(ipc::kLearningDataErrorBlocked);
     return reply();
   }
   const auto parsed = ipc::ParseExportLearningDataRequest(req.payload_json);
@@ -2083,7 +2080,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleImportLearningData(const ipc::Env
   ipc::ImportLearningDataResponse res;
   const auto reply = [&]() { return MakeResponse(req, ipc::BuildImportLearningDataResponse(res)); };
   if (LearningDataTransferBlocked()) {
-    res.error = std::string(kLearningDataErrorBlocked);
+    res.error = std::string(ipc::kLearningDataErrorBlocked);
     return reply();
   }
   const auto parsed = ipc::ParseImportLearningDataRequest(req.payload_json);
@@ -2491,7 +2488,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleImportUserDictionaryText(const ip
   // user-dictionary-pos-spec 6.8: the Host-wide privacy policy and SafeMode
   // decide before the path is looked at, as for a backup import.
   if (LearningDataTransferBlocked()) {
-    res.error = std::string(kLearningDataErrorBlocked);
+    res.error = std::string(ipc::kLearningDataErrorBlocked);
     return reply();
   }
   const auto parsed = ipc::ParseImportUserDictionaryTextRequest(req.payload_json);

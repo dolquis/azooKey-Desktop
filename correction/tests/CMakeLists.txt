@@ -1,0 +1,8 @@
+add_executable(correction_tests
+  correction_components_test.cpp
+  typo_correction_engine_test.cpp
+)
+target_link_libraries(correction_tests
+  PRIVATE azookey_correction GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(correction_tests)

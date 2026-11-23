@@ -18,17 +18,6 @@
 # --- planned -----------------------------------------------------------------
 
 [[allow]]
-ref = "core/src/QwertyAdjacency.cpp"
-kind = "planned"
-milestone = "M17"
-spec = "docs/typo-correction-learning-spec.md §12.4.6"
-reason = "FuzzyMatch の QWERTY 隣接表。M17 の横断 X-3-1 で新設する"
-files = [
-  "docs/typo-correction-learning-spec.md",
-  "docs/windows-tsf-host-architecture.md",
-]
-
-[[allow]]
 ref = "tsf-tip/src/TypingTempoTracker.h"
 kind = "planned"
 milestone = "M24"

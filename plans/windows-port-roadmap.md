@@ -518,7 +518,7 @@ bench / M7 / M9 ─→ M52
                   └─→ M55     （打ち間違え学習統合）
 M36-A ─→ M53                  （AutoWordStore の移行元として必須）
 M36-B / M32（DL 基盤）⇢ M53    （neologd_lexicon optional pack の取り込みは別 follow-up が M36-B/M32 の HttpDownloader+SHA256 を再利用。M36-B 単体は trending→AutoWordStore で別経路。spec §14.10。未完了時は当該 pack 無効）
-M35 ─→ M55                    （TypoLearningStore v1 を v2 統合エンジンへ昇格）
+M35 ─→ M55                    （TypoCorrectionStore（v1）を TypoLearningStore（v2）と統合エンジンへ昇格）
 M46 ─→ M55                    （secure 中の補正・学習抑止契約）
 M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
 M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
@@ -2635,8 +2635,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   `correction/KeyboardAdjacencyModel.cpp`、
   `correction/RomajiVariantNormalizer.cpp`、
   `correction/ReadingHypothesis.h`、
-  `learning/src/TypoLearningStore.cpp`（M35 の TypoCorrectionStore を改名・
-  拡張）、`ipc/src/Payloads.cpp`（`QueryCandidates` に `raw_keys` /
+  `learning/src/TypoLearningStore.cpp`（M35 の TypoCorrectionStore の v2。
+  v1 のクラスは移行と「v1 のまま読む」のために残す）、`ipc/src/Payloads.cpp`（`QueryCandidates` に `raw_keys` /
   `typo_correction_mode` optional フィールド追加）、`docs/typo-correction-learning-spec.md`
   （改訂）。
 - **受け入れ条件**（typo 補正指標は補正有効モードで採取する。

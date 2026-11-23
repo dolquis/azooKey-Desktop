@@ -2,8 +2,8 @@
 
 Attribution comes from THIRD_PARTY_LICENSES; versions are never copied here.
 Only the canonical release build (FetchContent, locked NuGet, app-local MSVC
-runtime) is supported. Missing or inconsistent evidence fails before writing
-output.
+runtime, sources committed under third_party/ with a PROVENANCE.json record)
+is supported. Missing or inconsistent evidence fails before writing output.
 """
 
 import argparse
@@ -20,6 +20,8 @@ import subprocess
 # redist directory than the CRT, so the search covers every --runtime-dir.
 RUNTIME_FILES = {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"}
 BUILD_ONLY = {"Microsoft.Windows.SDK.BuildTools", "Microsoft.Windows.SDK.BuildTools.MSIX"}
+# A source committed to the repo records its version and hashes beside it.
+VENDORED_RECORD = "PROVENANCE.json"
 # Each release MSI has its own SBOM (docs/sideload-packaging-spec.md 1.6.3).
 # A selector without "packages" belongs to the base MSI only.
 PACKAGES = ("base", "vulkan-addon")
@@ -85,6 +87,7 @@ def inventory(root, package="base"):
         raise ValueError("Missing or duplicate SBOM selectors")
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
     pinned = {"cmake:" + key for key in re.findall(r"set\((AZOOKEY_\w+_GIT_TAG)\s", cmake)}
+    pinned |= vendored_sources(root)
     if package == "base":
         if any(source.startswith("vulkan-sdk:") for source in sources):
             raise ValueError("Vulkan SDK attribution belongs to the Vulkan add-on")
@@ -97,6 +100,40 @@ def inventory(root, package="base"):
         if not sdk or set(sources) - sdk != pinned:
             raise ValueError("CMake/Vulkan SDK attribution coverage differs")
     return result
+
+
+def vendored_sources(root):
+    """Selectors every third_party/ directory with a provenance record must have."""
+    return {"vendored:" + record.parent.relative_to(root).as_posix()
+            for record in (root / "third_party").glob("*/" + VENDORED_RECORD)}
+
+
+def vendored(root, selector):
+    """Return the version, archive URL and archive SHA256 of a committed source.
+
+    Every file in the directory must be listed in its record with the SHA256 it
+    has, so the build cannot compile bytes the record does not describe.
+    """
+    base = (root / "third_party").resolve()
+    directory = (root / selector).resolve()
+    if directory.parent != base:
+        raise ValueError(f"Vendored source must be a third_party/ directory: {selector}")
+    record = read_json(directory / VENDORED_RECORD)
+    version = record.get("version", "")
+    archive = record.get("archive") or {}
+    url, digest = archive.get("url", ""), archive.get("sha256", "")
+    if not re.fullmatch(r"\d+(\.\d+)+", version):
+        raise ValueError(f"Vendored source needs a numeric version: {selector}")
+    if not url.startswith("https://") or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError(f"Vendored source needs an https archive URL and its SHA256: {selector}")
+    files = record.get("files") or {}
+    present = {path.name for path in directory.iterdir() if path.name != VENDORED_RECORD}
+    if not files or set(files) != present:
+        raise ValueError(f"Vendored files and their record differ: {selector}")
+    for name, expected in sorted(files.items()):
+        if sha256(directory / name) != expected:
+            raise ValueError(f"Vendored file differs from its record: {selector}/{name}")
+    return version, url, [{"algorithm": "SHA256", "checksumValue": digest}]
 
 
 def nuget_packages(root):
@@ -262,6 +299,9 @@ def complete(document, root, build_dir, runtime_info, runtime_dirs, msi, version
                     raise ValueError("CRT changed after version capture")
                 entries.append((entry["name"], entry["version"], "NOASSERTION",
                                 [{"algorithm": "SHA256", "checksumValue": digest}]))
+        elif source == "vendored":
+            version, download, checksums = vendored(root, selector)
+            entries.append((item["name"], version, download, checksums))
         elif source == "vulkan-sdk":
             sdk_version, digest = vulkan_sdk_header(build_dir, vulkan_sdk, selector)
             entries.append((item["name"], sdk_version, "NOASSERTION",

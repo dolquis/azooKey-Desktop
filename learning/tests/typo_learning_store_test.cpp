@@ -1174,3 +1174,18 @@ TEST_F(TypoLearningStoreTest, AV1StoreAlreadyAppendedToTheBackupIsNotAppendedAga
   EXPECT_EQ(*Decrypted(paths_.v1_backup), backup);
   EXPECT_FALSE(Exists(EncryptedPathFor(v1_)));
 }
+
+TEST_F(TypoLearningStoreTest, AV1StoreMatchingOnlyTheTailOfABackupRowIsStillAppended) {
+  MakeMigratedV2();
+  // A v1 store without the header whose text is the tail of a longer backup row.
+  const std::string v1_text = "こんちには\tこんにちは\t3 1700000000\n";
+  const std::string backup = std::string(kHeader) + "おこんちには\tこんにちは\t3 1700000000\n";
+  WriteEncrypted(paths_.v1_backup, backup);
+  WriteEncrypted(v1_, v1_text);
+  auto store = MakeStore();
+  const auto result = store->Load(kNow);
+  EXPECT_EQ(result.mode, TypoLearningMode::V2);
+  EXPECT_FALSE(result.v1_store_pending);
+  EXPECT_EQ(*Decrypted(paths_.v1_backup), backup + v1_text);
+  EXPECT_FALSE(Exists(EncryptedPathFor(v1_)));
+}

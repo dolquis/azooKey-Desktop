@@ -467,6 +467,29 @@ class TypoLearningStore::Database {
 
   sqlite3* get() const { return db_; }
 
+  // BEGIN on construction; ROLLBACK on destruction unless Commit() succeeded,
+  // so an early return or an exception (std::bad_alloc while copying rows)
+  // never leaves a transaction open.
+  class Transaction {
+   public:
+    explicit Transaction(const Database& db) : db_(db), open_(db.Exec("BEGIN")) {}
+    Transaction(const Transaction&) = delete;
+    Transaction& operator=(const Transaction&) = delete;
+    ~Transaction() {
+      if (open_) db_.Exec("ROLLBACK");
+    }
+    bool open() const { return open_; }
+    bool Commit() {
+      if (!open_ || !db_.Exec("COMMIT")) return false;
+      open_ = false;
+      return true;
+    }
+
+   private:
+    const Database& db_;
+    bool open_;
+  };
+
   // A connection to an empty in-memory database with the defensive settings.
   static std::unique_ptr<Database> Open() {
     sqlite3* raw = nullptr;
@@ -970,9 +993,12 @@ bool TypoLearningStore::SettleV1Store(TypoLearningLoadResult& result) {
   // A previous load may have appended the v1 store and then failed to remove
   // it; appending again would grow the backup by the whole v1 store at every
   // start, so a backup that already ends with it is only cleaned up.
-  const bool already_appended =
-      backup_text.size() >= v1_text.size() &&
-      backup_text.compare(backup_text.size() - v1_text.size(), v1_text.size(), v1_text) == 0;
+  // The match must start a line: a v1 store without the header could otherwise
+  // match the tail of a longer row in the backup and be removed unappended.
+  const size_t match_at = backup_text.size() - (std::min)(backup_text.size(), v1_text.size());
+  const bool already_appended = backup_text.size() >= v1_text.size() &&
+                                backup_text.compare(match_at, v1_text.size(), v1_text) == 0 &&
+                                (match_at == 0 || backup_text[match_at - 1] == '\n');
   bool appended = already_appended;
   if (!already_appended) {
     // Built in one reserved buffer, so no decrypted copy is left behind by a
@@ -1302,11 +1328,8 @@ std::optional<int64_t> TypoLearningStore::RecordPatternEvent(const TypoPatternEv
 
   const bool accepted = event.outcome == TypoPatternOutcome::Accept;
   const uint64_t now = event.now_epoch_sec;
-  if (!db_->Exec("BEGIN")) return std::nullopt;
-  const auto rollback = [&] {
-    db_->Exec("ROLLBACK");
-    return std::nullopt;
-  };
+  Database::Transaction transaction(*db_);
+  if (!transaction.open()) return std::nullopt;
   auto record = db_->FindPattern(key).value_or(key);
   if (record.id == 0) record.created_at = now;
   if (accepted) {
@@ -1319,13 +1342,13 @@ std::optional<int64_t> TypoLearningStore::RecordPatternEvent(const TypoPatternEv
   }
   record.updated_at = now;
   const auto id = db_->WritePattern(record, now);
-  if (!id) return rollback();
+  if (!id) return std::nullopt;
 
   auto statement = db_->Prepare(
       "INSERT INTO typo_events (observed_reading, corrected_reading, selected_surface, "
       "typo_type, pattern_id, app_name, left_context_hash, event_type, created_at) "
       "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)");
-  if (!statement) return rollback();
+  if (!statement) return std::nullopt;
   BindText(statement.get(), 1, event.observed_reading);
   BindText(statement.get(), 2, event.corrected_reading);
   BindOptionalText(statement.get(), 3, event.selected_surface);
@@ -1335,8 +1358,7 @@ std::optional<int64_t> TypoLearningStore::RecordPatternEvent(const TypoPatternEv
   BindOptionalText(statement.get(), 7, event.left_context_hash);
   BindText(statement.get(), 8, accepted ? kEventAccept : kEventReject);
   sqlite3_bind_int64(statement.get(), 9, ToSql(now));
-  if (sqlite3_step(statement.get()) != SQLITE_DONE) return rollback();
-  if (!db_->Exec("COMMIT")) return rollback();
+  if (sqlite3_step(statement.get()) != SQLITE_DONE || !transaction.Commit()) return std::nullopt;
   return id;
 }
 
@@ -1636,16 +1658,14 @@ bool TypoLearningStore::ParsePatternsText(std::string_view text,
 std::optional<ImportCounts> TypoLearningStore::MergeReadingPairs(const TypoCorrectionStore& other,
                                                                  ImportConflictPolicy policy) {
   if (mode_ == TypoLearningMode::V1Fallback) return v1_->Merge(other, policy);
-  if (!db_ || !db_->Exec("BEGIN")) return std::nullopt;
-  // One transaction: a failure part of the way rolls every pair back, so the
-  // import changes nothing (learning-data-management-spec section 6).
-  const auto fail = [&]() -> std::optional<ImportCounts> {
-    db_->Exec("ROLLBACK");
-    return std::nullopt;
-  };
-  ImportCounts counts;
+  if (!db_) return std::nullopt;
   auto entries = other.All();
   const ScopedEntryErase erase_entries{entries};
+  // One transaction: a failure part of the way rolls every pair back, so the
+  // import changes nothing (learning-data-management-spec section 6).
+  Database::Transaction transaction(*db_);
+  if (!transaction.open()) return std::nullopt;
+  ImportCounts counts;
   for (const auto& entry : entries) {
     const auto existing = db_->FindPair(entry.wrong_reading, entry.correct_reading);
     auto merge = Database::PairMerge::Replace;
@@ -1659,11 +1679,11 @@ std::optional<ImportCounts> TypoLearningStore::MergeReadingPairs(const TypoCorre
     }
     if (!db_->UpsertPair(entry.wrong_reading, entry.correct_reading, entry.record.count,
                          entry.record.last_updated_epoch_sec, merge)) {
-      return fail();
+      return std::nullopt;
     }
     ++counts.imported;
   }
-  if (!db_->Exec("COMMIT")) return fail();
+  if (!transaction.Commit()) return std::nullopt;
   return counts;
 }
 
@@ -1677,11 +1697,9 @@ std::optional<ImportCounts> TypoLearningStore::MergePatterns(
   }
   if (!db_) return std::nullopt;
   const auto rows = db_->CountRows("typo_patterns");
-  if (!rows || !db_->Exec("BEGIN")) return std::nullopt;
-  const auto fail = [&]() -> std::optional<ImportCounts> {
-    db_->Exec("ROLLBACK");
-    return std::nullopt;
-  };
+  if (!rows) return std::nullopt;
+  Database::Transaction transaction(*db_);
+  if (!transaction.open()) return std::nullopt;
   // Each key is found through the unique index, and new keys stop at the
   // pattern limit, so even a whole archive item of distinct keys finishes in
   // time linear in its rows.
@@ -1699,7 +1717,7 @@ std::optional<ImportCounts> TypoLearningStore::MergePatterns(
       }
       auto record = incoming;
       record.id = 0;
-      if (!db_->WritePattern(record, now_epoch_sec)) return fail();
+      if (!db_->WritePattern(record, now_epoch_sec)) return std::nullopt;
       ++pattern_rows;
       ++counts.imported;
       continue;
@@ -1726,10 +1744,10 @@ std::optional<ImportCounts> TypoLearningStore::MergePatterns(
         ++counts.skipped;
         continue;
     }
-    if (!db_->WritePattern(*existing, now_epoch_sec)) return fail();
+    if (!db_->WritePattern(*existing, now_epoch_sec)) return std::nullopt;
     ++counts.imported;
   }
-  if (!db_->Exec("COMMIT")) return fail();
+  if (!transaction.Commit()) return std::nullopt;
   return counts;
 }
 

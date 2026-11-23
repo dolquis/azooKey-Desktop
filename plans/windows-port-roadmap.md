@@ -655,6 +655,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     窓に表示される
   - [適用] で、選択の範囲が窓を開いたときの文字列のままのときだけ、結果がその範囲に置換される
   - secure の入力先では選択を読まず、Host へも送らない（窓は案内だけを出す）
+  - 外部 AI の同意だけが欠けるときは、選択を読まず送信もせずに、設定で OpenAI への送信をオンにする案内の窓を出す
+    （`docs/ai-backend-spec.md` §7.5）
   - M16 / M58-C / X-3-3 / X-3-6 が Host 側で同一の `AiBackend::Transform` を通り、別 backend 実装に
     分岐しない（4 つの `AiTask` の正規化。Host 側の単体テストは `inference-host/tests/ai_backend_test.cpp`）
   - プライバシー判定が secure（AI 候補生成不可）を返すとき、`AiBackend::Transform` が外部送信せず

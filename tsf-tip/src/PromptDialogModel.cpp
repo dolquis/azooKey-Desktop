@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <string_view>
 #include <utility>
 
 #include "azookey/ipc/Limits.h"
@@ -38,6 +39,31 @@ std::wstring Trim(std::wstring text) {
   return text.substr(first, last - first + 1);
 }
 
+// Trim for the app's prefix, which stays UTF-8 as the settings have it: the
+// same blanks at both ends, the ideographic space as its three bytes.
+std::string TrimUtf8(const std::string& text) {
+  constexpr std::string_view kIdeographicSpace = "\xE3\x80\x80";
+  constexpr std::string_view kAsciiBlanks = " \t\r\n";
+  std::string_view rest = text;
+  for (;;) {
+    if (!rest.empty() && kAsciiBlanks.find(rest.front()) != std::string_view::npos)
+      rest.remove_prefix(1);
+    else if (rest.starts_with(kIdeographicSpace))
+      rest.remove_prefix(kIdeographicSpace.size());
+    else
+      break;
+  }
+  for (;;) {
+    if (!rest.empty() && kAsciiBlanks.find(rest.back()) != std::string_view::npos)
+      rest.remove_suffix(1);
+    else if (rest.ends_with(kIdeographicSpace))
+      rest.remove_suffix(kIdeographicSpace.size());
+    else
+      break;
+  }
+  return std::string(rest);
+}
+
 }  // namespace
 
 std::wstring_view InitialPrompt(core::PromptPreset preset) noexcept {
@@ -45,8 +71,16 @@ std::wstring_view InitialPrompt(core::PromptPreset preset) noexcept {
 }
 
 std::wstring_view PromptNoticeMessage(PromptNotice notice) noexcept {
-  return notice == PromptNotice::Secure ? L"セーフ入力のため AI変換を使用しません。"
-                                        : L"選択が長すぎます。4096 文字までにしてください。";
+  switch (notice) {
+    case PromptNotice::Secure:
+      return L"セーフ入力のため AI変換を使用しません。";
+    case PromptNotice::SelectionTooLong:
+      return L"選択が長すぎます。4096 文字までにしてください。";
+    case PromptNotice::ConsentRequired:
+      return L"OpenAI への送信がオフのため AI変換を使用しません。"
+             L"設定の「AI サービス」でオンにすると使えます。";
+  }
+  return {};
 }
 
 std::wstring_view TransformFailureMessage(const std::optional<std::string>& error_class,
@@ -77,7 +111,9 @@ std::wstring_view TransformFailureMessage(const std::optional<std::string>& erro
 PromptDialogModel PromptDialogModel::ForSelection(core::PromptPreset preset, std::wstring selection,
                                                   std::string prompt_prefix) {
   PromptDialogModel model;
-  model.prompt_prefix_ = std::move(prompt_prefix);
+  // legacy-parity-spec §4.3: a prefix of blanks only adds nothing, and the
+  // limit counts what is left.
+  model.prompt_prefix_ = TrimUtf8(prompt_prefix);
   model.view_.state = PromptDialogState::Editing;
   model.view_.prompt = std::wstring(InitialPrompt(preset));
   model.view_.selection = std::move(selection);

@@ -397,6 +397,7 @@ void TipLocalSettings::Reload() noexcept {
     next = core::ParseBracketSettings(contents);
     if (const auto json = ipc::json::Parse(contents); json && json->IsObject()) {
       ai.privacy = core::ParseAiPrivacy(*json);
+      ai.external_ai_needs_consent = core::ExternalAiNeedsConsent(*json);
       ai.privacy_policy = core::ParsePrivacyPolicy(*json);
       ai.prediction_allowed = ParsePredictionPermission(*json);
       ai.show_secure_indicator = ParseShowSecureIndicator(*json);
@@ -661,6 +662,7 @@ void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
   const auto json = ipc::json::Parse(contents);
   const std::lock_guard<std::mutex> lock(mutex_);
   ai_.privacy = json ? core::ParseAiPrivacy(*json) : core::AiPrivacy{};
+  ai_.external_ai_needs_consent = json && core::ExternalAiNeedsConsent(*json);
   ai_.privacy_policy = json ? core::ParsePrivacyPolicy(*json) : core::PrivacyPolicy{};
   ai_.prediction_allowed = json && ParsePredictionPermission(*json);
   ai_.show_secure_indicator = !json || ParseShowSecureIndicator(*json);

@@ -235,8 +235,9 @@ TransformSelectedTextResponse:
 
 要求の id は Envelope の `request_id` を使い、payload には載せない。`selection`・`prompt`・
 `context`・`result` のバイト数の上限は `ipc/include/azookey/ipc/Limits.h` が正典である。
-TIP は、入力先のアプリの `promptPrefix`（`docs/app-profile-spec.md` §4.1）が空でなければ、利用者の指示の前に
-改行で区切って付けて `prompt` に載せる。`prompt` の上限は前置きを含めた長さに掛かる。
+TIP は、入力先のアプリの `promptPrefix`（`docs/app-profile-spec.md` §4.1）の両端の空白・タブ・改行・全角空白を除き、
+除いた後が空でなければ、利用者の指示の前に改行で区切って付けて `prompt` に載せる。`prompt` の上限は、除いた後の
+前置きを含めた長さに掛かる。
 privacy のフィールドが欠けた要求と型が違う要求は、secure で AI 不可の要求として扱う。ほかのフィールドが
 型の違う値で届いた要求は、欠落とみなさず不正な要求とする。
 
@@ -555,7 +556,9 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
 - M16 は失敗時、原文を維持し、プロンプト窓の状態行に分類ごとの固定の案内（§7.2）を出す
   （`docs/legacy-parity-spec.md` §4.3。文言は `tsf-tip/src/PromptDialogModel.cpp`）。secure 由来の抑止は
   「セーフ入力のため AI変換を使用しません」を明示する（混乱回避）。Host の SafeMode（`error=safe_mode`）は
-  secure と別の案内「安全モードのため AI変換を使用しません」にする。
+  secure と別の案内「安全モードのため AI変換を使用しません」にする。外部 AI への明示同意（§14.2）だけが欠けているとき
+  は、TIP が選択を読まずに案内だけの窓を出し、「OpenAI への送信がオフのため AI変換を使用しません。設定の「AI サービス」で
+  オンにすると使えます。」を出す。出す条件と、案内を出さない他の不許可は `docs/legacy-parity-spec.md` §4.1 が定める。
 - M58-C は neural fallback の候補表示中、候補の下に分類別の固定案内を表示する。
   app 描画の UI-less 経路では候補 UIElement の説明として同じ案内を公開する。
   ホストアプリが説明を実際に描くかはアプリの実機確認対象とする。候補 UI を閉じるか

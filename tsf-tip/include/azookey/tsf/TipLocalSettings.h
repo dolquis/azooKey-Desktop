@@ -30,6 +30,8 @@ struct TipRewriterSettings {
 };
 struct TipAiSettings {
   core::AiPrivacy privacy;
+  // privacy.externalAiConsent is all external AI lacks (core::ExternalAiNeedsConsent).
+  bool external_ai_needs_consent{false};
   core::PrivacyPolicy privacy_policy{false, false, true};
   bool prediction_allowed{true};
   // Only an explicit boolean false disables automatic secure detection.

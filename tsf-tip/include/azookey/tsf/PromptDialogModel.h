@@ -28,6 +28,8 @@ enum class PromptNotice {
   Secure,
   // The selection is longer than the window takes.
   SelectionTooLong,
+  // Only privacy.externalAiConsent is missing: the selection was not read.
+  ConsentRequired,
 };
 
 // What the window shows. Every text is a fixed message or the user's own text.
@@ -62,7 +64,8 @@ std::wstring_view TransformFailureMessage(const std::optional<std::string>& erro
 class PromptDialogModel {
  public:
   // `prompt_prefix` is the app's promptPrefix (app-profile-spec §4.1). The
-  // window never shows it; a non-empty one goes before the prompt when sent.
+  // window never shows it; trimmed like the prompt, a non-empty one goes before
+  // the prompt when sent.
   static PromptDialogModel ForSelection(core::PromptPreset preset, std::wstring selection,
                                         std::string prompt_prefix = {});
   static PromptDialogModel ForNotice(PromptNotice notice);

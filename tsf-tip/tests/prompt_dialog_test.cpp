@@ -123,6 +123,28 @@ TEST(PromptDialogModelTest, PromptWithTheAppPrefixKeepsTheLimit) {
   EXPECT_EQ(full.view().status, L"アプリ別の前置きが長すぎます。設定で短くしてください。");
 }
 
+// legacy-parity-spec §4.3 (DEV-2085): the prefix loses the blanks the prompt
+// loses (space, tab, line breaks, the ideographic space) at both ends; blanks
+// alone add nothing, and the limit counts the trimmed prefix.
+TEST(PromptDialogModelTest, AppPromptPrefixIsTrimmedBeforeItIsSentAndCounted) {
+  const std::string wide_space = "\xE3\x80\x80";
+  const auto sent = [](std::string prefix) {
+    auto model = PromptDialogModel::ForSelection(PromptPreset::English, L"a", std::move(prefix));
+    EXPECT_TRUE(model.Submit(L"英語に翻訳"));
+    return model.prompt_utf8();
+  };
+  EXPECT_EQ(sent(" \t丁寧語で\r\n\n"), "丁寧語で\n英語に翻訳");
+  EXPECT_EQ(sent(wide_space + "丁寧 語で" + wide_space + "\n"), "丁寧 語で\n英語に翻訳");
+  EXPECT_EQ(sent("   "), "英語に翻訳");
+  EXPECT_EQ(sent(" \r\n\t" + wide_space), "英語に翻訳");
+  // A prefix that fits only once trimmed leaves room for the prompt.
+  const std::string fitting(azookey::ipc::kMaxTransformPromptBytes - 2, 'p');
+  auto model =
+      PromptDialogModel::ForSelection(PromptPreset::English, L"a", "  " + fitting + "\n\n\n");
+  ASSERT_TRUE(model.Submit(L"q"));
+  EXPECT_EQ(model.prompt_utf8(), fitting + "\nq");
+}
+
 // ai-backend-spec section 7.2 and 7.5: a failure keeps the selection and says
 // why; SafeMode has its own message, apart from the secure one.
 TEST(PromptDialogModelTest, FailuresKeepEditingWithAFixedMessage) {
@@ -155,7 +177,8 @@ TEST(PromptDialogModelTest, FailuresKeepEditingWithAFixedMessage) {
 }
 
 TEST(PromptDialogModelTest, NoticeOffersOnlyCancel) {
-  for (const auto notice : {PromptNotice::Secure, PromptNotice::SelectionTooLong}) {
+  for (const auto notice :
+       {PromptNotice::Secure, PromptNotice::SelectionTooLong, PromptNotice::ConsentRequired}) {
     auto model = PromptDialogModel::ForNotice(notice);
     EXPECT_EQ(model.view().state, PromptDialogState::Notice);
     EXPECT_EQ(model.view().status, azookey::tsf::PromptNoticeMessage(notice));

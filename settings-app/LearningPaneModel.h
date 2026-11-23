@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -48,12 +49,29 @@ inline constexpr std::array<std::string_view, 3> kConflictResolutions{"merge", "
 // payload constants in ipc/Payloads.h, and the BackupErrorCode names of archive failures. Each
 // has a "LearningError_<code>" string; any other falls back to "LearningError_other".
 inline constexpr std::array<std::string_view, 18> kLearningErrorCodes{
-    "invalid_request",     "not_authenticated", "store_unavailable",
-    "save_failed",         "unsupported",       "blocked",
-    "invalid_path",        "destination_exists", "source_missing",
-    "io",                  "too_large",         "not_archive",
-    "bad_manifest",        "unsupported_version", "missing_item",
-    "checksum_mismatch",   "decrypt_failed",    "bad_item"};
+    ipc::kLearningDataErrorInvalidRequest,
+    ipc::kLearningDataErrorNotAuthenticated,
+    ipc::kLearningDataErrorStoreUnavailable,
+    ipc::kLearningDataErrorSaveFailed,
+    ipc::kLearningDataErrorUnsupported,
+    ipc::kLearningDataErrorBlocked,
+    "invalid_path",
+    "destination_exists",
+    "source_missing",
+    "io",
+    "too_large",
+    "not_archive",
+    "bad_manifest",
+    "unsupported_version",
+    "missing_item",
+    "checksum_mismatch",
+    "decrypt_failed",
+    "bad_item",
+};
+
+static_assert(std::ranges::all_of(ipc::kAllLearningDataErrors, [](std::string_view code) {
+  return std::ranges::find(kLearningErrorCodes, code) != kLearningErrorCodes.end();
+}));
 
 std::string LearningErrorResource(std::string_view error);
 

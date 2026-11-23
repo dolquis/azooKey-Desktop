@@ -9417,6 +9417,7 @@ TextService::PrivacyDecision TextService::EvaluatePrivacy(ITfContext* context, b
   PrivacyDecision decision;
   decision.show_secure_indicator = ai_settings.show_secure_indicator;
   decision.ai = ai_settings.privacy;
+  decision.external_ai_needs_consent = ai_settings.external_ai_needs_consent;
   decision.backend = ai_settings.backend;
   decision.detailed_logging_allowed = ai_settings.privacy_policy.detailed_logging_allowed;
   decision.learning_allowed = ai_settings.privacy_policy.learning_allowed;
@@ -9443,14 +9444,15 @@ TextService::PrivacyDecision TextService::EvaluatePrivacy(ITfContext* context, b
       decision.prediction_allowed = false;
       if (evaluate_ai) decision.ai = {};
     } else if (mode == "private") {
-      if (evaluate_ai) decision.ai.external = false;
+      if (evaluate_ai) decision.ai.external = decision.external_ai_needs_consent = false;
       decision.detailed_logging_allowed = false;
       decision.learning_allowed = false;
     }
     if (evaluate_ai) {
       const auto profile_backend = value.GetString("aiBackend").value_or("auto");
       if (profile_backend != "auto") decision.backend = profile_backend;
-      if (decision.backend == "local-zenzai") decision.ai.external = false;
+      if (decision.backend == "local-zenzai")
+        decision.ai.external = decision.external_ai_needs_consent = false;
     }
   }
   // IS_PRIVATE asks the IME not to learn; prediction stays (spec section 3 `private`).
@@ -9461,6 +9463,9 @@ TextService::PrivacyDecision TextService::EvaluatePrivacy(ITfContext* context, b
     decision.learning_allowed = false;
     decision.prediction_allowed = false;
   }
+  // Only the consent is missing while AI candidates stay allowed: a cleared
+  // decision (the field, the app, secure) took external AI away for another cause.
+  if (!evaluate_ai || !decision.ai.ai) decision.external_ai_needs_consent = false;
   // An unresolved app or failed scope probe must never unlock development body logging.
   decision.detailed_logging_allowed &= !decision.secure && app.resolved && gate.ai_allowed;
   decision.scope_status = gate.scope.status;
@@ -11523,8 +11528,15 @@ void TextService::BeginMagicConversion(ITfContext* context, core::UserAction dou
     return open(std::move(session), "secure_notice");
   }
   // The selection goes to an external AI only (ai-backend-spec section 4.1).
-  if (!privacy.ai.ai || !privacy.ai.external || privacy.backend != "openai")
+  if (!privacy.ai.ai || !privacy.ai.external || privacy.backend != "openai") {
+    // Without the consent alone nothing is read either; the window says where
+    // to turn it on (ai-backend-spec section 7.5).
+    if (privacy.external_ai_needs_consent && privacy.backend == "openai") {
+      session.model = PromptDialogModel::ForNotice(PromptNotice::ConsentRequired);
+      return open(std::move(session), "consent_notice");
+    }
     return LogMagicConversion("ai_not_allowed");
+  }
   SelectedTextCapture capture;
   switch (ReadSelectedText(context, client_id_, kMaxTransformSelectionUnits, capture)) {
     case SelectedTextRead::Ok:

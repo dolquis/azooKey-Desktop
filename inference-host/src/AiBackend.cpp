@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <map>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -37,6 +38,31 @@ std::string BuildBody(const AiTransformRequest& request, const AiBackendOptions&
                                                               {"strict", true},
                                                               {"schema", std::move(schema)}}}}}});
 }
+// ai-backend-spec section 5.3 (DEV-2163): the JSON object inside a content that
+// is one ``` fence, untagged or tagged json, as providers that ignore
+// response_format send it. Any other content is returned as it is.
+std::string_view WithoutJsonFence(std::string_view content) {
+  constexpr std::string_view kFence = "```";
+  constexpr std::string_view kSpace = " \r\n\t";
+  const auto first = content.find_first_not_of(kSpace);
+  if (first == std::string_view::npos) return content;
+  const auto body = content.substr(first, content.find_last_not_of(kSpace) - first + 1);
+  const auto opening_end = body.find('\n');
+  if (!body.starts_with(kFence) || !body.ends_with(kFence) ||
+      opening_end == std::string_view::npos || opening_end + kFence.size() >= body.size())
+    return content;
+  // The closing fence stands on a line of its own; otherwise the fence is
+  // unclosed. The opening line's newline bounds the search.
+  if (body[body.find_last_not_of(" \t", body.size() - kFence.size() - 1)] != '\n') return content;
+  auto tag = Trim(std::string(body.substr(kFence.size(), opening_end - kFence.size())));
+  for (auto& c : tag) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  if (!tag.empty() && tag != "json") return content;
+  const auto inner = body.substr(opening_end + 1, body.size() - kFence.size() - (opening_end + 1));
+  const auto parsed = j::Parse(inner);
+  return parsed && parsed->IsObject() ? inner : content;
+}
 AiTransformResult ParseResult(const std::string& body) {
   const auto root = j::Parse(body);
   const auto* choices = root ? root->GetArray("choices") : nullptr;
@@ -47,15 +73,21 @@ AiTransformResult ParseResult(const std::string& body) {
   const auto content = message ? message->GetString("content") : std::nullopt;
   if (!content) return Failure(AiErrorClass::Parse);
   std::string result;
-  if (const auto structured = j::Parse(*content)) {
+  // Only a JSON object is the structured output. A JSON scalar and a content
+  // that is not JSON are plain text (compatibility with providers that ignore
+  // response_format); an array, or broken JSON starting with { or [, is Parse.
+  const auto structured = j::Parse(WithoutJsonFence(*content));
+  if (structured && structured->IsObject()) {
     const auto value = structured->GetString("result");
     if (!value) return Failure(AiErrorClass::Parse);
     result = *value;
   } else {
     const auto first = content->find_first_not_of(" \r\n\t");
-    if (first != std::string::npos && ((*content)[first] == '{' || (*content)[first] == '['))
+    if (structured
+            ? structured->IsArray()
+            : first != std::string::npos && ((*content)[first] == '{' || (*content)[first] == '['))
       return Failure(AiErrorClass::Parse);
-    result = *content;  // Compatibility with providers that ignore response_format.
+    result = *content;
   }
   result = Trim(std::move(result));
   if (result.empty() || result.size() > 65536) return Failure(AiErrorClass::Parse);
@@ -133,8 +165,13 @@ std::string BuildAiInstruction(const AiTransformRequest& request) {
   return instruction;
 }
 
-AiBackend::AiBackend(AiHttpTransport transport)
-    : transport_(transport ? std::move(transport) : AiHttpTransport(PostAiHttp)) {}
+AiBackend::AiBackend(AiHttpTransport transport, logging::RuntimeLogger* logger)
+    : transport_(transport ? std::move(transport)
+                           : AiHttpTransport(
+                                 [logger](const AiBackendOptions& options, const std::string& body,
+                                          const std::atomic<bool>* cancel, AiDeadline deadline) {
+                                   return PostAiHttp(options, body, cancel, deadline, logger);
+                                 })) {}
 
 AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBackendOptions& options,
                                        const AiCancellationFlag* cancel,

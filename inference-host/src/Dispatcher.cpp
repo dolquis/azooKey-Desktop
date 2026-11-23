@@ -44,8 +44,10 @@ constexpr std::int32_t kGenericFailureHresult = static_cast<std::int32_t>(0x8000
 
 logging::RuntimeLogger& DispatcherLogger(logging::RuntimeLogger* configured) {
   if (configured) return *configured;
-  static logging::RuntimeLogger fallback(logging::RuntimeLoggerOptionsFromEnvironment("host"));
-  return fallback;
+  // Without the Host's logger nothing is written: one of its own would write to
+  // the default logs directory, not the one `--data-root` chose (DEV-2178).
+  static logging::RuntimeLogger disabled{logging::RuntimeLoggerOptions{}};
+  return disabled;
 }
 
 const char* AiErrorClassToWire(AiErrorClass error) {
@@ -355,11 +357,9 @@ void LogUserDictionaryImport(logging::RuntimeLogger* logger, const ipc::Envelope
 // M59 (dynamic-punctuation-spec section 7): the live conversion surface as one
 // converted segment, with punctuation inserted by the configured rules.
 // nullopt when the request or the settings leave punctuation off.
-std::optional<PunctuationResult> InsertLivePunctuation(const EngineConfig& config,
-                                                       bool auto_punctuation,
-                                                       const std::string& style,
-                                                       const std::string& surface,
-                                                       const std::string& reading) {
+std::optional<PunctuationResult> InsertLivePunctuation(
+    const EngineConfig& config, bool auto_punctuation, const std::string& style,
+    const std::string& surface, const std::string& reading, logging::RuntimeLogger* logger) {
   if (!auto_punctuation || !config.enable_live_conversion || !config.dynamic_punctuation ||
       surface.empty()) {
     return std::nullopt;
@@ -368,7 +368,7 @@ std::optional<PunctuationResult> InsertLivePunctuation(const EngineConfig& confi
   converted.surface = surface;
   converted.reading = reading;
   converted.score = 1.0;
-  const auto rules = PunctuationInserter::LoadRules(config.punctuation_rules_path);
+  const auto rules = PunctuationInserter::LoadRules(config.punctuation_rules_path, logger);
   return PunctuationInserter::Insert({converted}, rules, style, config.segment_boundary_confidence);
 }
 
@@ -1449,7 +1449,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   if (parsed->live && !res.candidates.empty()) {
     if (auto inserted = InsertLivePunctuation(
             engine_config, parsed->auto_punctuation, parsed->punctuation_style,
-            res.candidates.front().surface, res.candidates.front().reading)) {
+            res.candidates.front().surface, res.candidates.front().reading, runtime_logger_)) {
       res.candidates.front().surface = std::move(inserted->surface);
       res.segments = std::move(inserted->segments);
     }
@@ -1513,7 +1513,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
         // M59 as with M63 off; the word's segments keep the English tag.
         if (auto inserted =
                 InsertLivePunctuation(*punctuation_config, true, parsed->punctuation_style,
-                                      word->surface, parsed->raw_romaji)) {
+                                      word->surface, parsed->raw_romaji, runtime_logger_)) {
           response.surface = std::move(inserted->surface);
           response.segments = std::move(inserted->segments);
           for (auto& segment : response.segments)
@@ -1539,7 +1539,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
         // segments, which keep their tags.
         if (auto inserted =
                 InsertLivePunctuation(*punctuation_config, true, parsed->punctuation_style,
-                                      response.surface, parsed->kana)) {
+                                      response.surface, parsed->kana, runtime_logger_)) {
           for (auto& segment : inserted->segments) {
             if (!segment.auto_punctuation || segment.start_char < Utf16Length(response.surface))
               continue;
@@ -1571,8 +1571,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
     // already corrected it, and the segments feed learning (section 5.3).
     const auto& reading = candidate->reading.empty() ? parsed->kana : candidate->reading;
     if (punctuation_config) {
-      if (auto inserted = InsertLivePunctuation(
-              *punctuation_config, true, parsed->punctuation_style, candidate->surface, reading)) {
+      if (auto inserted =
+              InsertLivePunctuation(*punctuation_config, true, parsed->punctuation_style,
+                                    candidate->surface, reading, runtime_logger_)) {
         response.surface = std::move(inserted->surface);
         response.segments = std::move(inserted->segments);
       }

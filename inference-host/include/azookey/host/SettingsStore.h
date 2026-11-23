@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "azookey/core/AiPrivacy.h"
@@ -269,6 +270,13 @@ void ApplySafeModeOverrides(RuntimeSettings& settings);
 // and on a power source change): while the engine is in SafeMode they carry
 // the SafeMode values even when the held settings lost the flag (DEV-2091).
 RuntimeSettings SettingsForEngineConfig(RuntimeSettings settings, bool engine_safe_mode);
+// Section 8.5.3, for the reload right after PersistSafeModeEntered(entered_at):
+// true when a writer outside the file lock replaced the file in between and the
+// flag is gone, so the Host writes it once more (DEV-2165). A flag turned off
+// on this same entry (enteredAt unchanged) is the user's clear, and a file that
+// cannot be read is not written, so neither counts. A file that is gone is
+// written again, as the entry itself creates a missing file.
+bool SafeModeFlagLostAfterEntry(const SettingsLoadResult& reloaded, std::string_view entered_at);
 
 // Sampled when runtime settings are applied; model reloads reuse the resolved value.
 InferenceThreadEnvironment QueryInferenceThreadEnvironment();

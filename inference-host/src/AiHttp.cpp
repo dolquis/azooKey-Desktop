@@ -20,12 +20,14 @@
 namespace azookey::host {
 #ifdef _WIN32
 namespace {
-void LogHttpFailure(const char* stage, DWORD error = GetLastError()) {
-  static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
-  logger.Log(logging::RuntimeLogLevel::Error, "ai_http_failure",
-             {{"stage", logging::RuntimeLogSafeText(stage)},
-              {"error_code", logging::RuntimeLogSafeText("transport")},
-              {"win32_error", static_cast<uint64_t>(error)}});
+void LogHttpFailure(logging::RuntimeLogger* logger, const char* stage,
+                    DWORD error = GetLastError()) {
+  if (logger) {
+    logger->Log(logging::RuntimeLogLevel::Error, "ai_http_failure",
+                {{"stage", logging::RuntimeLogSafeText(stage)},
+                 {"error_code", logging::RuntimeLogSafeText("transport")},
+                 {"win32_error", static_cast<uint64_t>(error)}});
+  }
   core::EtwLogger::LogError(core::EtwModule::Host, core::EtwErrorCode::Transport,
                             error == 0 ? static_cast<std::int32_t>(0x80004005U)
                                        : static_cast<std::int32_t>(HRESULT_FROM_WIN32(error)));
@@ -100,7 +102,8 @@ struct Operation {
 #endif
 
 AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& body,
-                          const std::atomic<bool>* cancel, AiDeadline deadline) {
+                          const std::atomic<bool>* cancel, AiDeadline deadline,
+                          logging::RuntimeLogger* logger) {
   AiHttpResponse response;
   response.error = AiErrorClass::Network;
 #ifdef _WIN32
@@ -141,12 +144,12 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
   Internet session(
       OpenHttpSession(L"azooKey-AI/1.0", loopback, true, 10000, 10000, options.timeout_ms));
   if (!session) {
-    LogHttpFailure("session");
+    LogHttpFailure(logger, "session");
     return response;
   }
   Internet connection(WinHttpConnect(session.get(), host.c_str(), parts.nPort, 0));
   if (!connection) {
-    LogHttpFailure("connect");
+    LogHttpFailure(logger, "connect");
     return response;
   }
   std::array<char, 8192> buffer{};  // Must outlive Operation's close notification.
@@ -157,7 +160,7 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
                          WINHTTP_DEFAULT_ACCEPT_TYPES,
                          parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0));
   if (!pending) {
-    LogHttpFailure("open_request");
+    LogHttpFailure(logger, "open_request");
     return response;
   }
   DWORD disable = WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_COOKIES;
@@ -165,20 +168,20 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
   if (!WinHttpSetOption(pending.get(), WINHTTP_OPTION_DISABLE_FEATURE, &disable, sizeof(disable)) ||
       !WinHttpSetOption(pending.get(), WINHTTP_OPTION_AUTOLOGON_POLICY, &autologon,
                         sizeof(autologon))) {
-    LogHttpFailure("security_options");
+    LogHttpFailure(logger, "security_options");
     return response;
   }
   const DWORD_PTR context = reinterpret_cast<DWORD_PTR>(&operation);
   if (!WinHttpSetOption(pending.get(), WINHTTP_OPTION_CONTEXT_VALUE,
                         const_cast<DWORD_PTR*>(&context), sizeof(context))) {
-    LogHttpFailure("callback_context");
+    LogHttpFailure(logger, "callback_context");
     return response;
   }
   if (WinHttpSetStatusCallback(
           pending.get(), Operation::Callback,
           WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES,
           0) == WINHTTP_INVALID_STATUS_CALLBACK) {
-    LogHttpFailure("callback_registration");
+    LogHttpFailure(logger, "callback_registration");
     return response;
   }
   operation.request = pending.release();
@@ -189,13 +192,13 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
                          static_cast<DWORD>(headers.value.size()), const_cast<char*>(body.data()),
                          static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), context);
   if (!sent) {
-    LogHttpFailure("send");
+    LogHttpFailure(logger, "send");
     return response;
   }
   response.error = operation.Wait(WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE, cancel, deadline);
   if (response.error != AiErrorClass::None) return response;
   if (!WinHttpReceiveResponse(operation.request, nullptr)) {
-    LogHttpFailure("receive");
+    LogHttpFailure(logger, "receive");
     response.error = AiErrorClass::Network;
     return response;
   }
@@ -205,7 +208,7 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
   if (!WinHttpQueryHeaders(operation.request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
                            WINHTTP_NO_HEADER_INDEX)) {
-    LogHttpFailure("status_headers");
+    LogHttpFailure(logger, "status_headers");
     response.error = AiErrorClass::Network;
     return response;
   }
@@ -218,10 +221,11 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
     response.retry_after_seconds = retry;
   if (status != 200) {
     // Provider bodies can echo input or credentials; only record bounded metadata.
-    static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
-    logger.Log(logging::RuntimeLogLevel::Error, "ai_http_status",
-               {{"status", static_cast<uint64_t>(status)},
-                {"error_code", logging::RuntimeLogSafeText("business")}});
+    if (logger) {
+      logger->Log(logging::RuntimeLogLevel::Error, "ai_http_status",
+                  {{"status", static_cast<uint64_t>(status)},
+                   {"error_code", logging::RuntimeLogSafeText("business")}});
+    }
     core::EtwLogger::LogError(core::EtwModule::Host, core::EtwErrorCode::Business,
                               static_cast<std::int32_t>(0x80004005U));
     return response;
@@ -229,7 +233,7 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
   for (;;) {
     if (!WinHttpReadData(operation.request, buffer.data(), static_cast<DWORD>(buffer.size()),
                          nullptr)) {
-      LogHttpFailure("read_body");
+      LogHttpFailure(logger, "read_body");
       response.error = AiErrorClass::Network;
       return response;
     }
@@ -247,6 +251,7 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
   (void)body;
   (void)cancel;
   (void)deadline;
+  (void)logger;
 #endif
   return response;
 }

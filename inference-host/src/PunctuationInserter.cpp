@@ -188,7 +188,8 @@ PunctuationResult PunctuationInserter::Insert(const std::vector<ipc::LiveSegment
   return out;
 }
 
-core::PunctuationRules PunctuationInserter::LoadRules(std::string_view configured_path) {
+core::PunctuationRules PunctuationInserter::LoadRules(std::string_view configured_path,
+                                                      logging::RuntimeLogger* logger) {
   std::filesystem::path path;
   constexpr std::string_view prefix = "%LOCALAPPDATA%\\";
   if (configured_path.starts_with(prefix)) {
@@ -219,10 +220,9 @@ core::PunctuationRules PunctuationInserter::LoadRules(std::string_view configure
     return core::PunctuationRules::Default();
   std::vector<size_t> invalid_lines;
   auto rules = core::PunctuationRules::ParseAndMerge(tsv, &invalid_lines);
-  if (!invalid_lines.empty()) {
-    static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
-    logger.Log(logging::RuntimeLogLevel::Warn, "punctuation_rules_invalid_lines",
-               {{"invalid_lines", static_cast<uint64_t>(invalid_lines.size())}});
+  if (!invalid_lines.empty() && logger) {
+    logger->Log(logging::RuntimeLogLevel::Warn, "punctuation_rules_invalid_lines",
+                {{"invalid_lines", static_cast<uint64_t>(invalid_lines.size())}});
   }
   cached_path = path;
   cached_write_time = write_time;

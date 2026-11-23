@@ -1842,8 +1842,10 @@ class TextService final : public ITfTextInputProcessorEx,
     bool learning_allowed{false};
     bool prediction_allowed{false};
     core::AiPrivacy ai;
-    // External AI is off only for want of privacy.externalAiConsent; any other
-    // cause (the field, the app's profile, the mode) clears it. M16 only.
+    // External AI is off only for want of privacy.externalAiConsent; the other
+    // causes found here (the field, the app's profile, the mode) clear it. A
+    // root aiBackend of none or local-zenzai may leave it set: the consumer
+    // checks the backend (BeginMagicConversion). M16 only.
     bool external_ai_needs_consent{false};
     std::string backend;
     bool detailed_logging_allowed{false};

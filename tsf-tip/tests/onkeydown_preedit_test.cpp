@@ -21980,6 +21980,9 @@ struct CandidateListOutcome {
   azookey::core::InputStateKind kind{azookey::core::InputStateKind::Idle};
   size_t held_keys{0};
   bool query{false};
+  size_t batch_segments{0};
+  size_t segment_cursor{0};
+  std::string batch_raw_romaji;
 };
 
 CandidateListOutcome OutcomeOf(DocumentPreeditHarness& h) {
@@ -21989,7 +21992,10 @@ CandidateListOutcome OutcomeOf(DocumentPreeditHarness& h) {
           h.service.candidate_window_showing_for_test(),
           h.service.input_state_for_test().kind(),
           h.service.window_waiting_key_count_for_test(),
-          h.service.has_pending_ipc_query_for_test()};
+          h.service.has_pending_ipc_query_for_test(),
+          h.service.shown_batch_segment_count_for_test(),
+          h.service.batch_segment_cursor_for_test(),
+          h.service.batch_raw_romaji_for_test()};
 }
 
 void ExpectSameOutcome(const CandidateListOutcome& app, const CandidateListOutcome& keys) {
@@ -22000,6 +22006,18 @@ void ExpectSameOutcome(const CandidateListOutcome& app, const CandidateListOutco
   EXPECT_EQ(app.kind, keys.kind);
   EXPECT_EQ(app.held_keys, keys.held_keys);
   EXPECT_EQ(app.query, keys.query);
+  EXPECT_EQ(app.batch_segments, keys.batch_segments);
+  EXPECT_EQ(app.segment_cursor, keys.segment_cursor);
+  EXPECT_EQ(app.batch_raw_romaji, keys.batch_raw_romaji);
+}
+
+// The batch window on its second segment after batch conversion was switched
+// off: Abort and Esc then cancel the input, dropping the segments.
+void OpenBatchKaniThenSwitchBatchOff(DocumentPreeditHarness& h) {
+  OpenBatchKani(h);
+  ASSERT_TRUE(h.Press(VK_RIGHT));
+  ASSERT_EQ(h.service.batch_segment_cursor_for_test(), 1u);
+  h.service.set_batch_romaji_options_for_test(false);
 }
 
 }  // namespace
@@ -22029,6 +22047,7 @@ TEST(TsfTipCandidateListBehaviorTest, AbortDoesWhatEscapeDoes) {
        }},
       {"pre-processing window", &OpenPreProcessingKakiku},
       {"batch conversion", &OpenBatchKani},
+      {"batch window with batch conversion switched off", &OpenBatchKaniThenSwitchBatchOff},
   };
   for (const auto& opener : openers) {
     SCOPED_TRACE(opener.name);
@@ -22052,22 +22071,85 @@ TEST(TsfTipCandidateListBehaviorTest, AbortDoesWhatEscapeDoes) {
 }
 
 // As with Esc, an allocation failure of the preedit update puts the TIP's own
-// list and its input back.
+// list and its input back, the batch segments and their focus included.
 TEST(TsfTipCandidateListBehaviorTest, AbortWithoutThePreeditUpdateKeepsTheList) {
   const CandidateListOpener openers[] = {
       {"pre-processing window", &OpenPreProcessingKakiku},
       {"batch conversion", &OpenBatchKani},
+      {"batch window with batch conversion switched off", &OpenBatchKaniThenSwitchBatchOff},
   };
   for (const auto& opener : openers) {
     SCOPED_TRACE(opener.name);
     DocumentPreeditHarness h;
     ASSERT_NO_FATAL_FAILURE(opener.open(h));
     const CandidateListOutcome opened = OutcomeOf(h);
+    const int selected = h.service.candidate_selected_for_test();
     const auto behavior = h.service.candidate_list_behavior_for_test();
     ASSERT_TRUE(behavior);
     azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
     EXPECT_EQ(behavior->Abort(), E_OUTOFMEMORY);
     ExpectSameOutcome(OutcomeOf(h), opened);
+    EXPECT_EQ(h.service.candidate_selected_for_test(), selected);
+  }
+}
+
+// A commit waiting for its retry has closed the list, so a call that still
+// reaches the TIP is refused and changes nothing.
+TEST(TsfTipCandidateListBehaviorTest, CallsWhileACommitWaitsForItsRetryAreRefused) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  OpenKakiku(h);
+  const CandidateListOutcome opened = OutcomeOf(h);
+  const auto behavior = h.service.candidate_list_behavior_for_test();
+  ASSERT_TRUE(behavior);
+  h.service.set_committing_for_test(true);
+  EXPECT_EQ(behavior->SetSelection(1), E_FAIL);
+  EXPECT_EQ(behavior->Finalize(), E_FAIL);
+  EXPECT_EQ(behavior->Abort(), E_FAIL);
+  h.service.set_committing_for_test(false);
+  ExpectSameOutcome(OutcomeOf(h), opened);
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 0);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+// An allocation failure of the preedit update puts the selection back on the
+// TIP's own lists, and rolls the core's list back for SetSelection and Abort.
+TEST(TsfTipCandidateListBehaviorTest, CallsWithoutThePreeditUpdateRollBack) {
+  {
+    SCOPED_TRACE("SetSelection on a pre-processing window");
+    DocumentPreeditHarness h;
+    ASSERT_NO_FATAL_FAILURE(OpenPreProcessingKakiku(h));
+    const CandidateListOutcome opened = OutcomeOf(h);
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+    EXPECT_EQ(behavior->SetSelection(1), E_OUTOFMEMORY);
+    ExpectSameOutcome(OutcomeOf(h), opened);
+    EXPECT_EQ(h.service.candidate_selected_for_test(), 0);
+  }
+  for (const auto behavior_kind : {azookey::tsf::CandidateListBehavior::SetSelection,
+                                   azookey::tsf::CandidateListBehavior::Abort}) {
+    SCOPED_TRACE(behavior_kind == azookey::tsf::CandidateListBehavior::Abort
+                     ? "Abort on the core's list"
+                     : "SetSelection on the core's list");
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    OpenKakiku(h);
+    const CandidateListOutcome opened = OutcomeOf(h);
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+    EXPECT_EQ(behavior_kind == azookey::tsf::CandidateListBehavior::Abort
+                  ? behavior->Abort()
+                  : behavior->SetSelection(1),
+              E_OUTOFMEMORY);
+    const CandidateListOutcome after = OutcomeOf(h);
+    EXPECT_EQ(after.text, opened.text);
+    EXPECT_EQ(after.composition, opened.composition);
+    EXPECT_EQ(after.preedit, opened.preedit);
+    EXPECT_EQ(after.window, opened.window);
+    EXPECT_EQ(after.kind, opened.kind);
+    EXPECT_EQ(h.service.input_state_for_test().selected_index(), 0u);
     EXPECT_EQ(h.service.candidate_selected_for_test(), 0);
   }
 }

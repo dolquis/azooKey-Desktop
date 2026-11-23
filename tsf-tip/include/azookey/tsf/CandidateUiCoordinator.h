@@ -50,8 +50,10 @@ class CandidateUiCoordinator {
   void SetOnClick(CandidateWindow::OnClickFn fn);
   // Reaches the TIP only for the list on show, and not while an app's sink
   // runs inside Begin/Update/EndUIElement or another such call is handled:
-  // those calls get E_FAIL.
-  void SetOnBehavior(OnBehaviorFn fn);
+  // those calls get E_FAIL. `owner`, the object that holds this coordinator,
+  // is not owned; each call holds a reference to it until the call has ended,
+  // so a TIP that drops its last reference inside `fn` outlives this frame.
+  void SetOnBehavior(OnBehaviorFn fn, IUnknown* owner);
   void SetOnRetry(CandidateWindow::OnRetryFn fn);
   // Called on the TSF UI thread after the IPC worker publishes a health snapshot.
   void SetHealthState(CandidateHealthState state, const std::string& host_generation_id);
@@ -170,6 +172,7 @@ class CandidateUiCoordinator {
   CandidateUiBeginObserver begin_observer_{nullptr};
   void* begin_observer_context_{nullptr};
   OnBehaviorFn on_behavior_;
+  IUnknown* behavior_owner_{nullptr};  // Not owned (SetOnBehavior).
   // Inside Begin/Update/EndUIElement or the handling of a Behavior call.
   bool calling_out_{false};
   std::vector<std::string> logged_render_failure_stages_;

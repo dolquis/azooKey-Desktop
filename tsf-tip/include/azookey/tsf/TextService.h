@@ -792,6 +792,11 @@ class TextService final : public ITfTextInputProcessorEx,
     return Microsoft::WRL::ComPtr<ITfCandidateListUIElementBehavior>(
         candidate_ui_.ui_element_for_test());
   }
+  // A commit waiting for its retry, without the commit, for the calls that
+  // must refuse it; a test sets it back before the service goes.
+  void set_committing_for_test(bool committing) { committing_ = committing; }
+  size_t shown_batch_segment_count_for_test() const { return shown_batch_segments_.size(); }
+  size_t batch_segment_cursor_for_test() const { return batch_segment_cursor_; }
   bool reconversion_select_pending_for_test() const { return reconversion_select_pending_; }
   // The TIP's selection: what Enter chooses and the candidate UI highlights.
   int candidate_selected_for_test() const { return candidate_ui_.GetSelected(); }

@@ -1479,9 +1479,10 @@ TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
   ipc_client_.SetRuntimeLogger(&TipRuntimeLogger());
   ipc_client_.SetTraceClientId(TraceGuid(ipc_client_id_));
   candidate_ui_.SetBeginObserver(&LogCandidateUiBegin, nullptr);
-  candidate_ui_.SetOnBehavior([this](CandidateListBehavior behavior, int idx) {
+  const auto on_behavior = [this](CandidateListBehavior behavior, int idx) {
     return OnCandidateListBehavior(behavior, idx);
-  });
+  };
+  candidate_ui_.SetOnBehavior(on_behavior, static_cast<ITfTextInputProcessorEx*>(this));
   if (ipc_client_id_.empty()) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_client_id_fallback");
   }
@@ -12035,9 +12036,11 @@ HRESULT TextService::OnCandidateListBehavior(CandidateListBehavior behavior, int
     }
     return FAILED(hr) ? hr : S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("TextService::OnCandidateListBehavior", E_OUTOFMEMORY);
     core_action_in_progress_ = false;
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("TextService::OnCandidateListBehavior", E_FAIL);
     core_action_in_progress_ = false;
     return E_FAIL;
   }
@@ -12053,20 +12056,49 @@ HRESULT TextService::AbortTipCandidateList(ITfContext* context) {
     return S_OK;
   }
   // As with Esc, an allocation failure of the preedit update puts the list and
-  // the input back; any other failure leaves them closed.
-  const std::string previous_preedit = preedit_kana_;
-  const core::RomajiKanaConverter previous_romaji = romaji_;
-  const int previous_selected = selected_candidate_idx_;
-  const std::vector<TipCandidate> previous_shown = shown_candidates_;
-  const std::string previous_live_reading = live_display_reading_;
-  const std::string previous_live_surface = live_display_surface_;
-  std::vector<TipCandidate> previous_cached;
-  bool previous_show_pending = false;
+  // the input back, with all that ClearBatchState drops; any other failure
+  // leaves them closed.
+  struct Previous {
+    std::string preedit;
+    core::RomajiKanaConverter romaji;
+    int selected{0};
+    std::vector<TipCandidate> shown;
+    std::string live_reading;
+    std::string live_surface;
+    std::vector<TipCandidate> cached;
+    bool show_pending{false};
+    bool batch_learning_allowed{true};
+    std::vector<ipc::BatchConversionSegment> batch_segments;
+    std::wstring batch_notice;
+    std::vector<size_t> segment_selections;
+    size_t segment_cursor{0};
+    EmojiMode emoji_mode{EmojiMode::Inactive};
+    std::string batch_raw_romaji;
+    std::string english_raw_romaji;
+    std::shared_ptr<const core::CustomRomajiTable> batch_romaji_table;
+    bool batch_query_in_progress{false};
+  } previous;
+  previous.preedit = preedit_kana_;
+  previous.romaji = romaji_;
+  previous.selected = selected_candidate_idx_;
+  previous.shown = shown_candidates_;
+  previous.live_reading = live_display_reading_;
+  previous.live_surface = live_display_surface_;
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
-    previous_cached = candidates_;
-    previous_show_pending = candidate_window_show_pending_;
+    previous.cached = candidates_;
+    previous.show_pending = candidate_window_show_pending_;
   }
+  previous.batch_learning_allowed = batch_learning_allowed_;
+  previous.batch_segments = shown_batch_segments_;
+  previous.batch_notice = shown_batch_notice_;
+  previous.segment_selections = batch_segment_selections_;
+  previous.segment_cursor = batch_segment_cursor_;
+  previous.emoji_mode = emoji_mode_;
+  previous.batch_raw_romaji = batch_raw_romaji_;
+  previous.english_raw_romaji = english_raw_romaji_;
+  previous.batch_romaji_table = batch_romaji_table_;
+  previous.batch_query_in_progress = batch_query_in_progress_;
   const auto clear_live_display = [this] {
     live_display_reading_.clear();
     live_display_surface_.clear();
@@ -12091,18 +12123,28 @@ HRESULT TextService::AbortTipCandidateList(ITfContext* context) {
     candidate_window_show_pending_ = false;
   }
   if (RequestPreeditUpdate(context) == E_OUTOFMEMORY) {
-    preedit_kana_ = previous_preedit;
-    romaji_ = previous_romaji;
-    selected_candidate_idx_ = previous_selected;
-    shown_candidates_ = previous_shown;
-    live_display_reading_ = previous_live_reading;
-    live_display_surface_ = previous_live_surface;
+    preedit_kana_ = std::move(previous.preedit);
+    romaji_ = std::move(previous.romaji);
+    selected_candidate_idx_ = previous.selected;
+    shown_candidates_ = std::move(previous.shown);
+    live_display_reading_ = std::move(previous.live_reading);
+    live_display_surface_ = std::move(previous.live_surface);
     live_carries_.clear();
     {
       std::lock_guard<std::mutex> lk(candidates_mtx_);
-      candidates_ = previous_cached;
-      candidate_window_show_pending_ = previous_show_pending;
+      candidates_ = std::move(previous.cached);
+      candidate_window_show_pending_ = previous.show_pending;
     }
+    batch_learning_allowed_ = previous.batch_learning_allowed;
+    shown_batch_segments_ = std::move(previous.batch_segments);
+    shown_batch_notice_ = std::move(previous.batch_notice);
+    batch_segment_selections_ = std::move(previous.segment_selections);
+    batch_segment_cursor_ = previous.segment_cursor;
+    emoji_mode_ = previous.emoji_mode;
+    batch_raw_romaji_ = std::move(previous.batch_raw_romaji);
+    english_raw_romaji_ = std::move(previous.english_raw_romaji);
+    batch_romaji_table_ = std::move(previous.batch_romaji_table);
+    batch_query_in_progress_ = previous.batch_query_in_progress;
     if (!shown_candidates_.empty())
       (void)candidate_ui_.BeginUI(thread_mgr_, CompositionAnchorRect(),
                                   BuildCandidateViews(shown_candidates_), selected_candidate_idx_,

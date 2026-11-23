@@ -81,9 +81,10 @@ void CandidateUiCoordinator::SetOnClick(CandidateWindow::OnClickFn fn) {
   own_window_.SetOnClick(std::move(fn));
 }
 
-void CandidateUiCoordinator::SetOnBehavior(OnBehaviorFn fn) {
+void CandidateUiCoordinator::SetOnBehavior(OnBehaviorFn fn, IUnknown* owner) {
   AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
   on_behavior_ = std::move(fn);
+  behavior_owner_ = owner;
 }
 
 void CandidateUiCoordinator::SetOnPredictionClick(CandidateWindow::OnPredictionClickFn fn) {
@@ -482,6 +483,9 @@ HRESULT CandidateUiCoordinator::OnElementBehavior(CandidateListBehavior behavior
   self.ui_thread_affinity_.AssertCurrentThreadIfBound();
 #endif
   if (self.calling_out_ || !self.showing_ || !self.on_behavior_) return E_FAIL;
+  // Declared before the callout, so the owner, and `self` with it, lives
+  // until the callout has put the flag back.
+  const wil::com_ptr_nothrow<IUnknown> owner(self.behavior_owner_);
   const ScopedCallout callout(self.calling_out_);
   try {
     return self.on_behavior_(behavior, static_cast<int>(index));

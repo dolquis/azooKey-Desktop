@@ -304,26 +304,62 @@ std::optional<TypoType> ClassifyKeyEdit(const std::u32string& observed, const Pl
   return std::nullopt;
 }
 
+bool IsUsable(const PersonalizedPattern& pattern) {
+  return std::isfinite(pattern.cost_reduction) && pattern.cost_reduction >= 0.0 &&
+         std::isfinite(pattern.confidence) && pattern.confidence >= 0.0 &&
+         pattern.confidence <= 1.0;
+}
+
 struct Candidate {
-  int cost = 0;  // tenths
+  int edit_cost = 0;  // tenths, before the personalized reduction
   EditSpace space = EditSpace::Keys;
   TypoType type = TypoType::AdjacentKey;
   std::vector<CorrectionEdit> edits;
+  // Set by Offer.
+  double cost = 0.0;
+  double confidence = kGeneralTypoConfidence;
+  std::string pattern_id;
+  bool personalized = false;
 };
 
 using CandidateMap = std::map<std::string, Candidate>;  // by reading
 
-void Offer(CandidateMap& candidates, std::string reading, Candidate candidate) {
-  const auto [it, inserted] = candidates.try_emplace(std::move(reading), candidate);
-  if (!inserted &&
-      std::tie(candidate.cost, candidate.space) < std::tie(it->second.cost, it->second.space)) {
-    it->second = std::move(candidate);
+// Applies the personal pattern of the candidate's edits (section 12.4.1
+// personalized_pattern_cost), then keeps the cheapest candidate of each
+// reading, so the paths to a reading compete on their reduced cost.
+class CandidateSet {
+ public:
+  explicit CandidateSet(const PersonalizedPatternSource* personalized)
+      : personalized_(personalized) {}
+
+  void Offer(std::string reading, Candidate candidate) {
+    candidate.cost = static_cast<double>(candidate.edit_cost) / core::kQwertyEditCostScale;
+    if (personalized_) {
+      const auto pattern = personalized_->Find(candidate.type, candidate.space, candidate.edits);
+      if (pattern && IsUsable(*pattern)) {
+        candidate.cost = (std::max)(0.0, candidate.cost - pattern->cost_reduction);
+        candidate.confidence = pattern->confidence;
+        candidate.pattern_id = pattern->pattern_id;
+        candidate.personalized = true;
+      }
+    }
+    const auto [it, inserted] = candidates_.try_emplace(std::move(reading), candidate);
+    if (!inserted &&
+        std::tie(candidate.cost, candidate.space) < std::tie(it->second.cost, it->second.space)) {
+      it->second = std::move(candidate);
+    }
   }
-}
+
+  CandidateMap& candidates() { return candidates_; }
+
+ private:
+  const PersonalizedPatternSource* personalized_;
+  CandidateMap candidates_;
+};
 
 void AddKeyCandidates(std::string_view observed_reading, const std::u32string& observed,
                       const std::u32string& keys, const KeyboardAdjacencyModel& keyboard,
-                      CandidateMap& candidates) {
+                      CandidateSet& candidates) {
   const std::string typed = Narrow(keys);
   if (core::RomajiKanaConverter::ConvertForCommit(typed) != observed_reading) return;
   const auto ambiguous = core::RomajiKanaConverter::AmbiguousReadings(typed);
@@ -347,13 +383,16 @@ void AddKeyCandidates(std::string_view observed_reading, const std::u32string& o
       }
     }
     if (!type) continue;
-    Candidate candidate{cost, EditSpace::Keys, *type, {}};
+    Candidate candidate;
+    candidate.edit_cost = cost;
+    candidate.space = EditSpace::Keys;
+    candidate.type = *type;
     for (const PlacedEdit& edit : placed) candidate.edits.push_back(edit.edit);
-    Offer(candidates, fuzzy.kana, std::move(candidate));
+    candidates.Offer(fuzzy.kana, std::move(candidate));
   }
 }
 
-void AddReadingCandidates(const std::u32string& observed, CandidateMap& candidates) {
+void AddReadingCandidates(const std::u32string& observed, CandidateSet& candidates) {
   if (!std::all_of(observed.begin(), observed.end(), IsKana)) return;
   const auto& alternatives = Alternatives();
   std::vector<size_t> positions;
@@ -366,31 +405,26 @@ void AddReadingCandidates(const std::u32string& observed, CandidateMap& candidat
         {CorrectionEditKind::Substitution, observed[position], to, KeyBefore(observed, position)});
     candidate.type =
         candidate.edits.size() == 1 ? TypeOf(kind) : (std::min)(candidate.type, TypeOf(kind));
-    candidate.cost += kBaseCost;
+    candidate.edit_cost += kBaseCost;
     reading[position] = to;
   };
   for (size_t first = 0; first < positions.size(); ++first) {
     for (const auto& [to, kind] : alternatives.at(observed[positions[first]])) {
       std::u32string reading = observed;
-      Candidate single{0, EditSpace::Reading, TypoType::DakutenConfusion, {}};
+      Candidate single;
+      single.space = EditSpace::Reading;
       substitute(reading, single, positions[first], to, kind);
-      Offer(candidates, Encode(reading), single);
+      candidates.Offer(Encode(reading), single);
       for (size_t second = first + 1; second < positions.size(); ++second) {
         for (const auto& [to2, kind2] : alternatives.at(observed[positions[second]])) {
           std::u32string pair_reading = reading;
           Candidate pair = single;
           substitute(pair_reading, pair, positions[second], to2, kind2);
-          Offer(candidates, Encode(pair_reading), std::move(pair));
+          candidates.Offer(Encode(pair_reading), std::move(pair));
         }
       }
     }
   }
-}
-
-bool IsUsable(const PersonalizedPattern& pattern) {
-  return std::isfinite(pattern.cost_reduction) && pattern.cost_reduction >= 0.0 &&
-         std::isfinite(pattern.confidence) && pattern.confidence >= 0.0 &&
-         pattern.confidence <= 1.0;
 }
 
 }  // namespace
@@ -418,7 +452,7 @@ std::vector<ReadingHypothesis> GenerateReadingHypotheses(const TypoCorrectionInp
   if (limit == 0) return hypotheses;
 
   const KeyboardAdjacencyModel keyboard(options.keyboard_layout);
-  CandidateMap candidates;
+  CandidateSet candidates(options.personalized);
   const bool romaji_keys = !keys.empty() && std::all_of(keys.begin(), keys.end(), [](char32_t c) {
     return IsAsciiKey(c) || c == U'-' || c == U'\'';
   });
@@ -426,26 +460,18 @@ std::vector<ReadingHypothesis> GenerateReadingHypotheses(const TypoCorrectionInp
   AddReadingCandidates(observed, candidates);
 
   std::vector<ReadingHypothesis> corrections;
-  corrections.reserve(candidates.size());
-  for (auto& [reading, candidate] : candidates) {
+  corrections.reserve(candidates.candidates().size());
+  for (auto& [reading, candidate] : candidates.candidates()) {
     ReadingHypothesis hypothesis;
     hypothesis.reading = reading;
     hypothesis.source = HypothesisSource::TypoCorrection;
-    hypothesis.confidence = kGeneralTypoConfidence;
+    hypothesis.confidence = candidate.confidence;
     hypothesis.typo_type = candidate.type;
-    hypothesis.cost = static_cast<double>(candidate.cost) / core::kQwertyEditCostScale;
+    hypothesis.pattern_id = std::move(candidate.pattern_id);
+    hypothesis.personalized = candidate.personalized;
+    hypothesis.cost = candidate.cost;
     hypothesis.edits = std::move(candidate.edits);
     hypothesis.edit_space = candidate.space;
-    if (options.personalized) {
-      const auto pattern =
-          options.personalized->Find(candidate.type, candidate.space, hypothesis.edits);
-      if (pattern && IsUsable(*pattern)) {
-        hypothesis.cost = (std::max)(0.0, hypothesis.cost - pattern->cost_reduction);
-        hypothesis.confidence = pattern->confidence;
-        hypothesis.pattern_id = pattern->pattern_id;
-        hypothesis.personalized = true;
-      }
-    }
     corrections.push_back(std::move(hypothesis));
   }
   std::stable_sort(corrections.begin(), corrections.end(),

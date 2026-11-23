@@ -366,7 +366,7 @@ C++ の型は `correction/include/azookey/correction/ReadingHypothesis.h` の `R
    - `missing_char`: そのほかの抜け
 
    どれにも当たらない置き換え（隣接でも同一指でもない）を含む仮説は作らない。編集が 2 つの仮説は、
-   上の表の順で先に来る型を取る。
+   この節の冒頭の `typo_type` の表の順で先に来る型を取る（上の判定の順ではない）。
 
 | 組の種類 | 組 |
 |---|---|
@@ -408,8 +408,8 @@ cost =
 
 - 打鍵: `raw_keys` が英字の打鍵で、組み込みのローマ字表で observed の読みに変換されるときだけ、
   §12.4.6 の `FuzzyMatch` が 2 編集までの読みを挙げる。
-- 読み: observed の読みの 1 文字または 2 文字を、§12.3 の表の組で置き換える。置き換え 1 つのコストは
-  substitution と同じ 1.0 とする。
+- 読み: observed の読みがひらがなと長音符だけのとき、その 1 文字または 2 文字を、§12.3 の表の組で
+  置き換える。置き換え 1 つのコストは substitution と同じ 1.0 とする。
 
 `personalized_pattern_cost` は、学習ストアのパターンを引く注入点が、仮説の型と編集の列に対して返す
 減額とする。減額の後のコストは 0 を下回らない。仮説は安い順（同じコストは読みの順）に最大 256 件を返す。
@@ -488,7 +488,7 @@ candidate: 交渉
 
 #### 12.4.6 `RomajiKanaConverter::FuzzyMatch`（M17 の横断項目）
 
-入力ローマ字 `input` に対して、上位 `K=8` 通りのかな解釈を返す API。
+入力ローマ字 `input` に対して、上位 `k` 通り（下の適用順序では `K=8`）のかな解釈を返す API。
 
 ```cpp
 struct FuzzyKanaCandidate {
@@ -533,6 +533,8 @@ QWERTY 隣接：`q-w`, `w-e`, ..., `a-s`, `s-d`, ... 全 ASCII 小文字ペア�
 2. FuzzyMatch (K=8) → 8 候補
 3. それぞれを `SimpleConverter::Query` or `Zenzai::Query` に通す
 4. 全候補を `score - alpha * cost` でソート（alpha=0.5、設定で変更可）
+
+§12.4.1 の補正エンジンは、仮説を作るために `k` を 256 として呼ぶ。
 
 ### 12.5 発動条件
 
@@ -1082,7 +1084,7 @@ overcorrection_penalty =
 
 ```
 align(observed, intended) → 編集操作の列（各操作は 1 文字単位）
-各操作を次のトークンに写す（prev は直前の確定文字、なければ '^'）:
+各操作を次のトークンに写す（prev は直前の文字、なければ '^'）:
   insertion(c, prev)      → "<c>_insert_after_<prev>"   例 "j_insert_after_u"
   deletion(c, prev)       → "<c>_delete_after_<prev>"
   substitution(a → b)     → "<a>_sub_<b>"               例 "z_sub_x"

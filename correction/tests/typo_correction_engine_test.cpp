@@ -64,6 +64,7 @@ struct TypoCase {
   const char* observed;
   const char* intended;
   TypoType type;
+  EditSpace space;  // the path expected to win the reading
 };
 
 class TypoTypeTest : public ::testing::TestWithParam<TypoCase> {};
@@ -81,6 +82,7 @@ TEST_P(TypoTypeTest, GeneratesTheIntendedReadingWithItsType) {
   ASSERT_NE(hit, nullptr);
   ASSERT_TRUE(hit->typo_type.has_value());
   EXPECT_EQ(TypoTypeName(*hit->typo_type), TypoTypeName(typo.type));
+  EXPECT_EQ(hit->edit_space, typo.space);
   EXPECT_EQ(hit->confidence, kGeneralTypoConfidence);
   EXPECT_FALSE(hit->personalized);
   EXPECT_TRUE(hit->pattern_id.empty());
@@ -92,27 +94,37 @@ TEST_P(TypoTypeTest, GeneratesTheIntendedReadingWithItsType) {
 INSTANTIATE_TEST_SUITE_P(
     Section12_3, TypoTypeTest,
     ::testing::Values(
-        TypoCase{"AdjacentSubstitution", "taberi", "たべり", "たべる", TypoType::AdjacentKey},
+        TypoCase{"AdjacentSubstitution", "taberi", "たべり", "たべる", TypoType::AdjacentKey,
+                 EditSpace::Keys},
         TypoCase{"AdjacentInsertion", "koujsyou", "こうjしょう", "こうしょう",
-                 TypoType::AdjacentKey},
-        TypoCase{"MissingChar", "hasuru", "はする", "はいする", TypoType::MissingChar},
-        TypoCase{"ExtraChar", "kouhsyou", "こうhしょう", "こうしょう", TypoType::ExtraChar},
-        TypoCase{"Transposition", "ahsita", "あhした", "あした", TypoType::Transposition},
-        TypoCase{"DoubleKey", "kiggou", "きっごう", "きごう", TypoType::DoubleKey},
+                 TypoType::AdjacentKey, EditSpace::Keys},
+        TypoCase{"MissingChar", "hasuru", "はする", "はいする", TypoType::MissingChar,
+                 EditSpace::Keys},
+        TypoCase{"ExtraChar", "kouhsyou", "こうhしょう", "こうしょう", TypoType::ExtraChar,
+                 EditSpace::Keys},
+        TypoCase{"Transposition", "ahsita", "あhした", "あした", TypoType::Transposition,
+                 EditSpace::Keys},
+        TypoCase{"DoubleKey", "kiggou", "きっごう", "きごう", TypoType::DoubleKey, EditSpace::Keys},
         TypoCase{"RomajiVariantLongSyllable", "syonin", "しょにん", "しょうにん",
-                 TypoType::RomajiVariant},
+                 TypoType::RomajiVariant, EditSpace::Keys},
         TypoCase{"RomajiVariantMixedSpelling", "shyou", "sひょう", "しょう",
-                 TypoType::RomajiVariant},
-        TypoCase{"NHandling", "ashin", "あしん", "あんしん", TypoType::NHandling},
-        TypoCase{"SmallTsu", "ketei", "けてい", "けってい", TypoType::SmallTsu},
-        TypoCase{"LongVowel", "arigato", "ありがと", "ありがとう", TypoType::LongVowel},
-        TypoCase{"DakutenFromKeys", "kinkou", "きんこう", "ぎんこう", TypoType::DakutenConfusion},
-        TypoCase{"DakutenFromReading", "", "きんこう", "ぎんこう", TypoType::DakutenConfusion},
-        TypoCase{"DakutenWithKanaShape", "", "かいしや", "がいしゃ", TypoType::DakutenConfusion},
+                 TypoType::RomajiVariant, EditSpace::Keys},
+        TypoCase{"NHandling", "ashin", "あしん", "あんしん", TypoType::NHandling, EditSpace::Keys},
+        TypoCase{"SmallTsu", "ketei", "けてい", "けってい", TypoType::SmallTsu, EditSpace::Keys},
+        TypoCase{"LongVowel", "arigato", "ありがと", "ありがとう", TypoType::LongVowel,
+                 EditSpace::Keys},
+        // b and f share a finger (0.6), cheaper than the reading's substitution (1.0).
+        TypoCase{"DakutenFromKeys", "buton", "ぶとん", "ふとん", TypoType::DakutenConfusion,
+                 EditSpace::Keys},
+        TypoCase{"DakutenFromReading", "", "きんこう", "ぎんこう", TypoType::DakutenConfusion,
+                 EditSpace::Reading},
+        TypoCase{"DakutenWithKanaShape", "", "かいしや", "がいしゃ", TypoType::DakutenConfusion,
+                 EditSpace::Reading},
+        // The left-out "l" of "silyain" ties the reading's substitution and wins as Keys.
         TypoCase{"KanaShapeFromKeys", "siyain", "しやいん", "しゃいん",
-                 TypoType::KanaShapeConfusion},
+                 TypoType::KanaShapeConfusion, EditSpace::Keys},
         TypoCase{"KanaShapeFromHiraganaKeys", "おちや", "おちや", "おちゃ",
-                 TypoType::KanaShapeConfusion}),
+                 TypoType::KanaShapeConfusion, EditSpace::Reading}),
     [](const ::testing::TestParamInfo<TypoCase>& info) { return std::string(info.param.name); });
 
 TEST(TypoCorrectionEngineTest, EmptyReadingYieldsNothing) {
@@ -270,23 +282,51 @@ TEST(TypoCorrectionEngineTest, ReadingEditsSubstituteKana) {
   EXPECT_EQ(hit->edit_distance, 2u);
 }
 
+// Returns `pattern` for one (type, space, edits) and nothing otherwise. The
+// default is the k typed for j of "kitaku" (じたく).
 class FakePatternSource : public PersonalizedPatternSource {
  public:
-  explicit FakePatternSource(PersonalizedPattern pattern) : pattern_(std::move(pattern)) {}
+  explicit FakePatternSource(PersonalizedPattern pattern, TypoType type = TypoType::AdjacentKey,
+                             EditSpace space = EditSpace::Keys,
+                             std::vector<CorrectionEdit> edits = {{CorrectionEditKind::Substitution,
+                                                                   U'k', U'j', U'^'}})
+      : pattern_(std::move(pattern)), type_(type), space_(space), edits_(std::move(edits)) {}
 
   std::optional<PersonalizedPattern> Find(TypoType type, EditSpace space,
                                           const std::vector<CorrectionEdit>& edits) const override {
-    const std::vector<CorrectionEdit> k_for_j = {
-        {CorrectionEditKind::Substitution, U'k', U'j', U'^'}};
-    if (type == TypoType::AdjacentKey && space == EditSpace::Keys && edits == k_for_j) {
-      return pattern_;
-    }
+    if (type == type_ && space == space_ && edits == edits_) return pattern_;
     return std::nullopt;
   }
 
  private:
   PersonalizedPattern pattern_;
+  TypoType type_;
+  EditSpace space_;
+  std::vector<CorrectionEdit> edits_;
 };
+
+// Section 12.4.1: the personalized term is part of each path's cost, so a
+// learned reading-side pattern lets its path win a reading it would tie on.
+TEST(TypoCorrectionEngineTest, PersonalPatternIsAppliedBeforeAReadingKeepsOnePath) {
+  const auto plain = Generate("しやいん", "siyain");
+  const ReadingHypothesis* keys_path = FindCorrection(plain, "しゃいん");
+  ASSERT_NE(keys_path, nullptr);
+  EXPECT_EQ(keys_path->edit_space, EditSpace::Keys);
+  EXPECT_EQ(keys_path->cost, 1.0);
+
+  const FakePatternSource source({0.5, 0.8, "や_sub_ゃ"}, TypoType::KanaShapeConfusion,
+                                 EditSpace::Reading,
+                                 {{CorrectionEditKind::Substitution, U'や', U'ゃ', U'し'}});
+  TypoCorrectionOptions options;
+  options.personalized = &source;
+  const auto personalized = Generate("しやいん", "siyain", options);
+  const ReadingHypothesis* reading_path = FindCorrection(personalized, "しゃいん");
+  ASSERT_NE(reading_path, nullptr);
+  EXPECT_EQ(reading_path->edit_space, EditSpace::Reading);
+  EXPECT_TRUE(reading_path->personalized);
+  EXPECT_EQ(reading_path->pattern_id, "や_sub_ゃ");
+  EXPECT_EQ(reading_path->cost, 0.5);
+}
 
 TEST(TypoCorrectionEngineTest, PersonalPatternLowersTheCostAndMarksTheHypothesis) {
   const auto plain = Generate("きたく", "kitaku");

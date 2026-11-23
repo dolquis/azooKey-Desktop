@@ -414,11 +414,15 @@ TEST(RomajiKanaConverterTest, FuzzyMatchCanSubstituteNearKeysOnly) {
   EXPECT_EQ(left_out->romaji, "kahweten");
   EXPECT_EQ(left_out->cost, 1.0);
 
-  // k for g is far, so ぎんこう is not reached at that cost.
+  // k for g is far, so ぎんこう is not reached at that cost (a deletion and an
+  // insertion would cost 2.0).
   const auto all_kinkou = converter.FuzzyMatch("kinkou", 256);
-  EXPECT_NE(FindFuzzyKana(all_kinkou, "ぎんこう"), nullptr);
+  const FuzzyKanaCandidate* substituted = FindFuzzyKana(all_kinkou, "ぎんこう");
+  ASSERT_NE(substituted, nullptr);
+  EXPECT_EQ(substituted->cost, 1.0);
   const auto near_kinkou = converter.FuzzyMatch("kinkou", 256, FuzzySubstitutions::NearKeysOnly);
-  EXPECT_EQ(FindFuzzyKana(near_kinkou, "ぎんこう"), nullptr);
+  const FuzzyKanaCandidate* near_ginkou = FindFuzzyKana(near_kinkou, "ぎんこう");
+  EXPECT_TRUE(near_ginkou == nullptr || near_ginkou->cost > 1.0);
 
   // Adjacent keys still substitute.
   const auto near_taberi = converter.FuzzyMatch("taberi", 256, FuzzySubstitutions::NearKeysOnly);

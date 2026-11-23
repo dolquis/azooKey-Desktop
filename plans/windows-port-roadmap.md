@@ -2635,6 +2635,10 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   `correction/src/KeyboardAdjacencyModel.cpp`、
   `correction/src/RomajiVariantNormalizer.cpp`、
   `correction/include/azookey/correction/ReadingHypothesis.h`、
+  `correction/include/azookey/correction/TypoCorrectionEngine.h`、
+  `correction/include/azookey/correction/KeyboardAdjacencyModel.h`、
+  `correction/include/azookey/correction/RomajiVariantNormalizer.h`、
+  `core/src/QwertyAdjacency.cpp`（§12.4.6 の隣接表。`RomajiKanaConverter::FuzzyMatch` が使う）、
   `learning/src/TypoLearningStore.cpp`（M35 の TypoCorrectionStore の v2。
   v1 のクラスは移行と「v1 のまま読む」のために残す）、`ipc/src/Payloads.cpp`（`QueryCandidates` に `raw_keys` /
   `typo_correction_mode` optional フィールド追加）、`docs/typo-correction-learning-spec.md`

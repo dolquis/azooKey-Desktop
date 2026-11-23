@@ -286,6 +286,23 @@ TEST(TypoCorrectionEngineTest, ASpellingThatFitsATypeGivesTheReading) {
   EXPECT_EQ(hit->cost, 1.0);
 }
 
+// A short input whose far-key substitution would change the reading: the key
+// path leaves it out (a deletion and an insertion, 2.0, fall past the 256
+// readings), so a voiced reading comes from the reading path at 1.0 and any
+// other reading does not come back.
+TEST(TypoCorrectionEngineTest, AFarKeySubstitutionOfAShortInput) {
+  const auto voiced = Generate("あいか", "aika");
+  const ReadingHypothesis* hit = FindCorrection(voiced, "あいが");
+  ASSERT_NE(hit, nullptr);
+  ASSERT_TRUE(hit->typo_type.has_value());
+  EXPECT_EQ(*hit->typo_type, TypoType::DakutenConfusion);
+  EXPECT_EQ(hit->edit_space, EditSpace::Reading);
+  EXPECT_EQ(hit->cost, 1.0);
+
+  const auto vowel = Generate("あいう", "aiu");
+  EXPECT_EQ(FindCorrection(vowel, "おいう"), nullptr);
+}
+
 TEST(TypoCorrectionEngineTest, ReadingEditsSubstituteKana) {
   const auto hypotheses = Generate("かいしや", "");
   const ReadingHypothesis* hit = FindCorrection(hypotheses, "がいしゃ");

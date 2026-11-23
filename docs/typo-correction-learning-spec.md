@@ -337,9 +337,9 @@ C++ の型は `correction/include/azookey/correction/ReadingHypothesis.h` の `R
 | `typo_type` | 内容 | 例 |
 |---|---|---|
 | `adjacent_key` | 隣のキーを押した | `koujsyou` → `kousyou` |
-| `missing_char` | 文字抜け | `kousho` → `koushou` |
+| `missing_char` | 文字抜け | `hasuru` → `haisuru` |
 | `extra_char` | 余分な文字 | `kouhsyou` → `kousyou` |
-| `transposition` | 文字順入れ替わり | `ksouyou` → `kousyou` |
+| `transposition` | 文字順入れ替わり | `ahsita` → `ashita` |
 | `double_key` | 同じキーを重複 | `koussyo` → `kousyo` |
 | `romaji_variant` | ローマ字表記揺れ | `syou` / `shou` / `syo` |
 | `n_handling` | んの入力ミス | `kani` / `kanni` / `kan'i` |
@@ -413,10 +413,14 @@ cost =
   置き換える。置き換え 1 つのコストは substitution と同じ 1.0 とする。
 
 `personalized_pattern_cost` は、学習ストアのパターンを引く注入点が、仮説の型と編集の列に対して返す
-減額とする。減額の後のコストは 0 を下回らない。仮説は安い順（同じコストは読みの順）に最大 256 件を返す。
+減額とする。減額の後のコストは 0 を下回らない。減額は `FuzzyMatch` が読みごとに 1 つ選んだ打鍵の編集の列と、
+その 256 件に残った読みにだけ当たる。同じ読みに届く別の打鍵の編集の列や、256 件の外に落ちた読みには当たらない。
+仮説は安い順（同じコストは読みの順）に最大 256 件を返す。
 `typoCorrection.maxReadingHypotheses`（§12.14）で切るのは、§12.4.4 の辞書の制約の後である。辞書を使わずに
 コストだけで並べると、辞書に無い読みが意図した読みより上に多く並ぶためである。入力が長いと 1 編集の読みだけで
-256 件を超え、同じコストの読みはかなの順で切られる。
+256 件を超え、同じコストの読みはかなの順で切られる。さらに長い入力（64 キー近く）では、`FuzzyMatch` の探索が
+256 件より先に上限（§12.4.6 の 20,000 状態）に達し、そこまでに見つかった読みだけを返す。このときは同じコストの
+読みが揃わず、かなの順で切ったものにならない。
 
 observed の読みが `LEN_MIN`（§12.16）以下のとき、読みか `raw_keys` が 64 コードポイントを超えるとき（§6）、
 どちらかが §12.12.1 の文字集合の外の文字を含むときは、仮説を作らない。
@@ -456,7 +460,7 @@ u-j-m、i-k、o-l、p）の上下のキーとする。英字の並びは JIS と
 文脈スコアと組み合わせて判定する。
 
 `correction/` の `RomajiVariantNormalizer` は、表の行を同じ行の a・u・e・o に広げ（`sya` → `sha`、
-`tyu` → `chu` など）、表に無い混在形 `shy` → `sh`、`chy` → `ch` も書き換える。組み込みのローマ字表は、
+`zyu` → `ju` など）、表に無い書き換え（`ty` + a・u・e・o → `ch`、混在形の `shy` → `sh` と `chy` → `ch`）も行う。組み込みのローマ字表は、
 `nn` と混在形を除き、表の左右を同じかなに変換する。そのため正規化は綴りを比べるためのもので、変換には
 使わない。§12.3 の `romaji_variant` の判定に使う。
 
@@ -499,8 +503,14 @@ struct FuzzyKanaCandidate {
     std::string romaji;  // kana に変換される編集後のローマ字
 };
 
+enum class FuzzySubstitutions {
+    All,           // すべての英字の置き換え
+    NearKeysOnly,  // 隣接か同一指のキーの置き換えだけ
+};
+
 std::vector<FuzzyKanaCandidate>
-RomajiKanaConverter::FuzzyMatch(std::string_view input, size_t k) const;
+RomajiKanaConverter::FuzzyMatch(std::string_view input, size_t k,
+                                FuzzySubstitutions substitutions = FuzzySubstitutions::All) const;
 ```
 
 コストは Damerau-Levenshtein を拡張した次の初期値で与える。個人化の項（§12.4.1）と

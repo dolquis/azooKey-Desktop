@@ -748,6 +748,45 @@ TEST(DiagnosticsTest, RedactedSettingsHideUnknownKeyNamesInMapsAndArrays) {
   }
 }
 
+TEST(DiagnosticsTest, RedactedSettingsKeepMapKeysThatContainATokenPrefix) {
+  // "sk-" in the middle of an app name is not a credential. Rewriting the key would hide the app
+  // name, and two rewritten keys could become the same key.
+  const auto redacted = diag::RedactSettingsJson(R"json({
+    "profilesByApp": {
+      "task-x.exe": {"privacyMode": "private"},
+      "mask-y.exe": {"privacyMode": "private"},
+      "ta***redacted***": {"privacyMode": "private"}
+    }
+  })json");
+  const auto value = j::Parse(redacted);
+  ASSERT_TRUE(value.has_value());
+  const auto* profiles = value->FindObject("profilesByApp");
+  ASSERT_NE(profiles, nullptr);
+  EXPECT_EQ(profiles->size(), 3u);
+  for (const auto& name : {"task-x.exe", "mask-y.exe", "ta***redacted***"}) {
+    const auto found = profiles->find(name);
+    ASSERT_NE(found, profiles->end()) << name;
+    EXPECT_EQ(found->second.GetString("privacyMode"), "private") << name;
+  }
+}
+
+TEST(DiagnosticsTest, RedactedSettingsStillRedactFreeTextInKeptStringValues) {
+  const std::string secret(24, 'a');
+  const auto redacted = diag::RedactSettingsJson(R"json({
+    "openAiModel": "sk-)json" + secret + R"json(",
+    "model": {"selectedPath": "C:\\Users\\alice\\models\\m.gguf"},
+    "bracketPairingApps": ["sk-)json" + secret + R"json("],
+    "openAiApiEndpoint": "https://example.invalid/Bearer )json" +
+                                                 secret + R"json("
+  })json");
+  const auto value = j::Parse(redacted);
+  ASSERT_TRUE(value.has_value());
+  EXPECT_EQ(value->GetString("openAiModel"), "***redacted***");
+  EXPECT_EQ(value->Find("model")->GetString("selectedPath"), "%USERPROFILE%\\models\\m.gguf");
+  EXPECT_EQ(redacted.find(secret), std::string::npos);
+  EXPECT_EQ(redacted.find("alice"), std::string::npos);
+}
+
 TEST(DiagnosticsTest, RedactedSettingsHideEndpointCredentialsAndKeepTheHost) {
   const std::string userinfo(24, 'a');
   const std::string query(24, 'b');

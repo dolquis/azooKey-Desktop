@@ -65,11 +65,24 @@ bool IsReservedDeviceName(const fs::path& filename) {
 // the file name and no reserved device name.
 bool IsAcceptableSourcePath(const fs::path& path) {
   if (!path.is_absolute() || !path.has_filename()) return false;
-  // Two leading separators mean UNC (\\host\share) or a device namespace
-  // (\\?\, \\.\); the settings app has no reason to name either.
   const auto& native = path.native();
   const auto is_separator = [](fs::path::value_type ch) { return ch == '\\' || ch == '/'; };
+#ifdef _WIN32
+  // Only "X:\..." (or "X:/...") is accepted. UNC (\\host\share), the device namespaces (\\?\,
+  // \\.\, //?/) and the NT namespace (\??\UNC\host\share, \??\C:\) all have another root name;
+  // Win32 hands the NT form to the kernel unconverted, so \??\UNC\... would reach a network
+  // share. The settings app has no reason to name any of them.
+  const auto is_ascii_letter = [](fs::path::value_type ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+  };
+  if (native.size() < 3 || !is_ascii_letter(native[0]) || native[1] != ':' ||
+      !is_separator(native[2])) {
+    return false;
+  }
+#else
+  // Two leading separators mean UNC or a device namespace.
   if (native.size() >= 2 && is_separator(native[0]) && is_separator(native[1])) return false;
+#endif
   // A ':' in the file name would address an NTFS alternate data stream.
   if (path.filename().native().find(fs::path::value_type{':'}) != fs::path::string_type::npos) {
     return false;

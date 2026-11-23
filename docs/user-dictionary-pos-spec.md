@@ -500,7 +500,7 @@ Google 日本語入力は `user_pos.def` の利用者向けの品詞の名前。
 
 取り込みは Host が行う。設定アプリは `user_dict.json.enc` を開かない（`docs/learning-data-management-spec.md` §14）。
 
-1. `source_path` を検査する。絶対パスで `..` を含まないこと、ファイル名に `:` を含まないこと、UNC・デバイス名前空間・
+1. `source_path` を検査する。絶対パスで `..` を含まないこと、ファイル名に `:` を含まないこと、UNC・デバイス名前空間・NT 名前空間（`\??\`）・
    予約デバイス名でないこと、シンボリックリンクでない通常のファイルであることを求める（規則は
    `docs/learning-data-management-spec.md` §5 の `source_path` と同じ。拡張子は問わない）。違反は `invalid_path`、
    ファイルが無ければ `source_missing`（backup の import と同じ名前）とする。通常のファイルとして開けない・読めないときも `invalid_path` とする。

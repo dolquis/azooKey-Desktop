@@ -318,6 +318,20 @@ merge する。
 | `edit_distance` | observed との編集距離 |
 | `personalized` | 個人パターンか汎用ルールか |
 
+C++ の型は `correction/include/azookey/correction/ReadingHypothesis.h` の `ReadingHypothesis` で、上の表に加えて次を持つ。
+
+| フィールド | 内容 |
+|---|---|
+| `cost` | §12.4.1 の重み付き編集コスト（個人化の減額の後）。元の読みは 0 |
+| `edits` | observed の向きの編集の列（§12.12.1 の align の操作）。元の読みは空 |
+| `edit_space` | 編集を取った列。打鍵（`raw_keys`）か読み |
+
+- `confidence` は、個人パターンが当たった仮説ではそのパターンの §12.9 の値、当たらない仮説では 0.5
+  （§12.9 の `base`。実績の無いパターンと同じ）とする。0.5 は `minConfidenceForRanking` より低いので、
+  汎用の規則だけの仮説は §12.11 により「もしかして」枠に留まる。元の読みは 1.0。
+- `edit_distance` は、observed の読みと補正後の読みのコードポイント単位の編集距離（重みなし。§6 と同じ単位）。
+- `pattern_id` は、個人パターンが当たった仮説だけが持つ。
+
 ### 12.3 対象 typo_type（11 種）
 
 | `typo_type` | 内容 | 例 |
@@ -333,6 +347,34 @@ merge する。
 | `long_vowel` | 長音・母音揺れ | `ou` / `oo` / `o` |
 | `dakuten_confusion` | 濁点・半濁点のミス | `かいしや` / `がいしゃ` |
 | `kana_shape_confusion` | かな形状・入力癖 | `しや` → `しゃ` |
+
+補正エンジン（`correction/src/TypoCorrectionEngine.cpp`）は、仮説ごとに 1 つの型を次の規則で決める。
+
+1. 補正後の読みが observed の読みと同じ長さで、違う文字がすべて下の表の組の置き換えなら、
+   `dakuten_confusion`（清音・濁音・半濁音の組）か `kana_shape_confusion`（大小・形の組）とする。
+   両方を含むときは `dakuten_confusion` とする。
+2. そうでなければ、打鍵の編集ごとに、次の順で最初に当たる型を取る。
+   - `n_handling`: `n` か `'` の余分・抜け
+   - `small_tsu`: 直前の打鍵と同じ子音（`n` と母音を除く）の抜け
+   - `double_key`: 直前の打鍵と同じキーの余分
+   - `romaji_variant`: 編集の前後で §12.4.3 の正規化が同じになるもの（`shyou` と `shou` など）と、
+     正規化すると `sho`・`shu`・`cho`・`chu`・`jo`・`ju` で終わる打鍵の後の `u` の余分・抜け（`syo` と `syou`）
+   - `long_vowel`: `o` か `u` の後の `o`・`u` の余分・抜けと、`o` の後の `o` と `u` の置き換え
+   - `transposition`: 隣り合う 2 キーの入れ替え
+   - `adjacent_key`: 隣接か同一指（§12.4.6）のキーの置き換えと、直前の打鍵に隣接するキーの余分
+   - `extra_char`: そのほかの余分
+   - `missing_char`: そのほかの抜け
+
+   どれにも当たらない置き換え（隣接でも同一指でもない）を含む仮説は作らない。編集が 2 つの仮説は、
+   上の表の順で先に来る型を取る。
+
+| 組の種類 | 組 |
+|---|---|
+| 清音・濁音・半濁音 | か行・さ行・た行の清音と濁音、は行の清音・濁音・半濁音、う と ゔ |
+| 大小・形 | あ・い・う・え・お・つ・や・ゆ・よ・わ・か・け とその小書き、ぬ と め、わ と ね と れ、る と ろ、は と ほ、さ と ち |
+
+`nn` + 母音を「ん」+ あ行・や行で読む読み（`RomajiKanaConverter::AmbiguousReadings`）は読みの選択であり
+（`docs/legacy-parity-spec.md` §5.4）、補正の仮説にしない。
 
 ### 12.4 補正候補生成アルゴリズム
 
@@ -361,6 +403,22 @@ cost =
   personalized_pattern_cost: low
 ```
 
+補正エンジンは、observed の読みと `raw_keys`（§12.13）から次の 2 つの経路で仮説を作り、同じ読みは
+最も安いものを 1 つ残す。
+
+- 打鍵: `raw_keys` が英字の打鍵で、組み込みのローマ字表で observed の読みに変換されるときだけ、
+  §12.4.6 の `FuzzyMatch` が 2 編集までの読みを挙げる。
+- 読み: observed の読みの 1 文字または 2 文字を、§12.3 の表の組で置き換える。置き換え 1 つのコストは
+  substitution と同じ 1.0 とする。
+
+`personalized_pattern_cost` は、学習ストアのパターンを引く注入点が、仮説の型と編集の列に対して返す
+減額とする。減額の後のコストは 0 を下回らない。仮説は安い順（同じコストは読みの順）に最大 256 件を返す。
+`typoCorrection.maxReadingHypotheses`（§12.14）で切るのは、§12.4.4 の辞書の制約の後である。辞書を使わずに
+コストだけで並べると、辞書に無い読みが意図した読みより上に多く並ぶためである。
+
+observed の読みが `LEN_MIN`（§12.16）以下のとき、読みか `raw_keys` が 64 コードポイントを超えるとき（§6）、
+どちらかが §12.12.1 の文字集合の外の文字を含むときは、仮説を作らない。
+
 #### 12.4.2 Keyboard Adjacency Model
 
 JIS / US 配列を考慮して隣接キー誤打鍵を低コストにする:
@@ -372,6 +430,12 @@ s の隣に a / d / w / x がある
 
 `settings.typoCorrection.keyboardLayout`（§12.14）で切替える。schema が受ける値は `auto`（OS の配列に
 従う）だけとし、配列を固定する `jis` / `us` は配列ごとの隣接表と同時に足す。
+
+隣接は、同じ行の左右のキーと、タッチタイピングの同じ列（q-a-z、w-s-x、e-d-c、r-f-v、t-g-b、y-h-n、
+u-j-m、i-k、o-l、p）の上下のキーとする。英字の並びは JIS と US で同じなので、`auto` はこの 1 枚の表を使う。
+`-` と `'` は配列によって位置が違うので、隣接を持たない。表は `core/src/QwertyAdjacency.cpp` に置き
+（§12.4.6 の `FuzzyMatch` が core から使う）、`correction/` の `KeyboardAdjacencyModel` は、配列の選択と、
+分類・コストの問い合わせをこの表に委ねる。
 
 #### 12.4.3 Romaji Variant Normalizer
 
@@ -388,6 +452,11 @@ s の隣に a / d / w / x がある
 
 ただし全部を一律補正すると誤爆が増えるため、個人設定・辞書ヒット・
 文脈スコアと組み合わせて判定する。
+
+`correction/` の `RomajiVariantNormalizer` は、表の行を同じ行の a・u・e・o に広げ（`sya` → `sha`、
+`tyu` → `chu` など）、表に無い混在形 `shy` → `sh`、`chy` → `ch` も書き換える。組み込みのローマ字表は、
+`nn` と混在形を除き、表の左右を同じかなに変換する。そのため正規化は綴りを比べるためのもので、変換には
+使わない。§12.3 の `romaji_variant` の判定に使う。
 
 #### 12.4.4 Dictionary-Constrained Correction
 
@@ -424,7 +493,8 @@ candidate: 交渉
 ```cpp
 struct FuzzyKanaCandidate {
     std::string kana;
-    double      cost;   // 編集距離 + ペナルティ
+    double      cost;    // 編集距離 + ペナルティ
+    std::string romaji;  // kana に変換される編集後のローマ字
 };
 
 std::vector<FuzzyKanaCandidate>
@@ -444,7 +514,18 @@ JIS / US 配列の隣接（§12.4.2）は、この初期値の上に載る。
 | 同一指 substitution | 0.6（−0.4 ボーナス） |
 
 QWERTY 隣接：`q-w`, `w-e`, ..., `a-s`, `s-d`, ... 全 ASCII 小文字ペアを
-`core/src/QwertyAdjacency.cpp`（M17 の横断項目で新設する）に静的テーブルとして持つ。
+`core/src/QwertyAdjacency.cpp`（M17 の横断項目）に静的テーブルとして持つ。隣接は §12.4.2 の定義による。
+同一指は標準のタッチタイピングの割り当て（左小指 q a z、左薬指 w s x、左中指 e d c、
+左人差し指 r f v t g b、右人差し指 y h n u j m、右中指 i k、右薬指 o l、右小指 p）とする。
+隣接かつ同一指の組（u と j など）は小さい方の 0.6 を取り、2 つのボーナスは足さない。
+
+`FuzzyMatch` は組み込みのローマ字表だけを使い、次のとおりに読みを挙げる。
+
+- 編集は、英字の置き換え、英字か `'` の挿入、キーの削除、隣り合う 2 キーの入れ替えで、2 つまでとする。
+- 各読みは最も安いコストで 1 回だけ挙げ、コストの昇順、同じコストはかなの順に並べる。
+- `ConvertForCommit` が `input` に与える読みと、英字・記号（`zj` の「↓」など）が残る読みは挙げない。
+- カスタム表のとき、`input` が空か 64 文字を超えるとき、`a`〜`z`・`-`・`'` の外の文字を含むときは空を返す。
+- 探索は 20,000 状態で打ち切る。
 
 適用順序:
 
@@ -983,8 +1064,16 @@ align(observed, intended) → 編集操作の列（各操作は 1 文字単位�
   substitution(a → b)     → "<a>_sub_<b>"               例 "z_sub_x"
   transposition(a, b)     → "<a><b>_swap"               例 "ts_swap"
 observed_pattern  = 上記トークンを連結（複数編集時は '+' 区切り）
-intended_pattern  = 対応する canonical 形（Romaji Variant 正規化後、§12.4.3）
+intended_pattern  = observed_pattern の各編集を補正の向きに反転したトークン列
 ```
+
+- prev は、編集の直前に打ったキー（読みの側の仮説では直前の文字）とする。同じキーが続く中の余分と抜けは、
+  連なりの最後に置く。`kiggou`（意図は `kigou`）は `g_insert_after_g`、`ketei`（意図は `kettei`）は
+  `t_delete_after_t` になる。
+- 反転は insertion と deletion を入れ替え、`<a>_sub_<b>` を `<b>_sub_<a>` に、`<a><b>_swap` を
+  `<b><a>_swap` にする。`j_insert_after_u` の intended_pattern は `j_delete_after_u` である。
+  observed_pattern が決まれば intended_pattern も決まる。
+- 読みの側の仮説（§12.3 の表の組の置き換え）は、かなのトークン（`か_sub_が`）で表す。
 
 プライバシー上の不変条件:
 
@@ -1151,7 +1240,7 @@ v2 は nested `typoCorrection.*` に集約する。型・既定・範囲の正�
 | `typoCorrection.mode` | `suggest` | §12.6 の 4 モード。あれば root の `typoCorrectionMode` より優先する | 未設定と同じ（下の migration） |
 | `typoCorrection.learnPersonalPatterns` | `true` | false は `ObserveTypo` の蓄積だけを止め、学習済みの補正は使い続ける | 既定 |
 | `typoCorrection.keyboardLayout` | `auto` | §12.4.2 の配列。値は `auto` だけ | 既定 |
-| `typoCorrection.maxReadingHypotheses` | `3` | 1 つの読みから作る §12.2 の補正 hypothesis の上限（1〜8） | 既定 |
+| `typoCorrection.maxReadingHypotheses` | `3` | 1 つの読みから作る §12.2 の補正 hypothesis の上限（1〜8）。§12.4.4 の辞書の制約の後に数える | 既定 |
 | `typoCorrection.minConfidenceForRanking` | `0.70` | §12.5・§12.11 のしきい値（0〜1） | 既定。2 つの大小が逆（等しいを含む）なら両方を既定 |
 | `typoCorrection.minConfidenceForTopCandidate` | `0.90` | §12.11 のしきい値（0〜1） | 同上 |
 | `typoCorrection.disableInSecretApps` | `true` | M55 の適用ゲートが secure の入力で補正を止める（§12.11・§12.12.2）。schema は `false` を拒否する。protocol v1 の Host の候補要求処理はこのキーを読まない（secure の入力の学習は学習ゲートが止め、補正読みは TIP が捨てる） | Host は `false` を読んでも `true` として扱う |

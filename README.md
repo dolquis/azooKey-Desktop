@@ -30,6 +30,7 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 - `tsf-tip/` — TSF Text Service DLL
 - `inference-host/` — 推論ホスト（既定は CPU。GPU 経路（Vulkan など）は [`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md)）
 - `core/` — OS 非依存の変換コア
+- `correction/` — 打ち間違い補正の読みの仮説の生成（OS 非依存）
 - `ipc/` — JSON + length-prefix IPC 定義
 - `learning/` — 学習・再ランキング
 - `settings/` — MVP 設定スキーマ

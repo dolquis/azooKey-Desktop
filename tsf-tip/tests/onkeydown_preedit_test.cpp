@@ -21446,6 +21446,56 @@ TEST(TsfTipInputScopeFieldTest, TheReadAfterTheActivationKeepsFieldsWithoutAKind
   }
 }
 
+// §13.4 (DEV-2171): the read posted at the activation does nothing once the
+// field was left or the TIP deactivated, and keeps input typed before it.
+TEST(TsfTipInputScopeFieldTest,
+     TheReadAfterTheActivationDoesNothingOnceTheFieldIsLeftOrInputBegan) {
+  using azookey::tsf::InputScopeField;
+  {
+    // The focus moves to another document before the read arrives.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    s.Focus(&s.plain_document, &s.field_document);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(s.h.service.input_scope_field_read_after_activation_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.plain, 'K'));
+  }
+  {
+    // The TIP is deactivated before the read arrives.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    EXPECT_EQ(s.h.service.Deactivate(), S_OK);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(s.h.service.input_scope_field_read_after_activation_for_test());
+    EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    // A composition is there when the read arrives: it is kept, the mode
+    // stays hiragana, and the field waits for a key without input.
+    InputScopeFieldHarness s;
+    ASSERT_TRUE(s.Type(s.h.context, 'K'));
+    ASSERT_TRUE(s.Type(s.h.context, 'A'));
+    ASSERT_NE(s.h.service.composition_, nullptr);
+    ActivateInTheField(s);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_NE(s.h.service.composition_, nullptr);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_FALSE(s.h.service.input_scope_field_read_after_activation_for_test());
+    EXPECT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+    ASSERT_TRUE(s.Type(s.h.context, VK_RETURN));
+    ASSERT_EQ(s.h.service.composition_, nullptr);
+    EXPECT_EQ(s.h.context.document->text, L"か");
+    // The late read keeps the entry the input kept (§13.4).
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+}
+
 // §13.4 (DEV-2171): the user's switch before the field is read holds; neither
 // the read after the activation nor the one before the first key undoes it.
 TEST(TsfTipInputScopeFieldTest, TheUsersSwitchBeforeTheFirstKeyAfterTheActivationHolds) {

@@ -7,6 +7,10 @@
 #include "azookey/core/PunctuationRules.h"
 #include "azookey/ipc/Payloads.h"
 
+namespace azookey::logging {
+class RuntimeLogger;
+}
+
 namespace azookey::host {
 
 struct PunctuationResult {
@@ -23,8 +27,9 @@ class PunctuationInserter {
                                   double boundary_confidence);
   // Missing/unreadable files use built-in rules. Reading on each enabled
   // request also makes edits visible to the next composition without touching
-  // an in-flight preedit.
-  static core::PunctuationRules LoadRules(std::string_view configured_path);
+  // an in-flight preedit. Invalid lines are reported to `logger` when set.
+  static core::PunctuationRules LoadRules(std::string_view configured_path,
+                                          logging::RuntimeLogger* logger = nullptr);
 };
 
 }  // namespace azookey::host

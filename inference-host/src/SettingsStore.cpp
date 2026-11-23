@@ -192,6 +192,11 @@ RuntimeSettings SettingsForEngineConfig(RuntimeSettings settings, bool engine_sa
   return settings;
 }
 
+bool SafeModeFlagLostAfterEntry(const SettingsLoadResult& reloaded, std::string_view entered_at) {
+  return reloaded.status != SettingsLoadStatus::Invalid && !reloaded.settings.safe_mode.enabled &&
+         reloaded.settings.safe_mode.entered_at != entered_at;
+}
+
 namespace {
 
 RuntimeSettings ParseRuntimeSettings(const j::Object& object) {

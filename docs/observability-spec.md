@@ -52,7 +52,10 @@ TIP と Host に導入する。§7.2 以降が定める最終形のうち、相�
   項目は `docs/debugging.md` の「キー単位の経路を収集する」が持つ。
 - 出力先とファイル名は `ipc-persistence-hardening-spec.md` §5.2 の
   `%LOCALAPPDATA%\azooKey\logs\host-YYYYMMDD.jsonl` と
-  `tip-YYYYMMDD.jsonl` とする。
+  `tip-YYYYMMDD.jsonl` とする。Host の部品（AI 送信の失敗、句読点規則の警告、Dispatcher）は
+  Host が渡す logger に書き、製品の Host は必ず渡す。logger を渡さずに作った Dispatcher
+  （bench・テスト）と `DispatcherConfig` の既定の AI backend は、`AZOOKEY_LOG=1` でもこのファイルに
+  書かない（ETW の記録はこれまでどおり）。
 - 各行の必須フィールドは `ts`、`component`、`level`、`event` とする。
   `request_id`、`result`、`error_code` など、既存の呼び出し位置で得られる
   メタ情報は構造化フィールドとして追加してよい。

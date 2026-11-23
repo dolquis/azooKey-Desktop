@@ -1541,6 +1541,72 @@ TEST(SettingsStoreTest, PersistSafeModeLeavesAnUnparsableFileAlone) {
   EXPECT_EQ(ReadText(path), "{ not json");
 }
 
+// DEV-2165: the reload right after the startup entry. A writer outside the file
+// lock that replaced the file in between drops the flag, with no safeMode or
+// with an older entry's record; the Host writes it once more with the same
+// values, keeping that writer's keys.
+TEST(SettingsStoreTest, SafeModeFlagLostToAnOutsideWriterIsWrittenAgain) {
+  ScopedTempDirectory temp("azookey_settings_safe_mode_flag_lost");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"maxCandidates":5})");
+  azookey::host::SettingsStore store(path);
+  const std::string entered_at = "2026-09-22T01:02:03Z";
+  for (const char* replaced :
+       {R"({"maxCandidates":7})",
+        R"({"maxCandidates":7,"safeMode":{"enabled":false,"enteredAt":"2026-09-01T00:00:00Z"}})"}) {
+    ASSERT_TRUE(store.PersistSafeModeEntered(entered_at, 3));
+    WriteText(path, replaced);
+    const auto reloaded = store.Load();
+    ASSERT_EQ(reloaded.status, azookey::host::SettingsLoadStatus::Loaded);
+    EXPECT_TRUE(azookey::host::SafeModeFlagLostAfterEntry(reloaded, entered_at)) << replaced;
+
+    ASSERT_TRUE(store.PersistSafeModeEntered(entered_at, 3));
+    const auto again = store.Load();
+    EXPECT_TRUE(again.settings.safe_mode.enabled);
+    EXPECT_EQ(again.settings.safe_mode.entered_at, entered_at);
+    EXPECT_EQ(again.settings.max_candidates, 7);
+    EXPECT_FALSE(azookey::host::SafeModeFlagLostAfterEntry(again, entered_at));
+  }
+}
+
+// The settings app turns the flag off only on the entry it read, so an
+// unchanged enteredAt is the user's clear, which the Host leaves off.
+TEST(SettingsStoreTest, SafeModeClearedOnTheSameEntryIsNotALostFlag) {
+  ScopedTempDirectory temp("azookey_settings_safe_mode_cleared_entry");
+  const auto path = temp.path() / "settings.json";
+  azookey::host::SettingsStore store(path);
+  ASSERT_TRUE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
+  WriteText(
+      path,
+      R"({"safeMode":{"enabled":false,"enteredAt":"2026-09-22T01:02:03Z","lastCrashCount":3}})");
+  const auto reloaded = store.Load();
+  ASSERT_EQ(reloaded.status, azookey::host::SettingsLoadStatus::Loaded);
+  ASSERT_FALSE(reloaded.settings.safe_mode.enabled);
+  EXPECT_FALSE(azookey::host::SafeModeFlagLostAfterEntry(reloaded, "2026-09-22T01:02:03Z"));
+}
+
+// A file that cannot be read after the entry is not written over, for the
+// reason the entry itself leaves it alone; a file that is gone is written
+// again, as the entry itself creates a missing file (section 8.5.3).
+TEST(SettingsStoreTest, SafeModeFlagIsNotRewrittenOverAnUnreadableFile) {
+  ScopedTempDirectory temp("azookey_settings_safe_mode_flag_unreadable");
+  const auto path = temp.path() / "settings.json";
+  azookey::host::SettingsStore store(path);
+  ASSERT_TRUE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
+  WriteText(path, "{ not json");
+  const auto reloaded = store.Load();
+  ASSERT_EQ(reloaded.status, azookey::host::SettingsLoadStatus::Invalid);
+  EXPECT_FALSE(azookey::host::SafeModeFlagLostAfterEntry(reloaded, "2026-09-22T01:02:03Z"));
+
+  ASSERT_TRUE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
+  std::filesystem::remove(path);
+  const auto missing = store.Load();
+  ASSERT_EQ(missing.status, azookey::host::SettingsLoadStatus::Missing);
+  EXPECT_TRUE(azookey::host::SafeModeFlagLostAfterEntry(missing, "2026-09-22T01:02:03Z"));
+  ASSERT_TRUE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
+  EXPECT_TRUE(store.Load().settings.safe_mode.enabled);
+}
+
 TEST(SettingsStoreTest, BenchmarkHistoryRetainsSevenResultsAndLatestDiskSettings) {
   ScopedTempDirectory temp("azookey_benchmark_history");
   const auto settings_path = temp.path() / "settings.json";

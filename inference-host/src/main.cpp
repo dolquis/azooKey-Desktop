@@ -42,6 +42,7 @@
 #include "azookey/core/EtwLogger.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
+#include "azookey/host/AiBackend.h"
 #include "azookey/host/BackendSelector.h"
 #include "azookey/host/CatalogFetchService.h"
 #include "azookey/host/CatalogModelMatcher.h"
@@ -818,10 +819,10 @@ int main(int argc, char** argv) {
         // An unparsable file was already quarantined by the load above, so it
         // now reads as missing; writing a fresh one here would replace settings
         // the user may still recover, which section 8.5.3 rules out.
-        entered_safe_mode =
-            settings_result.status != azookey::host::SettingsLoadStatus::Invalid &&
-            settings_store.PersistSafeModeEntered(azookey::host::FormatRfc3339Utc(now_epoch_ms),
-                                                  static_cast<int32_t>(outcome.recent_crashes));
+        const auto entered_at = azookey::host::FormatRfc3339Utc(now_epoch_ms);
+        const auto crash_count = static_cast<int32_t>(outcome.recent_crashes);
+        entered_safe_mode = settings_result.status != azookey::host::SettingsLoadStatus::Invalid &&
+                            settings_store.PersistSafeModeEntered(entered_at, crash_count);
         if (entered_safe_mode) {
           runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "safe_mode_entered",
                           {{"result", SafeLogText("ok")},
@@ -833,6 +834,22 @@ int main(int argc, char** argv) {
                            {"crash_count", static_cast<uint64_t>(outcome.recent_crashes)}});
         }
         if (entered_safe_mode) settings_result = settings_store.Load();
+        // A writer outside the file lock may have replaced the file in between,
+        // and the first UpdateConfig would take the missing flag for the user's
+        // clear. The flag is written once more (section 8.5.3, DEV-2165).
+        if (entered_safe_mode &&
+            azookey::host::SafeModeFlagLostAfterEntry(settings_result, entered_at)) {
+          const bool rewritten = settings_store.PersistSafeModeEntered(entered_at, crash_count);
+          if (rewritten) {
+            runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "safe_mode_flag_rewritten",
+                            {{"result", SafeLogText("ok")}});
+            settings_result = settings_store.Load();
+          } else {
+            runtime_log.Log(
+                azookey::logging::RuntimeLogLevel::Error, "safe_mode_flag_rewritten",
+                {{"result", SafeLogText("error")}, {"error_code", SafeLogText("business")}});
+          }
+        }
       }
     }
     run_history_lock.reset();
@@ -1287,6 +1304,9 @@ int main(int argc, char** argv) {
   std::atomic<azookey::host::BackendKind> current_auto_backend{default_backend};
   dconf.auto_backend = [&current_auto_backend] { return current_auto_backend.load(); };
   dconf.models_dir = user_paths->models_dir;
+  // The AI transport logs to this Host's logs directory, which `--data-root` may move (DEV-2178).
+  dconf.ai_backend =
+      std::make_shared<azookey::host::AiBackend>(azookey::host::AiHttpTransport{}, &runtime_log);
   dconf.on_config_applied = [&update_trending_settings, &apply_update_check_settings](
                                 const azookey::host::EngineConfig& applied) {
     update_trending_settings(applied);

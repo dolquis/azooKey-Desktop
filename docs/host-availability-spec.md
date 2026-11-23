@@ -413,7 +413,8 @@ pipe を取れない側の Host が先に印を書いた同時起動では、pip
 supervisor を介さない手動起動に限られる。解除の手順は `docs/debugging.md`「典型トラブル」に置く。正常終了は記録を空にするので、数えるのは直近の
 正常終了以降の連続クラッシュだけとなる。60 秒の窓に 3 回目が入った起動で `SafeMode` に入る。
 前回のクラッシュを検知した起動は `host_previous_run_crashed`（`recent_crashes`）、突入は
-`safe_mode_entered`（`result` / `crash_count`）、印の書き込み失敗は `host_run_history_write_failed`
+`safe_mode_entered`（`result` / `crash_count`）、突入の直後の flag の書き直し（下記）は `safe_mode_flag_rewritten`
+（`result`）、印の書き込み失敗は `host_run_history_write_failed`
 として記録する。
 
 `SafeMode` の間、Host は `settings.json` の内容にかかわらず次を強制する。モデルを
@@ -464,7 +465,16 @@ Host の再起動または `UpdateConfig`（§8.5.1）で行う。解除して�
 Host は `SafeMode` に入るとき、`settings.json` のファイルロックを取り、ディスク上の内容へ
 `safeMode` オブジェクトだけを合成して atomic に書き戻す（他のキーは保つ）。ファイルが
 存在するのに読めない、または JSON として解釈できない場合は書き換えず、その起動では
-`SafeMode` に入らない（`safe_mode_entered` を `result: "error"` で記録する）。書き込みは
+`SafeMode` に入らない（`safe_mode_entered` を `result: "error"` で記録する）。書き戻した直後の
+再読込で flag が無く、`enteredAt` も Host が書いた値でないとき（ファイルロックの外の書き手がその間に
+ファイルを置き換えたとき）は、同じ `enteredAt` と `lastCrashCount` でもう 1 回だけ書き戻して読み直し、
+`safe_mode_flag_rewritten`（`result`）として記録する。放置すると、最初の `UpdateConfig` が flag の欠落を
+利用者の解除と読むためである。`enteredAt` が同じで `enabled=false` なら利用者の解除として書き戻さず、
+読めないファイルも書き換えない。消えたファイルは、突入時と同じく作り直す。書き直しに失敗したときは `result: "error"`（`error_code`）として記録し、
+flag の無いまま起動を続ける（engine は SafeMode に入り、上の engine の状態による判定と設定への強制が当たる）。
+書き直しに失敗したとき、書き直しの直後の再読込で再び flag が落ちていたとき、突入の直後の再読込が `Invalid` だったとき
+（解釈できないファイルはその再読込で隔離される）は、engine は SafeMode に入るが、ディスクには flag が無いまま残りうる。
+そのため最初の `UpdateConfig` が §8.5.1 の解除と同じく `Healthy` へ戻しうる。書き込みは
 TIP の設定監視にも届き、TIP は通常の設定変更と同じく Handshake をやり直す。
 スキーマと Host 側の読み書きパスは同じ PR / コミットで揃え、永続化されない不整合状態を
 作らない。

@@ -471,7 +471,10 @@ Host は `SafeMode` に入るとき、`settings.json` のファイルロック�
 `safe_mode_flag_rewritten`（`result`）として記録する。放置すると、最初の `UpdateConfig` が flag の欠落を
 利用者の解除と読むためである。`enteredAt` が同じで `enabled=false` なら利用者の解除として書き戻さず、
 読めないファイルも書き換えない。消えたファイルは、突入時と同じく作り直す。書き直しに失敗したときは `result: "error"`（`error_code`）として記録し、
-flag の無いまま起動を続ける（engine は SafeMode に入り、上の engine の状態による判定と設定への強制が当たる）。書き込みは
+flag の無いまま起動を続ける（engine は SafeMode に入り、上の engine の状態による判定と設定への強制が当たる）。
+書き直しに失敗したとき、書き直しの直後の再読込で再び flag が落ちていたとき、突入の直後の再読込が `Invalid` だったとき
+（解釈できないファイルはその再読込で隔離される）は、engine は SafeMode に入るが、ディスクには flag が無いまま残りうる。
+そのため最初の `UpdateConfig` が §8.5.1 の解除と同じく `Healthy` へ戻しうる。書き込みは
 TIP の設定監視にも届き、TIP は通常の設定変更と同じく Handshake をやり直す。
 スキーマと Host 側の読み書きパスは同じ PR / コミットで揃え、永続化されない不整合状態を
 作らない。

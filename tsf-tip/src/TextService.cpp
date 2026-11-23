@@ -1771,6 +1771,8 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     // Activation already opened the keyboard; record the document so a restore
     // of its input context right after activation is undone once as well.
     ApplyInitialKeyboardOpenOnFocus(focused_document);
+    // M67: its field is read from the candidates ready message posted below.
+    MarkInputScopeFieldOnActivation(focused_document);
     ITfContext* focused_context = nullptr;
     if (SUCCEEDED(focused_document->GetTop(&focused_context)) && focused_context) {
       AdviseTextEditSink(focused_context);
@@ -2109,19 +2111,22 @@ void TextService::ReopenIfInitialOpenWasUndone() {
 }
 
 // M67 (app-profile-spec §13.3, §13.4): one read of the field when its document
-// gains focus, or once more before the first key when that read failed. The
+// gains focus, or right after the activation when it already had focus, and
+// once more before the first key when that read failed. The
 // M46 decision of the same probe decides first: a secure field never switches.
-void TextService::EnterInputScopeField(ITfContext* context, std::string_view source) {
+void TextService::EnterInputScopeField(ITfContext* context, std::string_view source,
+                                       bool read_again_on_failure) {
   AZOOKEY_ASSERT_UI_THREAD();
   const bool first_read = source == "focus";
-  // Input that was there before a late read kept the entry too (§13.4).
+  const bool read_again = first_read || read_again_on_failure;
+  // Input, or the user's switch, before a late read kept the entry too (§13.4).
   const bool entry_kept = !first_read && input_scope_field_.entry_kept;
   input_scope_field_ = {};
   const bool input_left =
       composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose();
   if (!context) {
-    input_scope_field_.reprobe = first_read;
-    input_scope_field_.entry_kept = first_read && input_left;
+    input_scope_field_.reprobe = read_again;
+    input_scope_field_.entry_kept = read_again && (entry_kept || input_left);
     return;
   }
   // The decision only: applying it here would move M46 to the focus change.
@@ -2132,9 +2137,9 @@ void TextService::EnterInputScopeField(ITfContext* context, std::string_view sou
   }
   if (privacy.scope_status == InputScopeProbeStatus::SessionFailed ||
       privacy.scope_status == InputScopeProbeStatus::NoContext) {
-    input_scope_field_.reprobe = first_read;
-    input_scope_field_.entry_kept = first_read && input_left;
-    if (!first_read) LogInputScopeFieldOnChange(InputScopeField::None, source);
+    input_scope_field_.reprobe = read_again;
+    input_scope_field_.entry_kept = read_again && (entry_kept || input_left);
+    if (!read_again) LogInputScopeFieldOnChange(InputScopeField::None, source);
     return;
   }
   auto& field = input_scope_field_;
@@ -2152,14 +2157,61 @@ void TextService::EnterInputScopeField(ITfContext* context, std::string_view sou
   if (!alnum_mode_) SwitchToAlphanumericForInputScope();
 }
 
-void TextService::ReprobeInputScopeFieldBeforeKey(ITfContext* context) {
+// §13.4 (DEV-2171): a document that already has focus when the TIP is
+// activated is read once ActivateEx has returned, from the posted candidates
+// ready message, so no edit session runs inside ActivateEx. A key before that
+// read, or a read that fails, reads it before the first key without input.
+void TextService::MarkInputScopeFieldOnActivation(ITfDocumentMgr* document_mgr) {
+  input_scope_field_ = {};
+  input_scope_field_.reprobe = true;
+  input_scope_field_.read_after_activation = ComIdentity(document_mgr);
+}
+
+void TextService::ReadInputScopeFieldAfterActivation() {
+  auto& field = input_scope_field_;
+  const void* document = std::exchange(field.read_after_activation, nullptr);
+  if (!document || !field.reprobe || !text_edit_context_) return;
+  // Input typed meanwhile waits for the first key without input.
+  if (composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose()) return;
+  // A context pushed meanwhile may belong to another document; the first key
+  // then reads the context it comes from.
+  ITfDocumentMgr* owner = nullptr;
+  const bool same_document = SUCCEEDED(text_edit_context_->GetDocumentMgr(&owner)) && owner &&
+                             ComIdentity(owner) == document;
+  if (owner) owner->Release();
+  if (!same_document) return;
+  EnterInputScopeField(text_edit_context_, "first_key", /*read_again_on_failure=*/true);
+}
+
+void TextService::ReprobeInputScopeFieldBeforeKey(ITfContext* context, WPARAM key) {
   if (!input_scope_field_.reprobe || !context) return;
   if (composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose()) {
     // The read waits for a key without input; the entry stays as it is now.
     input_scope_field_.entry_kept = true;
     return;
   }
+  // The key itself is the user's switch, which the field keeps (§13.4): the
+  // read must not switch first and have the key switch back.
+  if (SwitchesInputModeByUser(key)) input_scope_field_.entry_kept = true;
   EnterInputScopeField(context, "first_key");
+}
+
+bool TextService::SwitchesInputModeByUser(WPARAM key) {
+  const uint32_t modifiers = CurrentKeyModifiers();
+  if (ClassifyOpenCloseKey(static_cast<uint32_t>(key), modifiers,
+                           local_settings_.ConvertKeysActionSnapshot()) != OpenCloseKeyAction::None)
+    return true;
+  // With the IME off the alphanumeric key goes to the app and switches nothing.
+  return keyboard_open_ &&
+         IsActionKey(MapTipKey(key, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
+                               candidate_ui_.IsShowing(), UnicodeInputActive()),
+                     core::UserAction::ToggleAlnum);
+}
+
+void TextService::NoteUserInputModeSwitch() {
+  input_scope_field_.reapply_on_open = false;
+  // A field still waiting to be read keeps the user's choice when it is read.
+  if (input_scope_field_.reprobe) input_scope_field_.entry_kept = true;
 }
 
 void TextService::RestoreInputModeAfterInputScopeField(std::optional<bool> alnum) {
@@ -3176,7 +3228,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       }
     }
     ResolveCarriedInput(context);
-    ReprobeInputScopeFieldBeforeKey(context);
+    ReprobeInputScopeFieldBeforeKey(context, wParam);
 
     // An app-disabled context (Chromium's password field) is not ours to
     // convert: TSF still calls the key sinks, so leave every key to the app.
@@ -3545,7 +3597,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
     ResolveCarriedInput(context);
-    ReprobeInputScopeFieldBeforeKey(context);
+    ReprobeInputScopeFieldBeforeKey(context, wParam);
     // Input-style-spec §2: a composition keeps the style it started with; a key
     // typed without input takes the current setting.
     if (!HasCompositionInput()) composition_input_style_ = local_settings_.InputStyleSnapshot();
@@ -10639,6 +10691,7 @@ void TextService::OnCandidatesReady(void* context) {
     if (std::exchange(service->host_config_reload_pending_, false)) service->RetryModelFromUi();
   }
   service->RunPendingProofreadReconversion();
+  service->ReadInputScopeFieldAfterActivation();
   service->PrefetchSelectedReconversion();
   service->ShowReconversionResult();
   // M16: the prompt window opens here, after the key that asked for it has

@@ -366,6 +366,14 @@ class TextService final : public ITfTextInputProcessorEx,
   InputScopeField input_scope_field_for_test() const { return input_scope_field_.field; }
   bool input_scope_field_applies_for_test() const { return input_scope_field_.applies; }
   bool input_scope_field_reprobe_for_test() const { return input_scope_field_.reprobe; }
+  // What ActivateEx does for a document that already has focus (§13.4); the
+  // read itself waits for process_candidates_ready_for_test.
+  void mark_input_scope_field_on_activation_for_test(ITfDocumentMgr* document_mgr) {
+    MarkInputScopeFieldOnActivation(document_mgr);
+  }
+  bool input_scope_field_read_after_activation_for_test() const {
+    return input_scope_field_.read_after_activation != nullptr;
+  }
   const std::string& batch_raw_romaji_for_test() const { return batch_raw_romaji_; }
   // Gives a harness that never calls ActivateEx an open/close compartment
   // (no sink); Deactivate releases it.
@@ -1121,21 +1129,25 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ui_less_mode_{false};
   bool alnum_mode_{false};
   // M67 (app-profile-spec §13.3, §13.4): the input scope field of the focused
-  // document, determined once when the document gains focus.
+  // document, determined once when the document gains focus, or right after
+  // the activation when it already had focus then.
   struct InputScopeFieldState {
     // The kind §13.3 found, kept even when the entry did not switch.
     InputScopeField field{InputScopeField::None};
     // The field is not secure and inputScopeSwitching was on when it was found,
     // so the entry mode and the suppressions apply.
     bool applies{false};
-    // The focus probe could not read the scopes: read them once more before
-    // the first key without a composition.
+    // The focus probe could not read the scopes, or the document had focus at
+    // the activation: read them before the first key without a composition.
     bool reprobe{false};
+    // The document (COM identity) that had focus at the activation: the posted
+    // candidates ready message reads it once ActivateEx has returned.
+    const void* read_after_activation{nullptr};
     // An On that is not the user's switches to the alphanumeric mode. Off once
     // the user switches, and when input kept the entry from switching.
     bool reapply_on_open{false};
-    // Input was there while the field waited to be read again, so the late
-    // read keeps the entry mode as well.
+    // Input was there, or the user switched, while the field waited to be read
+    // again, so the late read keeps the entry mode as well.
     bool entry_kept{false};
     // The mode before entering (true: alphanumeric), restored on leaving.
     std::optional<bool> restore_alnum;
@@ -2108,11 +2120,19 @@ class TextService final : public ITfTextInputProcessorEx,
   // M67 (app-profile-spec §13.3–§13.5). Enter determines the field of
   // `context` (null: none yet) and switches its entry mode; source is the
   // fixed word "focus" or "first_key" for the log.
-  void EnterInputScopeField(ITfContext* context, std::string_view source);
-  void ReprobeInputScopeFieldBeforeKey(ITfContext* context);
+  // `read_again_on_failure`: a failed read waits for the first key, as at the
+  // focus (the read right after the activation).
+  void EnterInputScopeField(ITfContext* context, std::string_view source,
+                            bool read_again_on_failure = false);
+  void MarkInputScopeFieldOnActivation(ITfDocumentMgr* document_mgr);
+  void ReadInputScopeFieldAfterActivation();
+  void ReprobeInputScopeFieldBeforeKey(ITfContext* context, WPARAM key);
+  // The open/close keys and the alphanumeric toggle, the user's switches §13.4
+  // keeps in the field.
+  bool SwitchesInputModeByUser(WPARAM key);
   void RestoreInputModeAfterInputScopeField(std::optional<bool> alnum);
   void ApplyInputScopeFieldAfterAutoOpen();
-  void NoteUserInputModeSwitch() { input_scope_field_.reapply_on_open = false; }
+  void NoteUserInputModeSwitch();
   void SwitchToAlphanumericForInputScope();
   // The effective inputScopeSwitching of the app now (§13.5, §13.6).
   bool InputScopeSwitchingEnabled();

@@ -271,7 +271,13 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
   STDMETHODIMP Deactivate() override { return S_OK; }
   STDMETHODIMP CreateDocumentMgr(ITfDocumentMgr** pp) override { if (pp) *pp = nullptr; return E_NOTIMPL; }
   STDMETHODIMP EnumDocumentMgrs(IEnumTfDocumentMgrs** pp) override { if (pp) *pp = nullptr; return E_NOTIMPL; }
-  STDMETHODIMP GetFocus(ITfDocumentMgr** pp) override { if (pp) *pp = nullptr; return E_NOTIMPL; }
+  STDMETHODIMP GetFocus(ITfDocumentMgr** pp) override {
+    if (!pp) return E_INVALIDARG;
+    *pp = focus;
+    if (!focus) return E_NOTIMPL;
+    focus->AddRef();
+    return S_OK;
+  }
   STDMETHODIMP SetFocus(ITfDocumentMgr*) override { return E_NOTIMPL; }
   STDMETHODIMP AssociateFocus(HWND, ITfDocumentMgr*, ITfDocumentMgr** pp) override {
     if (pp) *pp = nullptr;
@@ -398,6 +404,8 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
   bool SetThreadFocus() { return focus_sink_ && SUCCEEDED(focus_sink_->OnSetThreadFocus()); }
 
   TfClientId client_id{7};
+  // The document that has focus when the TIP is activated; null: none.
+  ITfDocumentMgr* focus{nullptr};
   MockKeyboardCompartment keyboard_compartment;
   // Set to expose ITfLangBarItemMgr; null keeps the host without a language bar.
   MockLangBarItemMgr* langbar{nullptr};
@@ -454,9 +462,14 @@ class MockDocumentMgr final : public ITfDocumentMgr {
   STDMETHODIMP Push(ITfContext*) override { return E_NOTIMPL; }
   STDMETHODIMP Pop(DWORD) override { return E_NOTIMPL; }
   STDMETHODIMP GetTop(ITfContext** pp) override {
-    if (pp) *pp = nullptr;
-    return E_NOTIMPL;
+    if (!pp) return E_INVALIDARG;
+    *pp = top;
+    if (!top) return E_NOTIMPL;
+    top->AddRef();
+    return S_OK;
   }
+  // The top context; null: GetTop reports none.
+  ITfContext* top{nullptr};
   STDMETHODIMP GetBase(ITfContext** pp) override {
     if (pp) *pp = nullptr;
     return E_NOTIMPL;
@@ -922,6 +935,117 @@ TEST(TsfTipActivateUiLessTest, UninitializedDocumentIsNewAgain) {
   ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
   EXPECT_TRUE(service.keyboard_open());
   EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+namespace {
+
+// The focused document's top context at the activation: it takes the text
+// edit sink and counts the edit sessions asked of it, refusing them all.
+class SessionCountingContext final : public ITfContext, public ITfSource {
+ public:
+  explicit SessionCountingContext(ITfDocumentMgr* document) : document_(document) {}
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    *ppv = nullptr;
+    if (riid == IID_IUnknown || riid == IID_ITfContext)
+      *ppv = static_cast<ITfContext*>(this);
+    else if (riid == IID_ITfSource)
+      *ppv = static_cast<ITfSource*>(this);
+    else
+      return E_NOINTERFACE;
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP RequestEditSession(TfClientId, ITfEditSession*, DWORD, HRESULT* result) override {
+    ++sessions;
+    if (result) *result = E_FAIL;
+    return E_FAIL;
+  }
+  STDMETHODIMP InWriteSession(TfClientId, BOOL*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetSelection(TfEditCookie, ULONG, ULONG, TF_SELECTION*, ULONG*) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG, const TF_SELECTION*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetStart(TfEditCookie, ITfRange**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetEnd(TfEditCookie, ITfRange**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetActiveView(ITfContextView**) override { return E_NOTIMPL; }
+  STDMETHODIMP EnumViews(IEnumTfContextViews**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetStatus(TF_STATUS*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetProperty(REFGUID, ITfProperty**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetAppProperty(REFGUID, ITfReadOnlyProperty**) override { return E_NOTIMPL; }
+  STDMETHODIMP TrackProperties(const GUID**, ULONG, const GUID**, ULONG,
+                               ITfReadOnlyProperty**) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP EnumProperties(IEnumTfProperties**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetDocumentMgr(ITfDocumentMgr** pp) override {
+    if (!pp) return E_INVALIDARG;
+    *pp = document_;
+    document_->AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP CreateRangeBackup(TfEditCookie, ITfRange*, ITfRangeBackup**) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP AdviseSink(REFIID riid, IUnknown* sink, DWORD* cookie) override {
+    if (!sink || !cookie) return E_POINTER;
+    if (riid != IID_ITfTextEditSink) return E_NOINTERFACE;
+    *cookie = 0x2171;
+    return S_OK;
+  }
+  STDMETHODIMP UnadviseSink(DWORD cookie) override {
+    return cookie == 0x2171 ? S_OK : E_INVALIDARG;
+  }
+
+  int sessions{0};
+
+ private:
+  ITfDocumentMgr* document_;
+};
+
+}  // namespace
+
+// app-profile-spec §13.4 (DEV-2171): ActivateEx asks no edit session of the
+// focused document; the candidates ready message it posts reads the field,
+// and a read refused there waits for the first key.
+TEST(TsfTipActivateUiLessTest, TheFieldFocusedAtTheActivationIsReadOnlyAfterActivateExReturns) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  SessionCountingContext context(&document);
+  document.top = &context;
+  mock.focus = &document;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(context.sessions, 0);
+  ASSERT_TRUE(service.input_scope_field_read_after_activation_for_test());
+  service.process_candidates_ready_for_test();
+  EXPECT_GT(context.sessions, 0);
+  EXPECT_FALSE(service.input_scope_field_read_after_activation_for_test());
+  EXPECT_TRUE(service.input_scope_field_reprobe_for_test());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+// app-profile-spec §13.4 (DEV-2171): a document that has focus at the
+// activation is marked for a read once ActivateEx has returned, or before its
+// first key; without one, the next focus reads it.
+TEST(TsfTipActivateUiLessTest, ActivationWithAFocusedDocumentMarksItsFieldForALateRead) {
+  {
+    azookey::tsf::TextService service;
+    MockThreadMgrEx mock(0);
+    ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+    EXPECT_FALSE(service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(service.Deactivate(), S_OK);
+  }
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  mock.focus = &document;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_TRUE(service.input_scope_field_reprobe_for_test());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_FALSE(service.input_scope_field_reprobe_for_test());
 }
 
 TEST(TsfTipActivateUiLessTest, ActivateExConvertsAllocationFailureAndRollsBackActivation) {

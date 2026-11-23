@@ -332,6 +332,9 @@ const FuzzyKanaCandidate* FindFuzzyKana(const std::vector<FuzzyKanaCandidate>& c
   }
   return nullptr;
 }
+// The pointer would outlive a temporary list.
+const FuzzyKanaCandidate* FindFuzzyKana(std::vector<FuzzyKanaCandidate>&&,
+                                        const std::string&) = delete;
 
 }  // namespace
 
@@ -394,6 +397,36 @@ TEST(RomajiKanaConverterTest, FuzzyMatchListsDistinctKanaCheapestFirst) {
 }
 
 // An inserted apostrophe ends "nn" at ん, so "kann'i" reaches かんい.
+// NearKeysOnly lets only adjacent or same-finger keys stand in for one another.
+TEST(RomajiKanaConverterTest, FuzzyMatchCanSubstituteNearKeysOnly) {
+  using azookey::core::FuzzySubstitutions;
+  const azookey::core::RomajiKanaConverter converter{};
+  // h for f is a far substitution. At the same cost, the left-out w of "hwe"
+  // also reaches かふぇてん.
+  const auto all = converter.FuzzyMatch("kaheten", 256);
+  const FuzzyKanaCandidate* far = FindFuzzyKana(all, "かふぇてん");
+  ASSERT_NE(far, nullptr);
+  EXPECT_EQ(far->romaji, "kafeten");
+  EXPECT_EQ(far->cost, 1.0);
+  const auto near = converter.FuzzyMatch("kaheten", 256, FuzzySubstitutions::NearKeysOnly);
+  const FuzzyKanaCandidate* left_out = FindFuzzyKana(near, "かふぇてん");
+  ASSERT_NE(left_out, nullptr);
+  EXPECT_EQ(left_out->romaji, "kahweten");
+  EXPECT_EQ(left_out->cost, 1.0);
+
+  // k for g is far, so ぎんこう is not reached at that cost.
+  const auto all_kinkou = converter.FuzzyMatch("kinkou", 256);
+  EXPECT_NE(FindFuzzyKana(all_kinkou, "ぎんこう"), nullptr);
+  const auto near_kinkou = converter.FuzzyMatch("kinkou", 256, FuzzySubstitutions::NearKeysOnly);
+  EXPECT_EQ(FindFuzzyKana(near_kinkou, "ぎんこう"), nullptr);
+
+  // Adjacent keys still substitute.
+  const auto near_taberi = converter.FuzzyMatch("taberi", 256, FuzzySubstitutions::NearKeysOnly);
+  const FuzzyKanaCandidate* adjacent = FindFuzzyKana(near_taberi, "たべる");
+  ASSERT_NE(adjacent, nullptr);
+  EXPECT_EQ(adjacent->cost, 0.7);
+}
+
 TEST(RomajiKanaConverterTest, FuzzyMatchInsertsAnApostropheAfterN) {
   const azookey::core::RomajiKanaConverter converter{};
   const auto candidates = converter.FuzzyMatch("kanni", 256);

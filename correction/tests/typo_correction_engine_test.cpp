@@ -118,6 +118,10 @@ INSTANTIATE_TEST_SUITE_P(
                  EditSpace::Keys},
         TypoCase{"DakutenFromReading", "", "きんこう", "ぎんこう", TypoType::DakutenConfusion,
                  EditSpace::Reading},
+        // k and g are far keys: the key path leaves the substitution out and the
+        // reading path gives ぎんこう at the same cost.
+        TypoCase{"DakutenOfFarKeys", "kinkou", "きんこう", "ぎんこう", TypoType::DakutenConfusion,
+                 EditSpace::Reading},
         TypoCase{"DakutenWithKanaShape", "", "かいしや", "がいしゃ", TypoType::DakutenConfusion,
                  EditSpace::Reading},
         // The left-out "l" of "silyain" ties the reading's substitution and wins as Keys.
@@ -266,6 +270,20 @@ TEST(TypoCorrectionEngineTest, KeyEditsDescribeWhatWasTyped) {
       {CorrectionEditKind::Substitution, U'i', U'u', U'r'}};
   EXPECT_EQ(substituted->edits, i_for_u);
   EXPECT_EQ(substituted->cost, 0.7);
+}
+
+// Far keys fit no type. At the same cost, "kahweten" (the left-out w of "hwe")
+// does, so かふぇてん comes back as missing_char rather than being dropped.
+TEST(TypoCorrectionEngineTest, ASpellingThatFitsATypeGivesTheReading) {
+  const auto hypotheses = Generate("かへてん", "kaheten");
+  const ReadingHypothesis* hit = FindCorrection(hypotheses, "かふぇてん");
+  ASSERT_NE(hit, nullptr);
+  ASSERT_TRUE(hit->typo_type.has_value());
+  EXPECT_EQ(*hit->typo_type, TypoType::MissingChar);
+  EXPECT_EQ(hit->edit_space, EditSpace::Keys);
+  const std::vector<CorrectionEdit> missing_w = {{CorrectionEditKind::Deletion, U'w', 0, U'h'}};
+  EXPECT_EQ(hit->edits, missing_w);
+  EXPECT_EQ(hit->cost, 1.0);
 }
 
 TEST(TypoCorrectionEngineTest, ReadingEditsSubstituteKana) {

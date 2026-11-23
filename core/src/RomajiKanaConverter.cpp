@@ -331,8 +331,8 @@ std::vector<std::string> RomajiKanaConverter::AmbiguousReadings(
   return readings;
 }
 
-std::vector<FuzzyKanaCandidate> RomajiKanaConverter::FuzzyMatch(std::string_view input,
-                                                                size_t k) const {
+std::vector<FuzzyKanaCandidate> RomajiKanaConverter::FuzzyMatch(
+    std::string_view input, size_t k, FuzzySubstitutions substitutions) const {
   if (custom_table_ || k == 0 || input.empty() || input.size() > kFuzzyMaxInputLength) return {};
   if (!std::all_of(input.begin(), input.end(), IsFuzzyInputCharacter)) return {};
   const std::string standard = ConvertForCommit(std::string(input));
@@ -492,7 +492,8 @@ std::vector<FuzzyKanaCandidate> RomajiKanaConverter::FuzzyMatch(std::string_view
     skipped.edits = next_edits;
     skipped.cost = base + kQwertyBaseEditCost;
     push_expand(std::move(skipped));
-    for (char key = 'a'; typed_letter && key <= 'z'; ++key) {
+    const bool far_keys = substitutions == FuzzySubstitutions::All;
+    for (char key = 'a'; typed_letter && far_keys && key <= 'z'; ++key) {
       if (key == typed || QwertySubstitutionCost(typed, key) < kQwertyBaseEditCost) continue;
       feed(index, std::string_view(&key, 1), position + 1, next_edits, base + kQwertyBaseEditCost);
     }

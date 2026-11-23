@@ -65,7 +65,8 @@ struct TypoCorrectionOptions {
 //
 // - Keys: when raw_keys is romaji and the built-in table converts it to the
 //   observed reading, RomajiKanaConverter::FuzzyMatch proposes readings within
-//   kTypoMaxEdits key edits. A reading that AmbiguousReadings gives raw_keys
+//   kTypoMaxEdits key edits, substituting only adjacent or same-finger keys.
+//   A reading that AmbiguousReadings gives raw_keys
 //   is a reading choice, not a correction (docs/legacy-parity-spec.md
 //   section 5.4), and is left out.
 // - Reading: single and double substitutions of the observed reading's kana

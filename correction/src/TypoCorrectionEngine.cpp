@@ -364,7 +364,12 @@ void AddKeyCandidates(std::string_view observed_reading, const std::u32string& o
   if (core::RomajiKanaConverter::ConvertForCommit(typed) != observed_reading) return;
   const auto ambiguous = core::RomajiKanaConverter::AmbiguousReadings(typed);
   core::RomajiKanaConverter converter;
-  for (const auto& fuzzy : converter.FuzzyMatch(typed, kMaxTypoHypotheses)) {
+  // A substitution of keys that are neither adjacent nor typed by the same
+  // finger fits no section 12.3 type; the voiced / small kana ones it could
+  // reach come from the reading path at the same cost. Leaving them out keeps
+  // the 256 readings for edits that classify.
+  for (const auto& fuzzy :
+       converter.FuzzyMatch(typed, kMaxTypoHypotheses, core::FuzzySubstitutions::NearKeysOnly)) {
     if (std::find(ambiguous.begin(), ambiguous.end(), fuzzy.kana) != ambiguous.end()) continue;
     const std::u32string intended(fuzzy.romaji.begin(), fuzzy.romaji.end());
     auto [cost, placed] = Align(keys, intended, keyboard);

@@ -16,6 +16,12 @@ struct FuzzyKanaCandidate {
   std::string romaji;  // the edited romaji that converts to `kana`
 };
 
+// The substitutions FuzzyMatch may make.
+enum class FuzzySubstitutions {
+  All,           // any letter for any other letter
+  NearKeysOnly,  // only keys adjacent or typed by the same finger (QwertyAdjacency.h)
+};
+
 class RomajiKanaConverter {
  public:
   std::string Feed(char ascii);
@@ -69,7 +75,11 @@ class RomajiKanaConverter {
   // kFuzzyMaxInputLength input, or for a key other than 'a'-'z', '-' and '\''.
   // The search stops after kFuzzyNodeBudget states, so a long input may yield
   // fewer readings. The pending keys of this converter are not used.
-  std::vector<FuzzyKanaCandidate> FuzzyMatch(std::string_view input, size_t k) const;
+  // NearKeysOnly leaves out substitutions of keys that are neither adjacent nor
+  // typed by the same finger.
+  std::vector<FuzzyKanaCandidate> FuzzyMatch(
+      std::string_view input, size_t k,
+      FuzzySubstitutions substitutions = FuzzySubstitutions::All) const;
 
  private:
   std::string pending_;

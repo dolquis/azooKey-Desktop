@@ -962,6 +962,43 @@ TEST(ReconversionFunctionTest, QueuedChoiceLeavesTextAfterSelectionChangeOrEscap
   }
 }
 
+// tsf-deep-integration-spec §2.3: an app that draws the list moves the
+// highlight with SetSelection as ↑↓ do, replaces the range with it on Finalize
+// as Enter does, and closes the list on Abort as Esc does.
+TEST(ReconversionFunctionTest, AppBehaviorSelectsReplacesAndAbortsTheList) {
+  {
+    SCOPED_TRACE("SetSelection and Finalize");
+    WordReconversionChoice test;
+    ASSERT_NO_FATAL_FAILURE(test.Open());
+    const auto behavior = test.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    EXPECT_EQ(behavior->SetSelection(1), S_OK);
+    EXPECT_EQ(test.service.candidate_selected_for_test(), 1);
+    EXPECT_TRUE(test.context.deferred.empty());
+    EXPECT_EQ(*test.text, L"明日別");
+    EXPECT_EQ(behavior->Finalize(), S_OK);
+    ASSERT_EQ(test.context.deferred.size(), 1u);
+    EXPECT_TRUE(test.service.reconversion_select_pending_for_test());
+    test.context.RunDeferred();
+    EXPECT_EQ(*test.text, L"明晩別");
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+    EXPECT_EQ(test.service.queued_corrections_for_test().size(), 1u);
+  }
+  {
+    SCOPED_TRACE("Abort");
+    WordReconversionChoice test;
+    ASSERT_NO_FATAL_FAILURE(test.Open());
+    const auto behavior = test.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    EXPECT_EQ(behavior->Abort(), S_OK);
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+    EXPECT_FALSE(test.service.candidate_window_showing_for_test());
+    EXPECT_TRUE(test.context.deferred.empty());
+    EXPECT_EQ(*test.text, L"明日別");
+    EXPECT_EQ(behavior->Finalize(), E_FAIL);
+  }
+}
+
 TEST(ReconversionFunctionTest, FailedChoiceReturnsHighlightAndKeepsCandidates) {
   WordReconversionChoice test;
   ASSERT_NO_FATAL_FAILURE(test.Open());

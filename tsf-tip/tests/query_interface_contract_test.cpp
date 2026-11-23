@@ -92,6 +92,31 @@ TEST(TsfTipQueryInterfaceContractTest, UnsupportedInterfaceClearsOutParam) {
   ExpectUnsupportedInterfaceClearsOutParam(candidates);
 }
 
+// tsf-deep-integration-spec §2.3: an app reaches the behavior interface and the
+// three it extends on the same object.
+TEST(TsfTipQueryInterfaceContractTest, CandidateListExposesBehaviorWithTheSameIdentity) {
+  azookey::tsf::CandidateListUIElement candidates({L"candidate"}, 0);
+  IUnknown* identity = nullptr;
+  ASSERT_EQ(candidates.QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&identity)), S_OK);
+  for (const IID& iid :
+       {IID_ITfUIElement, IID_ITfCandidateListUIElement, IID_ITfCandidateListUIElementBehavior}) {
+    void* out = nullptr;
+    ASSERT_EQ(candidates.QueryInterface(iid, &out), S_OK);
+    ASSERT_NE(out, nullptr);
+    IUnknown* out_identity = nullptr;
+    ASSERT_EQ(static_cast<IUnknown*>(out)->QueryInterface(IID_IUnknown,
+                                                          reinterpret_cast<void**>(&out_identity)),
+              S_OK);
+    EXPECT_EQ(out_identity, identity);
+    out_identity->Release();
+    static_cast<IUnknown*>(out)->Release();
+  }
+  identity->Release();
+  // Outside a list there is no TIP to take the calls.
+  EXPECT_EQ(candidates.Finalize(), E_FAIL);
+  EXPECT_EQ(candidates.SetSelection(1), E_INVALIDARG);
+}
+
 TEST(TsfTipQueryInterfaceContractTest, TextServiceExposesConfigureFunction) {
   azookey::tsf::TextService service;
   ITfFnConfigure* configure = nullptr;

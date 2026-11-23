@@ -1200,6 +1200,37 @@ TEST(SegmentEditingTest, CandidateKeysMoveAmongTheFirstSegmentsCandidates) {
   EXPECT_EQ(down.next.segment_end(), 3u);
 }
 
+// Spec §4: an app's SetSelection (tsf-deep-integration-spec §2.3) moves as the
+// arrow keys do, onto any candidate of the whole reading or the first segment.
+// While the first segment's candidates are awaited it does nothing (§5.2).
+TEST(SegmentEditingTest, AnAppsSelectionMovesToAnyCandidateExceptWhileAwaiting) {
+  const HandleResult whole = SelectingKyouha().SelectCandidate(1);
+  EXPECT_EQ(whole.next.kind(), K::Selecting);
+  EXPECT_EQ(whole.next.selected_index(), 1u);
+  EXPECT_EQ(whole.actions, (Actions{UpdateCandidateSelection{1}, ReplaceMarkedText{"きょうは"}}));
+
+  const InputState resized = ResizedKyou();
+  const HandleResult second = resized.SelectCandidate(1);
+  EXPECT_EQ(second.next.selected_index(), 1u);
+  EXPECT_EQ(second.next.segment_end(), 3u);
+  EXPECT_EQ(second.actions, (Actions{UpdateCandidateSelection{1}, ReplaceMarkedText{"京は"}}));
+  // Enter then commits the first segment with that candidate.
+  EXPECT_EQ(second.next.HandleEvent(Ev(UserAction::Commit)).actions.at(1),
+            (ClientAction{CommitFirstSegment{"京", "は"}}));
+
+  const HandleResult past = resized.SelectCandidate(3);
+  EXPECT_TRUE(past.actions.empty());
+  EXPECT_EQ(past.next.selected_index(), 0u);
+  const InputState waiting = SelectingKyouha().HandleEvent(Ev(UserAction::ShrinkSegment)).next;
+  const HandleResult awaited = waiting.SelectCandidate(1);
+  EXPECT_TRUE(awaited.actions.empty());
+  EXPECT_EQ(awaited.next.selected_index(), 0u);
+  EXPECT_TRUE(awaited.next.awaiting_segment_candidates());
+  const HandleResult composing = Composing().SelectCandidate(0);
+  EXPECT_TRUE(composing.actions.empty());
+  EXPECT_EQ(composing.next.kind(), K::Composing);
+}
+
 // Spec §6.1: Enter, → (and Ctrl+F) and the digits.
 TEST(SegmentEditingTest, PartialCommitCommitsTheFirstSegmentAndWaitsForTheRest) {
   const InputState second = ResizedKyou().HandleEvent(Ev(UserAction::Down)).next;

@@ -1479,6 +1479,9 @@ TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
   ipc_client_.SetRuntimeLogger(&TipRuntimeLogger());
   ipc_client_.SetTraceClientId(TraceGuid(ipc_client_id_));
   candidate_ui_.SetBeginObserver(&LogCandidateUiBegin, nullptr);
+  candidate_ui_.SetOnBehavior([this](CandidateListBehavior behavior, int idx) {
+    return OnCandidateListBehavior(behavior, idx);
+  });
   if (ipc_client_id_.empty()) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_client_id_fallback");
   }
@@ -11961,6 +11964,156 @@ void TextService::OnCandidateClicked(int idx) {
   }
   selected_candidate_idx_ = idx;
   if (active_context_) CommitSelected(active_context_);
+}
+
+HRESULT TextService::OnCandidateListBehavior(CandidateListBehavior behavior, int idx) {
+  try {
+    if (reconversion_list_) {
+      // The list's keys: ↑↓ move the highlight, Enter replaces the range with
+      // it and Esc closes the list.
+      if (behavior == CandidateListBehavior::SetSelection) return candidate_ui_.SetSelection(idx);
+      if (behavior == CandidateListBehavior::Abort) {
+        ClearReconversionState();
+        return S_OK;
+      }
+      const HRESULT hr = CompleteReconversionSelection(
+          static_cast<size_t>(std::max(0, candidate_ui_.GetSelected())));
+      return FAILED(hr) ? hr : S_OK;
+    }
+    // A commit waiting for its retry closed the list; the next key retries it.
+    if (committing_) return E_FAIL;
+    if (behavior == CandidateListBehavior::Abort && !ShowsSelectedCoreCandidate())
+      return AbortTipCandidateList(active_context_);
+    if (behavior == CandidateListBehavior::Abort) {
+      if (!active_context_) return E_FAIL;
+      // Esc cancels the whole input (DEV-1649), at once and with the held keys
+      // dropped while the first segment's candidates are awaited
+      // (segment-editing-spec §5.2).
+      window_waiting_keys_.clear();
+      core::UserActionEvent cancel;
+      cancel.action = core::UserAction::Cancel;
+      const HRESULT hr = ApplyInputStateResult(active_context_, input_state_.HandleEvent(cancel));
+      if (FAILED(hr)) return hr;
+      if (input_state_.kind() == core::InputStateKind::Idle) {
+        ResetTypoTracking();
+        pending_undo_correction_.reset();
+      }
+      return S_OK;
+    }
+    // Segment-editing-spec §5.2: the list left from before the resize is not
+    // the first segment's, so the call is consumed and the highlight stays.
+    if (AwaitingSegmentCandidates()) {
+      if (behavior == CandidateListBehavior::SetSelection)
+        (void)candidate_ui_.SetSelection(selected_candidate_idx_);
+      return S_OK;
+    }
+    if (!active_context_) return E_FAIL;
+    if (ShowsSelectedCoreCandidate()) {
+      // Not the digit of a click: an app's pages need not be nine long. The
+      // core commits only the first segment while it is resized (§4), and the
+      // remaining reading follows the settings of now, as after Enter.
+      input_state_ =
+          input_state_.WithLiveConversion(local_settings_.LiveConversionSnapshot())
+              .WithPunctuationConversion(local_settings_.PunctuationConversionSnapshot());
+      core::UserActionEvent commit;
+      commit.action = core::UserAction::Commit;
+      return ApplyInputStateResult(active_context_,
+                                   behavior == CandidateListBehavior::SetSelection
+                                       ? input_state_.SelectCandidate(static_cast<size_t>(idx))
+                                       : input_state_.HandleEvent(commit));
+    }
+    if (behavior == CandidateListBehavior::Finalize) return CommitSelected(active_context_);
+    // The TIP's own lists move as ↑↓ do; the emoji list leaves its query shown.
+    const int previous = selected_candidate_idx_;
+    if (const HRESULT hr = candidate_ui_.SetSelection(idx); FAILED(hr)) return hr;
+    selected_candidate_idx_ = candidate_ui_.GetSelected();
+    if (emoji_mode_ == EmojiMode::Listing) return S_OK;
+    const HRESULT hr = RequestPreeditUpdate(active_context_);
+    if (hr == E_OUTOFMEMORY) {
+      (void)candidate_ui_.SetSelection(previous);
+      selected_candidate_idx_ = previous;
+    }
+    return FAILED(hr) ? hr : S_OK;
+  } catch (const std::bad_alloc&) {
+    core_action_in_progress_ = false;
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    core_action_in_progress_ = false;
+    return E_FAIL;
+  }
+}
+
+HRESULT TextService::AbortTipCandidateList(ITfContext* context) {
+  if (!context || !candidate_ui_.IsShowing()) return E_FAIL;
+  if (emoji_mode_ == EmojiMode::Listing) {
+    // Back to the query (HandleEmojiKey).
+    CancelPendingQueriesForLifecycle();
+    ClearCandidateStateForLifecycle();
+    emoji_mode_ = EmojiMode::Collecting;
+    return S_OK;
+  }
+  // As with Esc, an allocation failure of the preedit update puts the list and
+  // the input back; any other failure leaves them closed.
+  const std::string previous_preedit = preedit_kana_;
+  const core::RomajiKanaConverter previous_romaji = romaji_;
+  const int previous_selected = selected_candidate_idx_;
+  const std::vector<TipCandidate> previous_shown = shown_candidates_;
+  const std::string previous_live_reading = live_display_reading_;
+  const std::string previous_live_surface = live_display_surface_;
+  std::vector<TipCandidate> previous_cached;
+  bool previous_show_pending = false;
+  {
+    std::lock_guard<std::mutex> lk(candidates_mtx_);
+    previous_cached = candidates_;
+    previous_show_pending = candidate_window_show_pending_;
+  }
+  const auto clear_live_display = [this] {
+    live_display_reading_.clear();
+    live_display_surface_.clear();
+    live_display_segments_.clear();
+    live_display_auto_punctuation_ = false;
+    live_carries_.clear();
+  };
+  // Batch conversion's first Esc closes the window and keeps the reading;
+  // every other window is cancelled with its input in one press.
+  const bool batch = BatchRomajiEnabled();
+  candidate_ui_.EndUI();
+  selected_candidate_idx_ = 0;
+  if (batch) {
+    clear_live_display();
+  } else {
+    shown_candidates_.clear();
+    preedit_kana_.clear();
+    romaji_.Reset();
+    ClearBatchState();
+    std::lock_guard<std::mutex> lk(candidates_mtx_);
+    candidates_.clear();
+    candidate_window_show_pending_ = false;
+  }
+  if (RequestPreeditUpdate(context) == E_OUTOFMEMORY) {
+    preedit_kana_ = previous_preedit;
+    romaji_ = previous_romaji;
+    selected_candidate_idx_ = previous_selected;
+    shown_candidates_ = previous_shown;
+    live_display_reading_ = previous_live_reading;
+    live_display_surface_ = previous_live_surface;
+    live_carries_.clear();
+    {
+      std::lock_guard<std::mutex> lk(candidates_mtx_);
+      candidates_ = previous_cached;
+      candidate_window_show_pending_ = previous_show_pending;
+    }
+    if (!shown_candidates_.empty())
+      (void)candidate_ui_.BeginUI(thread_mgr_, CompositionAnchorRect(),
+                                  BuildCandidateViews(shown_candidates_), selected_candidate_idx_,
+                                  shown_batch_notice_);
+    return E_OUTOFMEMORY;
+  }
+  if (batch) return S_OK;
+  ResetTypoTracking();
+  if (local_settings_.LiveConversionSnapshot()) CancelPendingQueriesForLifecycle();
+  clear_live_display();
+  return S_OK;
 }
 
 HRESULT TextService::CompleteReconversionSelection(size_t index, bool click,

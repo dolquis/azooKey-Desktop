@@ -93,6 +93,13 @@ class InputState {
   // same reading apart stays with the frontend's request ids (§5.1).
   HandleResult HandleSegmentCandidatesArrived(const std::string& reading,
                                               std::vector<Candidate> candidates) const;
+  // An app that draws the candidate list selects candidate `index` with
+  // ITfCandidateListUIElementBehavior::SetSelection (tsf-deep-integration-spec
+  // §2.3): the same move as the arrow keys, onto any candidate of the list
+  // (the first segment's while resized, segment-editing-spec §4). Nothing
+  // outside Selecting, while the first segment's candidates are awaited
+  // (§5.2), or for an index past the list.
+  HandleResult SelectCandidate(size_t index) const;
 
  private:
   HandleResult HandleIdle(const UserActionEvent& event) const;

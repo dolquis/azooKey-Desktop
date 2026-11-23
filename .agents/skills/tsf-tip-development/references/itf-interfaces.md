@@ -87,13 +87,16 @@ COMから取得できないため、QueryInterfaceと契約テストを同じ変
 
 ## CandidateListUIElement (`tsf-tip/include/azookey/tsf/CandidateListUIElement.h`)
 
-- `ITfCandidateListUIElement`を実装し、`QueryInterface`から`IUnknown`、`ITfUIElement`、
-  `ITfCandidateListUIElement`として取得できる。
+- `ITfCandidateListUIElementBehavior`を実装し、`QueryInterface`から`IUnknown`、`ITfUIElement`、
+  `ITfCandidateListUIElement`、`ITfCandidateListUIElementBehavior`として取得できる。
 - `ITfUIElement`契約 — UI-less / app-rendered候補UIの説明、GUID、表示状態を公開する
   (`GetDescription`, `GetGUID`, `Show`, `IsShown`)。
 - `ITfCandidateListUIElement`契約 — 候補リストを公開する
   (`GetCount`, `GetString`, `GetSelection`, `GetUpdatedFlags` ほか)。
 - 候補なしでは`GetSelection`が`S_FALSE`を返す。out parameterの値を成功時と同様に扱わない。
+- `ITfCandidateListUIElementBehavior`契約 — アプリの選択・確定・取り消しを`CandidateUiCoordinator`経由でTIPへ渡す
+  (`SetSelection`, `Finalize`, `Abort`)。件数以上の index の`SetSelection`は`E_INVALIDARG`、
+  それ以外の閉じた一覧の要素への呼び出しは`E_FAIL`を返す。
 
 ## CandidateUiCoordinator (`tsf-tip/include/azookey/tsf/CandidateUiCoordinator.h`)
 

@@ -427,7 +427,9 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
   backup には DB を入れない。読みの組は item `typo_corrections` に v1 の TSV のまま書き、パターンは item
   `typo_patterns` に書き、`typo_events` は入れない。import はどちらもテキストとして解析し、archive の
   バイト列を SQLite として開かない（平文の export もありうるため）。v2 を持たない Host は `typo_patterns` を
-  知らないので読み飛ばし、`typo_corrections` は従来どおり取り込む。
+  知らないので読み飛ばし、`typo_corrections` は従来どおり取り込む。Host を v2 のストアへ切り替えるのは
+  DEV-2149 の組み込みであり、それまでの Host は v1 のストアから `typo_corrections` だけを書く。`typo_patterns` の
+  書き出しと merge は `learning/` の `TypoLearningStore` にだけある。
   - `typo_patterns` の 1 行目は `# azookey-typo-patterns-tsv escaped=1` で、各行は
     `observed_pattern`、`intended_pattern`、`typo_type`、`keyboard_layout`、採用の回数、拒否の回数、
     `last_used_at`、`created_at`、`updated_at` をタブで区切る。文字列の列は `typo_corrections` と同じ
@@ -509,6 +511,8 @@ DPAPI ユーザースコープ（`CryptProtectData`）で各ファイルを暗�
   候補に戻るのを防ぐためである。
 - typo の「v1 のまま読む」起動（`docs/typo-correction-learning-spec.md` §12.8）はパターンを持たないので、
   `typo_patterns` の行をすべて `skipped` に数え、`typo_corrections` だけを取り込む。
+- typo のパターンの表が保持上限（同 §12.8）に達した後は、`typo_patterns` の新しいキーを取り込まずに `skipped` に
+  数える。既にあるキーとの衝突は方式どおりに扱う。
 - archive の読み込み、checksum、復号、各ストアの解析がすべて成功してから、
   ストアを変更する。どれかが失敗した場合はどのストアも変更しない。
   解析できない行を 1 行でも含む item は、Host が書いたものではないとみなし、

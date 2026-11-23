@@ -792,7 +792,8 @@ SOFTWARE.
 - azooKey path: `third_party/sqlite/` に上流のバイト列のまま commit し、静的ライブラリ `azookey_sqlite3` として
   `azookey_learning` に静的リンクする。`azookey_learning` をリンクする `azookey_inference_host.exe` と Vulkan add-on の
   `azookey_inference_host_vulkan.exe` へは、typo v2 ストア（`docs/typo-correction-learning-spec.md` §12.8）を使う
-  コードとともに入る
+  コードとともに入る。DEV-2149 で Host がストアを使うまでは、リンカが参照の無いオブジェクトを落とすので exe には
+  入らない（SBOM は宣言した入力として先に載せる）
 - Notes: 帰属表示の義務は無いが、配布物に含むので本節を置く。更新するときは sqlite.org の amalgamation の zip から
   2 ファイルを置き換え、`PROVENANCE.json` を改める。`scripts/complete-release-sbom.py` は、記録した SHA256 と
   ファイルが一致しないとき、記録に無いファイルがあるときに失敗する

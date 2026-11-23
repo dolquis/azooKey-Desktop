@@ -141,6 +141,11 @@ class ReleaseSbomTests(unittest.TestCase):
                     self.generate()
                 self.vendored_record[key] = saved
                 self.write_vendored_record()
+        # A selector whose directory lost its record is not covered either.
+        (self.vendored / SBOM.VENDORED_RECORD).unlink()
+        with self.assertRaisesRegex(ValueError, "coverage differs"):
+            self.generate()
+        self.write_vendored_record()
         path = self.root / "THIRD_PARTY_LICENSES"
         path.write_text(re.sub(r"## 配布物へ同梱する SQLite.*?(?=\n## )", "", path.read_text(encoding="utf-8"),
                                flags=re.S), encoding="utf-8")

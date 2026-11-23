@@ -145,6 +145,11 @@ constexpr const char* kSchemaSql =
     "  last_updated_at INTEGER NOT NULL,"
     "  PRIMARY KEY (wrong_reading, correct_reading)"
     ");"
+    // A pattern is identified by its four key columns, a NULL keyboard_layout
+    // being the same as an empty one; the index keeps lookups and imports from
+    // scanning the whole table.
+    "CREATE UNIQUE INDEX typo_patterns_key ON typo_patterns "
+    "(observed_pattern, intended_pattern, typo_type, IFNULL(keyboard_layout, ''));"
     "PRAGMA user_version = 1;";
 
 // Every column the store reads; a database without them is corrupt.
@@ -223,12 +228,48 @@ bool PathExists(const std::filesystem::path& path, bool& exists) {
   return !ec;
 }
 
+// Erases the readings of a list of pairs when it goes out of scope.
+struct ScopedEntryErase {
+  std::vector<TypoCorrectionEntry>& entries;
+  explicit ScopedEntryErase(std::vector<TypoCorrectionEntry>& target) : entries(target) {}
+  ScopedEntryErase(const ScopedEntryErase&) = delete;
+  ScopedEntryErase& operator=(const ScopedEntryErase&) = delete;
+  ~ScopedEntryErase() {
+    for (auto& entry : entries) {
+      SecureErase(entry.wrong_reading);
+      SecureErase(entry.correct_reading);
+    }
+  }
+};
+
 // Reads a stored (encrypted) file as it is on disk.
 bool ReadFileBytes(const std::filesystem::path& path, std::string& bytes) {
   std::ifstream input(path, std::ios::binary);
   if (!input) return false;
   bytes.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
   return !input.bad();
+}
+
+// True when a "<stored>.corrupt-<epoch>" file beside `stored` holds `bytes`.
+bool HasCorruptCopyWithBytes(const std::filesystem::path& stored, const std::string& bytes) {
+  auto prefix = stored.filename();
+  prefix += ".corrupt-";
+  const auto& prefix_name = prefix.native();
+  std::error_code ec;
+  const auto directory =
+      stored.has_parent_path() ? stored.parent_path() : std::filesystem::path(".");
+  for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end;
+       it.increment(ec)) {
+    const auto name = it->path().filename().native();
+    if (name.compare(0, prefix_name.size(), prefix_name) != 0) continue;
+    std::error_code size_ec;
+    if (!it->is_regular_file(size_ec) || it->file_size(size_ec) != bytes.size() || size_ec) {
+      continue;
+    }
+    std::string existing;
+    if (ReadFileBytes(it->path(), existing) && existing == bytes) return true;
+  }
+  return false;
 }
 
 // Section 12.8 "パス": the state of a logical path from ReadProtectedText. For
@@ -503,6 +544,12 @@ class TypoLearningStore::Database {
         return OpenResult::Corrupt;
       }
     }
+    if (db->QueryInt("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND "
+                     "name = 'typo_patterns_key'")
+            .value_or(0) != 1) {
+      reason = "schema";
+      return OpenResult::Corrupt;
+    }
     out = std::move(db);
     return OpenResult::Ok;
   }
@@ -659,12 +706,12 @@ class TypoLearningStore::Database {
   std::optional<TypoPatternRecord> FindPattern(const TypoPatternRecord& key) const {
     auto statement = Prepare(
         "SELECT id FROM typo_patterns WHERE observed_pattern = ?1 AND intended_pattern = ?2 "
-        "AND typo_type = ?3 AND keyboard_layout IS ?4");
+        "AND typo_type = ?3 AND IFNULL(keyboard_layout, '') = ?4");
     if (!statement) return std::nullopt;
     BindText(statement.get(), 1, key.observed_pattern);
     BindText(statement.get(), 2, key.intended_pattern);
     BindText(statement.get(), 3, key.typo_type);
-    BindOptionalText(statement.get(), 4, key.keyboard_layout);
+    BindText(statement.get(), 4, key.keyboard_layout);
     if (sqlite3_step(statement.get()) != SQLITE_ROW) return std::nullopt;
     auto rows = PatternRows(sqlite3_column_int64(statement.get(), 0));
     if (rows.empty()) return std::nullopt;
@@ -708,9 +755,20 @@ class TypoLearningStore::Database {
   // Section 12.8 "保持上限": oldest rows first, by age and by count.
   bool ApplyRetention(const TypoLearningLimits& limits, uint64_t now) const {
     const uint64_t cutoff = now > limits.max_age_sec ? now - limits.max_age_sec : 0;
-    const auto max_rows = static_cast<sqlite3_int64>(
-        (std::min)(limits.max_rows, static_cast<size_t>((std::numeric_limits<int>::max)())));
+    const auto as_limit = [](size_t value) {
+      return static_cast<sqlite3_int64>(
+          (std::min)(value, static_cast<size_t>((std::numeric_limits<int>::max)())));
+    };
+    const auto max_rows = as_limit(limits.max_rows);
+    const auto max_patterns = as_limit(limits.max_patterns);
     for (const char* sql : {
+             // Patterns by count only, least recently updated first, with the
+             // events that point at them.
+             "DELETE FROM typo_events WHERE pattern_id IN (SELECT id FROM typo_patterns "
+             "WHERE id NOT IN (SELECT id FROM typo_patterns ORDER BY updated_at DESC, id DESC "
+             "LIMIT ?3))",
+             "DELETE FROM typo_patterns WHERE id NOT IN (SELECT id FROM typo_patterns "
+             "ORDER BY updated_at DESC, id DESC LIMIT ?3)",
              "DELETE FROM typo_events WHERE created_at < ?1",
              "DELETE FROM typo_events WHERE id NOT IN (SELECT id FROM typo_events "
              "ORDER BY created_at DESC, id DESC LIMIT ?2)",
@@ -722,8 +780,10 @@ class TypoLearningStore::Database {
       if (!statement) return false;
       const int cutoff_index = sqlite3_bind_parameter_index(statement.get(), "?1");
       const int rows_index = sqlite3_bind_parameter_index(statement.get(), "?2");
+      const int patterns_index = sqlite3_bind_parameter_index(statement.get(), "?3");
       if (cutoff_index > 0) sqlite3_bind_int64(statement.get(), cutoff_index, ToSql(cutoff));
       if (rows_index > 0) sqlite3_bind_int64(statement.get(), rows_index, max_rows);
+      if (patterns_index > 0) sqlite3_bind_int64(statement.get(), patterns_index, max_patterns);
       if (sqlite3_step(statement.get()) != SQLITE_DONE) return false;
     }
     return true;
@@ -820,7 +880,9 @@ bool TypoLearningStore::WriteDatabase(Database& db, bool apply_limits, uint64_t 
 // Migration steps 1 to 5 (section 12.8 "v1 からの移行").
 bool TypoLearningStore::MigrateFrom(const TypoCorrectionStore& source, bool from_v1_store,
                                     uint64_t now, TypoLearningLoadResult& result) {
-  const auto pairs = source.All();
+  auto pairs = source.All();
+  // The readings are erased however the migration ends.
+  const ScopedEntryErase erase_pairs{pairs};
   bool written = false;
   const auto fail = [&] {
     db_.reset();
@@ -905,10 +967,25 @@ bool TypoLearningStore::SettleV1Store(TypoLearningLoadResult& result) {
     SecureErase(backup_text);
     return pending(false);
   }
-  if (!backup_text.empty() && backup_text.back() != '\n') backup_text.push_back('\n');
-  backup_text += v1_text;
+  // A previous load may have appended the v1 store and then failed to remove
+  // it; appending again would grow the backup by the whole v1 store at every
+  // start, so a backup that already ends with it is only cleaned up.
+  const bool already_appended =
+      backup_text.size() >= v1_text.size() &&
+      backup_text.compare(backup_text.size() - v1_text.size(), v1_text.size(), v1_text) == 0;
+  bool appended = already_appended;
+  if (!already_appended) {
+    // Built in one reserved buffer, so no decrypted copy is left behind by a
+    // reallocation.
+    std::string combined;
+    combined.reserve(backup_text.size() + 1 + v1_text.size());
+    combined += backup_text;
+    if (!backup_text.empty() && backup_text.back() != '\n') combined.push_back('\n');
+    combined += v1_text;
+    appended = WriteProtectedText(paths_.v1_backup, combined, *crypto_);
+    SecureErase(combined);
+  }
   SecureErase(v1_text);
-  const bool appended = WriteProtectedText(paths_.v1_backup, backup_text, *crypto_);
   SecureErase(backup_text);
   if (!appended || !RemoveProtectedFile(paths_.v1_store)) return pending(false);
   return true;
@@ -965,7 +1042,9 @@ TypoLearningLoadResult TypoLearningStore::Load(uint64_t now_epoch_sec) {
   const auto v1_state = LoadV1Store(paths_.v1_store, *crypto_, *v1);
   if (v1_state == FileState::Present) {
     bool imported = db_->Exec("BEGIN");
-    for (const auto& pair : v1->All()) {
+    auto v1_pairs = v1->All();
+    const ScopedEntryErase erase_pairs{v1_pairs};
+    for (const auto& pair : v1_pairs) {
       imported = imported && db_->UpsertPair(pair.wrong_reading, pair.correct_reading,
                                              pair.record.count, pair.record.last_updated_epoch_sec,
                                              Database::PairMerge::ColumnMax);
@@ -1043,17 +1122,19 @@ void TypoLearningStore::RecoverFromCorruption(uint64_t now, const std::string& r
   auto copy = stored;
   copy += ".corrupt-" + std::to_string(now);
   bool kept = false;
-  bool copy_exists = false;
-  if (!ec && PathExists(copy, copy_exists)) {
-    if (copy_exists) {
-      // A copy from the same second counts only if it holds these bytes; a
-      // different corrupt file is never dropped unseen, so saving stops.
-      std::string existing;
-      std::string current;
-      kept = ReadFileBytes(copy, existing) && ReadFileBytes(stored, current) && existing == current;
+  std::string current;
+  if (!ec && ReadFileBytes(stored, current)) {
+    if (HasCorruptCopyWithBytes(stored, current)) {
+      // An earlier start copied these bytes already (its rebuilt store could
+      // not be written); the same corrupt file is not copied again.
+      kept = true;
     } else {
-      kept =
-          std::filesystem::copy_file(stored, copy, std::filesystem::copy_options::none, ec) && !ec;
+      // A different copy from the same second is never overwritten or taken
+      // for this one, so saving stops instead.
+      bool copy_exists = true;
+      kept = PathExists(copy, copy_exists) && !copy_exists &&
+             std::filesystem::copy_file(stored, copy, std::filesystem::copy_options::none, ec) &&
+             !ec;
     }
   }
   if (!kept) {
@@ -1083,8 +1164,12 @@ void TypoLearningStore::RecoverFromCorruption(uint64_t now, const std::string& r
       EnterBlocked(result, TypoLearningLoadIssue::SqliteUnavailable);
       return;
     }
-    // Replace the corrupt file now, so the next start does not copy it again.
-    WriteDatabase(false, now);
+    // Replace the corrupt file now. If that fails, learning continues and the
+    // next Save retries; the next start finds the copy and does not add another.
+    if (!WriteDatabase(false, now)) {
+      result.rebuilt_store_unsaved = true;
+      std::cerr << "TypoLearningStore: the rebuilt v2 store could not be written yet\n";
+    }
   }
   EnterV2(result);
 }
@@ -1127,7 +1212,12 @@ void TypoLearningStore::RedoUnverifiedMigration(uint64_t now, TypoLearningLoadRe
     EnterBlocked(result, TypoLearningLoadIssue::SqliteUnavailable);
     return;
   }
-  WriteDatabase(false, now);
+  // The unmarked v2 stays until this is written; the next load redoes
+  // decision 6 with nothing copied aside, and the next Save retries.
+  if (!WriteDatabase(false, now)) {
+    result.rebuilt_store_unsaved = true;
+    std::cerr << "TypoLearningStore: the rebuilt v2 store could not be written yet\n";
+  }
   EnterV2(result);
 }
 
@@ -1543,49 +1633,59 @@ bool TypoLearningStore::ParsePatternsText(std::string_view text,
   return all_valid && !first_line;
 }
 
-ImportCounts TypoLearningStore::MergeReadingPairs(const TypoCorrectionStore& other,
-                                                  ImportConflictPolicy policy) {
+std::optional<ImportCounts> TypoLearningStore::MergeReadingPairs(const TypoCorrectionStore& other,
+                                                                 ImportConflictPolicy policy) {
   if (mode_ == TypoLearningMode::V1Fallback) return v1_->Merge(other, policy);
+  if (!db_ || !db_->Exec("BEGIN")) return std::nullopt;
+  // One transaction: a failure part of the way rolls every pair back, so the
+  // import changes nothing (learning-data-management-spec section 6).
+  const auto fail = [&]() -> std::optional<ImportCounts> {
+    db_->Exec("ROLLBACK");
+    return std::nullopt;
+  };
   ImportCounts counts;
-  if (!db_) return counts;
-  for (const auto& entry : other.All()) {
+  auto entries = other.All();
+  const ScopedEntryErase erase_entries{entries};
+  for (const auto& entry : entries) {
     const auto existing = db_->FindPair(entry.wrong_reading, entry.correct_reading);
-    if (!existing) {
-      if (db_->UpsertPair(entry.wrong_reading, entry.correct_reading, entry.record.count,
-                          entry.record.last_updated_epoch_sec, Database::PairMerge::Replace)) {
-        ++counts.imported;
-      }
-      continue;
-    }
-    ++counts.conflicts;
-    switch (policy) {
-      case ImportConflictPolicy::Merge:
-        if (db_->UpsertPair(entry.wrong_reading, entry.correct_reading, entry.record.count,
-                            entry.record.last_updated_epoch_sec, Database::PairMerge::Add)) {
-          ++counts.imported;
-        }
-        break;
-      case ImportConflictPolicy::Overwrite:
-        if (db_->UpsertPair(entry.wrong_reading, entry.correct_reading, entry.record.count,
-                            entry.record.last_updated_epoch_sec, Database::PairMerge::Replace)) {
-          ++counts.imported;
-        }
-        break;
-      case ImportConflictPolicy::KeepBoth:
+    auto merge = Database::PairMerge::Replace;
+    if (existing) {
+      ++counts.conflicts;
+      if (policy == ImportConflictPolicy::KeepBoth) {
         ++counts.skipped;
-        break;
+        continue;
+      }
+      if (policy == ImportConflictPolicy::Merge) merge = Database::PairMerge::Add;
     }
+    if (!db_->UpsertPair(entry.wrong_reading, entry.correct_reading, entry.record.count,
+                         entry.record.last_updated_epoch_sec, merge)) {
+      return fail();
+    }
+    ++counts.imported;
   }
+  if (!db_->Exec("COMMIT")) return fail();
   return counts;
 }
 
-ImportCounts TypoLearningStore::MergePatterns(const std::vector<TypoPatternRecord>& patterns,
-                                              ImportConflictPolicy policy, uint64_t now_epoch_sec) {
+std::optional<ImportCounts> TypoLearningStore::MergePatterns(
+    const std::vector<TypoPatternRecord>& patterns, ImportConflictPolicy policy,
+    uint64_t now_epoch_sec) {
   ImportCounts counts;
-  if (mode_ == TypoLearningMode::V1Fallback || !db_) {
+  if (mode_ == TypoLearningMode::V1Fallback) {
     counts.skipped = patterns.size();
     return counts;
   }
+  if (!db_) return std::nullopt;
+  const auto rows = db_->CountRows("typo_patterns");
+  if (!rows || !db_->Exec("BEGIN")) return std::nullopt;
+  const auto fail = [&]() -> std::optional<ImportCounts> {
+    db_->Exec("ROLLBACK");
+    return std::nullopt;
+  };
+  // Each key is found through the unique index, and new keys stop at the
+  // pattern limit, so even a whole archive item of distinct keys finishes in
+  // time linear in its rows.
+  auto pattern_rows = static_cast<size_t>(*rows);
   for (const auto& incoming : patterns) {
     if (!IsValidPatternKey(incoming)) {
       ++counts.skipped;
@@ -1593,14 +1693,20 @@ ImportCounts TypoLearningStore::MergePatterns(const std::vector<TypoPatternRecor
     }
     auto existing = db_->FindPattern(incoming);
     if (!existing) {
+      if (pattern_rows >= limits_.max_patterns) {
+        ++counts.skipped;
+        continue;
+      }
       auto record = incoming;
       record.id = 0;
-      if (db_->WritePattern(record, now_epoch_sec)) ++counts.imported;
+      if (!db_->WritePattern(record, now_epoch_sec)) return fail();
+      ++pattern_rows;
+      ++counts.imported;
       continue;
     }
     ++counts.conflicts;
     switch (policy) {
-      case ImportConflictPolicy::Merge: {
+      case ImportConflictPolicy::Merge:
         existing->accept_count = SaturatingAdd(existing->accept_count, incoming.accept_count);
         existing->reject_count = SaturatingAdd(existing->reject_count, incoming.reject_count);
         if (incoming.last_used_at &&
@@ -1609,20 +1715,21 @@ ImportCounts TypoLearningStore::MergePatterns(const std::vector<TypoPatternRecor
         }
         existing->created_at = (std::min)(existing->created_at, incoming.created_at);
         existing->updated_at = (std::max)(existing->updated_at, incoming.updated_at);
-        if (db_->WritePattern(*existing, now_epoch_sec)) ++counts.imported;
         break;
-      }
       case ImportConflictPolicy::Overwrite: {
-        auto record = incoming;
-        record.id = existing->id;
-        if (db_->WritePattern(record, now_epoch_sec)) ++counts.imported;
+        const auto id = existing->id;
+        *existing = incoming;
+        existing->id = id;
         break;
       }
       case ImportConflictPolicy::KeepBoth:
         ++counts.skipped;
-        break;
+        continue;
     }
+    if (!db_->WritePattern(*existing, now_epoch_sec)) return fail();
+    ++counts.imported;
   }
+  if (!db_->Exec("COMMIT")) return fail();
   return counts;
 }
 

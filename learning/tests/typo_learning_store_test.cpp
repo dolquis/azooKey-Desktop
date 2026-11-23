@@ -120,6 +120,29 @@ std::string ExecOnDatabase(const std::string& bytes, const char* sql) {
   return result;
 }
 
+// Whether `sql` succeeds on a serialized database (the bytes are not changed).
+bool ExecSucceeds(const std::string& bytes, const char* sql) {
+  sqlite3* db = nullptr;
+  if (sqlite3_open(":memory:", &db) != SQLITE_OK) return false;
+  auto* buffer = static_cast<unsigned char*>(sqlite3_malloc64(bytes.size()));
+  std::memcpy(buffer, bytes.data(), bytes.size());
+  const auto size = static_cast<sqlite3_int64>(bytes.size());
+  const bool opened = sqlite3_deserialize(db, "main", buffer, size, size,
+                                          SQLITE_DESERIALIZE_FREEONCLOSE |
+                                              SQLITE_DESERIALIZE_RESIZEABLE) == SQLITE_OK;
+  const bool ok = opened && sqlite3_exec(db, sql, nullptr, nullptr, nullptr) == SQLITE_OK;
+  sqlite3_close(db);
+  return ok;
+}
+
+size_t CountCorruptCopies(const std::filesystem::path& dir) {
+  size_t count = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    if (entry.path().filename().string().find(".corrupt-") != std::string::npos) ++count;
+  }
+  return count;
+}
+
 // The SQLite header keeps user_version big-endian at offset 60.
 std::string WithUserVersion(std::string bytes, uint32_t version) {
   for (int i = 0; i < 4; ++i) {
@@ -909,13 +932,15 @@ TEST_F(TypoLearningStoreTest, BackupItemsRoundTripAndMerge) {
   target->RecordPatternEvent(
       PatternEvent("j_insert_after_u", "j_delete_after_u", TypoPatternOutcome::Accept, kNow + 9));
   const auto pair_counts = target->MergeReadingPairs(pairs, ImportConflictPolicy::Merge);
-  EXPECT_EQ(pair_counts.conflicts, 1u);
-  EXPECT_EQ(pair_counts.imported, 1u);
+  ASSERT_TRUE(pair_counts.has_value());
+  EXPECT_EQ(pair_counts->conflicts, 1u);
+  EXPECT_EQ(pair_counts->imported, 1u);
   EXPECT_EQ(target->ReadingPairs()[0].record.count, 4u);
   EXPECT_EQ(target->ReadingPairs()[0].record.last_updated_epoch_sec, kNow + 5);
   const auto pattern_counts =
       target->MergePatterns(patterns, ImportConflictPolicy::Merge, kNow + 10);
-  EXPECT_EQ(pattern_counts.conflicts, 1u);
+  ASSERT_TRUE(pattern_counts.has_value());
+  EXPECT_EQ(pattern_counts->conflicts, 1u);
   const auto merged = target->Patterns().front();
   EXPECT_EQ(merged.accept_count, 2u);
   EXPECT_EQ(merged.reject_count, 1u);
@@ -923,8 +948,8 @@ TEST_F(TypoLearningStoreTest, BackupItemsRoundTripAndMerge) {
   EXPECT_EQ(merged.created_at, kNow);
   EXPECT_DOUBLE_EQ(merged.confidence, ComputeTypoConfidence(2, 1, kNow + 9, kNow + 10, false));
 
-  EXPECT_EQ(target->MergePatterns(patterns, ImportConflictPolicy::KeepBoth, kNow).skipped, 1u);
-  target->MergePatterns(patterns, ImportConflictPolicy::Overwrite, kNow + 10);
+  EXPECT_EQ(target->MergePatterns(patterns, ImportConflictPolicy::KeepBoth, kNow)->skipped, 1u);
+  ASSERT_TRUE(target->MergePatterns(patterns, ImportConflictPolicy::Overwrite, kNow + 10));
   EXPECT_EQ(target->Patterns().front().accept_count, 1u);
 }
 
@@ -1044,4 +1069,108 @@ TEST_F(TypoLearningStoreTest, AFailedReadBackRemovesTheUnmarkedV2AndReadsV1AsItI
   EXPECT_TRUE(Exists(EncryptedPathFor(v1_)));
   EXPECT_FALSE(Exists(EncryptedPathFor(paths_.v1_backup)));
   EXPECT_EQ(store->LookupReadingPair("こんちには", 3, kNow), "こんにちは");
+}
+
+TEST_F(TypoLearningStoreTest, AnImportOfManyDistinctPatternsStopsAtThePatternLimit) {
+  auto store = MakeStore(TypoLearningLimits{180 * kDay, 10000, 50});
+  store->Load(kNow);
+  // Distinct two-token keys "<a>_sub_<b>+<c>_sub_z".
+  const std::string letters = "abcdefghijklmnopqrstuvwxyz";
+  std::vector<TypoPatternRecord> patterns;
+  for (size_t i = 0; i < 5000; ++i) {
+    TypoPatternRecord record;
+    record.observed_pattern = std::string(1, letters[i % 26]) + "_sub_" + letters[(i / 26) % 26] +
+                              "+" + letters[(i / 676) % 26] + "_sub_z";
+    record.intended_pattern = "x_sub_y";
+    record.typo_type = "adjacent_key";
+    record.accept_count = 1;
+    record.created_at = kNow;
+    record.updated_at = kNow;
+    patterns.push_back(record);
+  }
+  const auto counts = store->MergePatterns(patterns, ImportConflictPolicy::Merge, kNow);
+  ASSERT_TRUE(counts.has_value());
+  EXPECT_EQ(counts->imported, 50u);
+  EXPECT_EQ(counts->skipped, 4950u);
+  EXPECT_EQ(store->Patterns().size(), 50u);
+  // Keys already in the table still merge once the limit is reached.
+  const std::vector<TypoPatternRecord> first(patterns.begin(), patterns.begin() + 10);
+  const auto again = store->MergePatterns(first, ImportConflictPolicy::Merge, kNow);
+  ASSERT_TRUE(again.has_value());
+  EXPECT_EQ(again->conflicts, 10u);
+  EXPECT_EQ(again->imported, 10u);
+  EXPECT_EQ(store->Patterns().size(), 50u);
+}
+
+TEST_F(TypoLearningStoreTest, PatternKeysAreUniqueWithANullKeyboardLayoutAsEmpty) {
+  auto store = MakeStore();
+  store->Load(kNow);
+  const auto id = store->RecordPatternEvent(
+      PatternEvent("j_insert_after_u", "j_delete_after_u", TypoPatternOutcome::Accept, kNow));
+  ASSERT_TRUE(id.has_value());
+  TypoPatternRecord same;
+  same.observed_pattern = "j_insert_after_u";
+  same.intended_pattern = "j_delete_after_u";
+  same.typo_type = "extra_char";
+  same.accept_count = 1;
+  same.created_at = kNow;
+  same.updated_at = kNow;
+  EXPECT_EQ(store->MergePatterns({same}, ImportConflictPolicy::Merge, kNow)->conflicts, 1u);
+  ASSERT_EQ(store->Patterns().size(), 1u);
+  EXPECT_EQ(store->Patterns().front().accept_count, 2u);
+  ASSERT_TRUE(store->Save(kNow));
+  // The saved database itself refuses a second row of the key.
+  const auto saved = *Decrypted(paths_.v2_store);
+  EXPECT_FALSE(ExecSucceeds(saved,
+                            "INSERT INTO typo_patterns (observed_pattern, intended_pattern, "
+                            "typo_type, keyboard_layout, created_at, updated_at) VALUES "
+                            "('j_insert_after_u', 'j_delete_after_u', 'extra_char', '', 1, 1)"));
+  EXPECT_TRUE(ExecSucceeds(saved,
+                           "INSERT INTO typo_patterns (observed_pattern, intended_pattern, "
+                           "typo_type, keyboard_layout, created_at, updated_at) VALUES "
+                           "('j_insert_after_u', 'j_delete_after_u', 'extra_char', 'jis', 1, 1)"));
+}
+
+TEST_F(TypoLearningStoreTest, SavingKeepsTheMostRecentlyUpdatedPatternsAndTheirEvents) {
+  auto store = MakeStore(TypoLearningLimits{180 * kDay, 10000, 2});
+  store->Load(kNow);
+  store->RecordPatternEvent(
+      PatternEvent("z_sub_x", "x_sub_z", TypoPatternOutcome::Accept, kNow - 30));
+  store->RecordPatternEvent(
+      PatternEvent("j_insert_after_u", "j_delete_after_u", TypoPatternOutcome::Accept, kNow - 20));
+  store->RecordPatternEvent(
+      PatternEvent("ts_swap", "st_swap", TypoPatternOutcome::Accept, kNow - 10));
+  ASSERT_TRUE(store->Save(kNow));
+  const auto patterns = store->Patterns();
+  ASSERT_EQ(patterns.size(), 2u);
+  for (const auto& pattern : patterns) EXPECT_NE(pattern.observed_pattern, "z_sub_x");
+  EXPECT_EQ(store->EventCount(), 2u);
+}
+
+TEST_F(TypoLearningStoreTest, AnUnwritableRebuildDoesNotCopyTheSameCorruptFileAgain) {
+  WriteEncrypted(paths_.v2_store, "garbage");
+  crypto_.fail_encrypt = true;
+  for (const uint64_t now : {kNow, kNow + 1, kNow + 2}) {
+    auto store = MakeStore();
+    const auto result = store->Load(now);
+    EXPECT_EQ(result.mode, TypoLearningMode::V2);
+    EXPECT_TRUE(result.rebuilt_from_corruption);
+    EXPECT_TRUE(result.rebuilt_store_unsaved);
+  }
+  EXPECT_EQ(CountCorruptCopies(dir_), 1u);
+}
+
+TEST_F(TypoLearningStoreTest, AV1StoreAlreadyAppendedToTheBackupIsNotAppendedAgain) {
+  MakeMigratedV2();
+  const auto v1_text = *Decrypted(paths_.v1_backup);
+  // As after a load that appended the v1 store but could not remove it.
+  const std::string backup = std::string(kHeader) + "きょうわ\tきょうは\t1 1\n" + v1_text;
+  WriteEncrypted(paths_.v1_backup, backup);
+  WriteEncrypted(v1_, v1_text);
+  auto store = MakeStore();
+  const auto result = store->Load(kNow);
+  EXPECT_EQ(result.mode, TypoLearningMode::V2);
+  EXPECT_FALSE(result.v1_store_pending);
+  EXPECT_EQ(*Decrypted(paths_.v1_backup), backup);
+  EXPECT_FALSE(Exists(EncryptedPathFor(v1_)));
 }

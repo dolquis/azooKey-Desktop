@@ -551,7 +551,12 @@ CREATE TABLE typo_patterns (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX typo_patterns_key ON typo_patterns
+  (observed_pattern, intended_pattern, typo_type, IFNULL(keyboard_layout, ''));
 ```
+
+パターンは 4 列（`observed_pattern`、`intended_pattern`、`typo_type`、`keyboard_layout`）で 1 つに決まり、
+`keyboard_layout` の NULL は空と同じに扱う。この索引が無い DB は、下記 5 の破損として扱う。
 
 #### typo_events
 
@@ -654,7 +659,8 @@ v2 のストアはメモリ上の SQLite DB として開き、ディスクへは
 - `azookey_learning` に静的リンクし、配布物に DLL を足さない。x64・ARM64・Linux で同じソースを使う。
 - 使わない機能を外して組み込む。少なくとも拡張の読み込みを外し（`SQLITE_OMIT_LOAD_EXTENSION`）、
   二重引用符の文字列リテラルを受けず（`SQLITE_DQS=0`）、一時ファイルを常にメモリに置く
-  （`SQLITE_TEMP_STORE=3`）。`sqlite3_serialize` / `sqlite3_deserialize` を含む版を使う
+  （`SQLITE_TEMP_STORE=3`）。削除した値と解放した領域を残さないため、`SQLITE_SECURE_DELETE` と
+  `SQLITE_DEFAULT_PCACHE_INITSZ=0` も定義する。`sqlite3_serialize` / `sqlite3_deserialize` を含む版を使う
   （3.36 以降は既定で含む）。
 - OS の `winsqlite3.dll` は使わない。版と compile option を固定できず、OS の更新に左右されるためである。
   vcpkg も使わない（`docs/build-ci-spec.md` §3.1 は vcpkg を必須にしない）。
@@ -814,6 +820,10 @@ backup の entry は `docs/learning-data-management-spec.md` §5・§5.1 が持�
 `typo_corrections`（v1 の TSV）に、パターンは item `typo_patterns` に書き、`typo_events` は入れない。
 どちらの item もテキストとして解析し、archive のバイト列を SQLite として開かない。
 
+Host を v2 のストアへ切り替えるのは DEV-2149 の組み込みである。それまでの Host は v1 のストアを使い、backup にも
+item `typo_corrections` だけを書く。v2 のストアと、item `typo_patterns` の書き出しと merge は、`learning/` の
+`TypoLearningStore` にだけある。
+
 #### 保持上限
 
 `typo_events` と `typo_reading_pairs` は、それぞれ次の早く当たる方で古い行から消す。保存の直前に当てる。
@@ -822,7 +832,11 @@ backup の entry は `docs/learning-data-management-spec.md` §5・§5.1 が持�
 - 期間: 180 日（`created_at` / `last_updated_at` から。v1 の `Lookup` の期限と同じ）
 - 件数: 10000 行（`docs/user-learning-enhancement-spec.md` §3.1.1 の `learning_max_records` と同じ）
 
-どちらも初期値であり、M52 で校正する。
+`typo_patterns` は件数だけを上限（10000 行）とし、`updated_at` の古い行から消す。消すパターンの
+`pattern_id` を持つ `typo_events` の行も消す。backup の import の merge も、表が上限に達した後の新しいキーは
+取り込まずに skipped に数える（既にあるキーとの merge は続ける）。
+
+どれも初期値であり、M52 で校正する。
 
 ### 12.9 信頼度更新
 

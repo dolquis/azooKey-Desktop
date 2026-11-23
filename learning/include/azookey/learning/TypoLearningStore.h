@@ -39,10 +39,12 @@ struct TypoLearningPaths {
 TypoLearningPaths TypoLearningPathsFor(const std::filesystem::path& v1_store);
 
 // Section 12.8 "保持上限": the earlier of an age and a row count, applied to
-// typo_events and typo_reading_pairs right before a save.
+// typo_events and typo_reading_pairs right before a save; typo_patterns has a
+// row count only, which also bounds an import.
 struct TypoLearningLimits {
   uint64_t max_age_sec{180ULL * 24 * 60 * 60};
   size_t max_rows{10000};
+  size_t max_patterns{10000};
 };
 
 // "store_origin" in typo_settings (section 12.8 "由来の印").
@@ -79,6 +81,9 @@ struct TypoLearningLoadResult {
   bool rebuilt_from_corruption{false};
   // "deserialize", "empty", "schema", "integrity" or "read" (no row contents).
   std::string corruption_reason;
+  // The store rebuilt in this load could not be written yet; the next Save
+  // retries. A later load does not copy the same corrupt file aside again.
+  bool rebuilt_store_unsaved{false};
   // Pairs moved from the v1 store or the v1 backup during this load.
   bool migrated{false};
   size_t migrated_pairs{0};
@@ -198,10 +203,13 @@ class TypoLearningStore {
   // Section 6 of the same spec. Pairs merge as in the v1 store; patterns
   // match on (observed, intended, typo_type, keyboard_layout), Merge adds the
   // counts (saturating) and keeps the later timestamps, and every imported
-  // pattern has its confidence recomputed. V1Fallback keeps the pairs only.
-  ImportCounts MergeReadingPairs(const TypoCorrectionStore& other, ImportConflictPolicy policy);
-  ImportCounts MergePatterns(const std::vector<TypoPatternRecord>& patterns,
-                             ImportConflictPolicy policy, uint64_t now_epoch_sec);
+  // pattern has its confidence recomputed. A new pattern key is skipped once
+  // the table holds TypoLearningLimits::max_patterns rows. V1Fallback keeps the
+  // pairs only. nullopt: the merge failed and changed nothing.
+  std::optional<ImportCounts> MergeReadingPairs(const TypoCorrectionStore& other,
+                                                ImportConflictPolicy policy);
+  std::optional<ImportCounts> MergePatterns(const std::vector<TypoPatternRecord>& patterns,
+                                            ImportConflictPolicy policy, uint64_t now_epoch_sec);
 
  private:
   class Database;

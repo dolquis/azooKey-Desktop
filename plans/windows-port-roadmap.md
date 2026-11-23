@@ -2631,10 +2631,14 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **前提**: **M35 を改訂統合**、M46（secure mode で補正・学習無効化）、
   M52（ベンチ）、M53（辞書）。
 - **変更対象**: `correction/`（新規ディレクトリ）、
-  `correction/TypoCorrectionEngine.cpp`、
-  `correction/KeyboardAdjacencyModel.cpp`、
-  `correction/RomajiVariantNormalizer.cpp`、
-  `correction/ReadingHypothesis.h`、
+  `correction/src/TypoCorrectionEngine.cpp`、
+  `correction/src/KeyboardAdjacencyModel.cpp`、
+  `correction/src/RomajiVariantNormalizer.cpp`、
+  `correction/include/azookey/correction/ReadingHypothesis.h`、
+  `correction/include/azookey/correction/TypoCorrectionEngine.h`、
+  `correction/include/azookey/correction/KeyboardAdjacencyModel.h`、
+  `correction/include/azookey/correction/RomajiVariantNormalizer.h`、
+  `core/src/QwertyAdjacency.cpp`（§12.4.6 の隣接表。`RomajiKanaConverter::FuzzyMatch` が使う）、
   `learning/src/TypoLearningStore.cpp`（M35 の TypoCorrectionStore の v2。
   v1 のクラスは移行と「v1 のまま読む」のために残す）、`ipc/src/Payloads.cpp`（`QueryCandidates` に `raw_keys` /
   `typo_correction_mode` optional フィールド追加）、`docs/typo-correction-learning-spec.md`

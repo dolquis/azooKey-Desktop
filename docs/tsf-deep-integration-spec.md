@@ -19,6 +19,7 @@ canonical_for: ["TSF 深部統合"]
 | §2（§2.0・§2.8〜§2.11 を除く） | M21 |
 | §2.0、§2.8〜§2.11 | M5（UI-less の最小契約）。M21 がこれを拡張する |
 | §2.3 の候補のページ | M68 |
+| §2.3 の `ITfCandidateListUIElementBehavior` | M21。文節の伸縮中と先頭文節の候補を待つ間の扱いは M66 |
 | §3（§3.6 を除く） | M22 |
 | §3.6 | M64。文節の伸縮中の扱いは M66 |
 | §4 | M21 |
@@ -208,14 +209,22 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
 ### 2.3 CandidateListUIElement 実装
 
 `CandidateListUIElement`（`tsf-tip/include/azookey/tsf/CandidateListUIElement.h` /
-`tsf-tip/src/CandidateListUIElement.cpp`）が `ITfCandidateListUIElement`（`ITfUIElement` を継承する）を
-実装する。宣言の正典はヘッダで、本書はコードを写さない。
+`tsf-tip/src/CandidateListUIElement.cpp`）が `ITfCandidateListUIElementBehavior`（`ITfCandidateListUIElement` と
+`ITfUIElement` を継承する）を実装する。宣言の正典はヘッダで、本書はコードを写さない。
 
 - `ITfUIElement`: `GetDescription` / `GetGUID` / `Show` / `IsShown`。
 - `ITfCandidateListUIElement`: `GetUpdatedFlags` / `GetDocumentMgr` / `GetCount` / `GetSelection` /
   `GetString` / `GetPageIndex` / `SetPageIndex` / `GetCurrentPage`。
-- `ITfCandidateListUIElementBehavior`（`SetSelection` / `Finalize` / `Abort`）は M21 の full 実装で
-  加える（§2.8「M5 と M21 の役割分担」）。
+- `ITfCandidateListUIElementBehavior`: `SetSelection` / `Finalize` / `Abort`。アプリが候補 UI を描く構成で、
+  アプリが候補を選び、確定し、一覧を閉じる入口である。どれも TIP の候補の操作へつなぎ、要素が返す選択は TIP が
+  動かしたときだけ変わる。
+  - `SetSelection` は ↑↓ と同じく選択を指定の候補へ移し、`Finalize` は選択中の候補を Enter と同じく確定する
+    （伸縮中の先頭文節は部分確定する。`docs/segment-editing-spec.md` §4）。先頭文節の候補を待つ間は、どちらも
+    消費して何もしない（同 §5.2）。
+  - `Abort` は、その一覧の Esc と同じに扱う（通常変換の一覧では入力全体を取り消す。`docs/legacy-parity-spec.md` §1.2）。
+  - 件数以上の index の `SetSelection` は、閉じた一覧の要素でも `E_INVALIDARG` を返す。それ以外の、閉じた一覧の
+    要素への呼び出しと、TIP が `BeginUIElement` / `UpdateUIElement` / `EndUIElement` を呼ぶ間や別の呼び出しを
+    処理する間に届いた呼び出しは、TIP へ渡さず `E_FAIL` を返す。
 
 ページ（M68）は `docs/legacy-parity-spec.md` §1.4「候補のページ」の 9 件ずつの区切りとし、`GetPageIndex` は各ページの先頭の index を、
 `GetCurrentPage` は選択を含むページを返す。いまのページが替わったら `TF_CLUIE_CURRENTPAGE` を、区切りが件数で変わったら `TF_CLUIE_PAGEINDEX` を
@@ -417,8 +426,8 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
   カテゴリ登録（§2.9）。`pbShow==FALSE` 経路は `CandidateListUIElement` の最小実装
   （`GetCount`/`GetString`/`GetSelection`/`GetUpdatedFlags` + `UpdateUIElement`
   通知）まで。
-- **M21**: `CandidateListUIElement` の full 実装（`...Behavior`・
-  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7。ページの API は M68 が持つ）、IME On/Off（§4）。予測
+- **M21**: `CandidateListUIElement` の full 実装（`ITfIntegratableCandidateListUIElement` 等 §2.7。ページの
+  API は M68、`ITfCandidateListUIElementBehavior` は §2.3 が持つ）、IME On/Off（§4）。予測
   は UIElement 化せず、自前の候補窓の予測モードで出す（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
   化」に縮小し、**契約自体（3-interface 雛形 + BeginUIElement 動線）は v1.0 で実装**
   する。
@@ -1498,7 +1507,8 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 | 開閉キーと入力インジケーター（§3.1、§4.1、§4.5） | `tsf-tip/tests/activate_uiless_test.cpp` | Windows 限定。`VK_IME_ON` / `VK_IME_OFF` と `imeOnOff` の変換・無変換、初回フォーカス直後の Off、言語バー項目の追加・削除・通知・クリック |
 | 言語バー項目（§4.5） | `tsf-tip/tests/langbar_input_mode_test.cpp` | Windows 限定。表示の規則、文字の色、アイコンの大きさと透明度、sink への通知、クリックの受け渡し、右クリックのメニューの構成と項目の名前・注記、settings.json の 1 キーの書き込み（`TipSettingsWriter`） |
 | 入力インジケーターのメニュー（§4.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipLangBarMenuTest`: 入力モードの切り替え、ライブ変換・予測変換の書き込みと `UpdateConfig` の有無、グレーアウト、アプリ別の設定の注記、無効化後の選択の破棄、設定アプリの起動（`--pane input`） |
-| CandidateListUIElement | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | Windows 限定。UI-less 時の `GetCount` / `GetString` / `GetSelection`、app-drawn と TIP 描画の切替、`ITfUIElementMgr` 欠落時の fallback |
+| CandidateListUIElement | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | Windows 限定。UI-less 時の `GetCount` / `GetString` / `GetSelection`、app-drawn と TIP 描画の切替、`ITfUIElementMgr` 欠落時の fallback、`ITfCandidateListUIElementBehavior` の TIP への受け渡しと、閉じた一覧・TIP の呼び出し中の `E_FAIL`（§2.3） |
+| UI-less の候補の操作（§2.3） | `tsf-tip/tests/onkeydown_preedit_test.cpp`、`tsf-tip/tests/reconversion_function_test.cpp`、`tsf-tip/tests/query_interface_contract_test.cpp` | Windows 限定。`TsfTipCandidateListBehaviorTest`: `SetSelection` / `Finalize` の読み全体・伸縮中・待つ間の挙動、各一覧の `Abort` が Esc と同じ結果になること。再変換の一覧の `SetSelection` / `Finalize` / `Abort`。`ITfCandidateListUIElementBehavior` の公開と同一 identity |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |
 | preedit の属性（§5.3、§5.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipSelectingDisplayAttributeTest`: 読みは入力属性、一括変換 OFF の候補選択中は全体が注目属性、Backspace で読みへ戻ると入力属性、Esc の後に属性が残らないこと、一括変換の文節属性。`TsfTipCommitDisplayAttributeTest`: Enter・数字・句読点の確定、フォーカスの喪失による確定、アプリが書き換えた文字列のままの終了、アプリが先に composition を終えた後の確定と Esc で、文書に残った文字列の属性を消すこと |

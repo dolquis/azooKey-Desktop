@@ -785,6 +785,18 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   // The candidate window's click callback, without a window.
   void click_candidate_for_test(int idx) { OnCandidateClicked(idx); }
+  // The shown list's UI element as an app that draws the list calls it
+  // (tsf-deep-integration-spec §2.3); null while no list is shown.
+  Microsoft::WRL::ComPtr<ITfCandidateListUIElementBehavior> candidate_list_behavior_for_test()
+      const {
+    return Microsoft::WRL::ComPtr<ITfCandidateListUIElementBehavior>(
+        candidate_ui_.ui_element_for_test());
+  }
+  // A commit waiting for its retry, without the commit, for the calls that
+  // must refuse it; a test sets it back before the service goes.
+  void set_committing_for_test(bool committing) { committing_ = committing; }
+  size_t shown_batch_segment_count_for_test() const { return shown_batch_segments_.size(); }
+  size_t batch_segment_cursor_for_test() const { return batch_segment_cursor_; }
   bool reconversion_select_pending_for_test() const { return reconversion_select_pending_; }
   // The TIP's selection: what Enter chooses and the candidate UI highlights.
   int candidate_selected_for_test() const { return candidate_ui_.GetSelected(); }
@@ -1915,6 +1927,14 @@ class TextService final : public ITfTextInputProcessorEx,
   void FinishReconnectAttempt(bool established);
   // A left click on candidate row `idx`, from the candidate window.
   void OnCandidateClicked(int idx);
+  // An app that draws the candidate list calls ITfCandidateListUIElementBehavior
+  // (tsf-deep-integration-spec §2.3): SetSelection moves the TIP's selection to
+  // `idx` as ↑↓ do, Finalize commits the selection as Enter does and Abort is
+  // Esc, on each kind of list as the click is (OnCandidateClicked).
+  HRESULT OnCandidateListBehavior(CandidateListBehavior behavior, int idx);
+  // Abort on the TIP's own lists (batch conversion, the pre-processing windows,
+  // the emoji list): what OnKeyDown's Esc does there.
+  HRESULT AbortTipCandidateList(ITfContext* context);
   void ClearReconversionState();
   void ShowReconversionResult();
   // Opens the list for `range` if it is still the open request's, anchored on

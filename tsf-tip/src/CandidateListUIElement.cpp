@@ -19,8 +19,9 @@ CandidateListUIElement::CandidateListUIElement(std::vector<std::wstring> items, 
 STDMETHODIMP CandidateListUIElement::QueryInterface(REFIID riid, void** ppvObj) {
   if (!ppvObj) return E_POINTER;
   *ppvObj = nullptr;
-  if (riid == IID_IUnknown || riid == IID_ITfUIElement || riid == IID_ITfCandidateListUIElement) {
-    *ppvObj = static_cast<ITfCandidateListUIElement*>(this);
+  if (riid == IID_IUnknown || riid == IID_ITfUIElement || riid == IID_ITfCandidateListUIElement ||
+      riid == IID_ITfCandidateListUIElementBehavior) {
+    *ppvObj = static_cast<ITfCandidateListUIElementBehavior*>(this);
   } else {
     return E_NOINTERFACE;
   }
@@ -138,6 +139,19 @@ STDMETHODIMP CandidateListUIElement::GetCurrentPage(UINT* puPage) {
   return S_OK;
 }
 
+STDMETHODIMP CandidateListUIElement::SetSelection(UINT nIndex) {
+  if (nIndex >= items_.size()) return E_INVALIDARG;
+  return CallBehaviorHandler(CandidateListBehavior::SetSelection, nIndex);
+}
+
+STDMETHODIMP CandidateListUIElement::Finalize() {
+  return CallBehaviorHandler(CandidateListBehavior::Finalize, 0);
+}
+
+STDMETHODIMP CandidateListUIElement::Abort() {
+  return CallBehaviorHandler(CandidateListBehavior::Abort, 0);
+}
+
 void CandidateListUIElement::Update(std::vector<std::wstring> items, int selected_idx,
                                     DWORD updated_flags) {
   // The default split depends only on the page count; an app's split only on
@@ -157,7 +171,7 @@ void CandidateListUIElement::Update(std::vector<std::wstring> items, int selecte
   updated_flags_ = updated_flags;
 }
 
-void CandidateListUIElement::SetSelection(int selected_idx, DWORD updated_flags) {
+void CandidateListUIElement::UpdateSelection(int selected_idx, DWORD updated_flags) {
   const size_t page = CurrentPage();
   selected_idx_ = ClampSelection(selected_idx, items_.size());
   // Moving the selection never moves the split, only the current page.
@@ -169,6 +183,23 @@ void CandidateListUIElement::SetShown(bool shown) { shown_ = shown; }
 
 void CandidateListUIElement::SetShowCallback(std::function<void(bool)> callback) {
   show_callback_ = std::move(callback);
+}
+
+void CandidateListUIElement::SetBehaviorHandler(CandidateListBehaviorHandler handler,
+                                                void* context) {
+  behavior_handler_ = handler;
+  behavior_context_ = handler ? context : nullptr;
+}
+
+HRESULT CandidateListUIElement::CallBehaviorHandler(CandidateListBehavior behavior, UINT index) {
+  const CandidateListBehaviorHandler handler = behavior_handler_;
+  if (!handler) return E_FAIL;
+  // Finalize and Abort end the list, which detaches and releases this element
+  // from inside the call; the app's reference may already be its last.
+  AddRef();
+  const HRESULT hr = handler(behavior, index, behavior_context_);
+  Release();
+  return hr;
 }
 
 const std::vector<uint32_t>& CandidateListUIElement::AppPageSplit() const {

@@ -212,6 +212,18 @@ HandleResult InputState::HandleSegmentCandidatesArrived(const std::string& readi
   return result;
 }
 
+HandleResult InputState::SelectCandidate(size_t index) const {
+  if (kind_ != InputStateKind::Selecting || awaiting_segment_candidates_ ||
+      index >= candidates_.size()) {
+    return {{}, *this};
+  }
+  HandleResult result{{}, *this};
+  result.next.selected_index_ = index;
+  result.actions.push_back(UpdateCandidateSelection{index});
+  result.actions.push_back(ReplaceMarkedText{candidates_[index].surface + RemainingReading()});
+  return result;
+}
+
 HandleResult InputState::HandleIdle(const UserActionEvent& event) const {
   HandleResult result{{}, *this};
   InputState& next = result.next;

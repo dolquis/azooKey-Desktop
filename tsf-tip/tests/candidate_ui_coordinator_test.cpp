@@ -13,6 +13,7 @@
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -139,6 +140,7 @@ class MockThreadMgrWithUiElementMgr final : public ITfThreadMgr, public ITfUIEle
     if (element) element->Release();
     element = pElement;
     element->AddRef();
+    if (on_begin) on_begin();
     *pbShow = begin_pb_show;
     *pdwUIElementId = ui_element_id;
     return begin_hr;
@@ -147,11 +149,13 @@ class MockThreadMgrWithUiElementMgr final : public ITfThreadMgr, public ITfUIEle
     if (dwUIElementId != ui_element_id) return E_INVALIDARG;
     ++update_count;
     if (throw_on_update) throw std::bad_alloc();
+    if (on_update) on_update();
     return update_hr;
   }
   STDMETHODIMP EndUIElement(DWORD dwUIElementId) override {
     if (dwUIElementId != ui_element_id) return E_INVALIDARG;
     ++end_count;
+    if (on_end) on_end();
     if (element) {
       element->Release();
       element = nullptr;
@@ -182,6 +186,10 @@ class MockThreadMgrWithUiElementMgr final : public ITfThreadMgr, public ITfUIEle
   int begin_count{0};
   int update_count{0};
   int end_count{0};
+  // An app's sink, run inside BeginUIElement / UpdateUIElement / EndUIElement.
+  std::function<void()> on_begin;
+  std::function<void()> on_update;
+  std::function<void()> on_end;
   ITfUIElement* element{nullptr};
   LONG ref_count() const { return ref_count_; }
 
@@ -1190,4 +1198,166 @@ TEST(TsfTipCandidateUiCoordinatorTest, PredictionDrawFailureIsNotShowingAndHideS
   EXPECT_EQ(window.GetCount(), static_cast<int>(SampleItems().size()));
   coordinator.EndUI();
   EXPECT_FALSE(window.IsVisible());
+}
+
+namespace {
+
+ITfCandidateListUIElementBehavior* QueryBehavior(ITfUIElement* element) {
+  ITfCandidateListUIElementBehavior* behavior = nullptr;
+  if (!element || FAILED(element->QueryInterface(IID_ITfCandidateListUIElementBehavior,
+                                                 reinterpret_cast<void**>(&behavior)))) {
+    return nullptr;
+  }
+  return behavior;
+}
+
+using BehaviorCalls = std::vector<std::pair<azookey::tsf::CandidateListBehavior, int>>;
+
+// The TIP that holds the coordinator, as far as its reference count goes.
+class CountingOwner final : public IUnknown {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    *ppv = nullptr;
+    if (riid != IID_IUnknown) return E_NOINTERFACE;
+    *ppv = this;
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return ++refs; }
+  STDMETHODIMP_(ULONG) Release() override { return --refs; }
+  ULONG refs{1};
+};
+
+}  // namespace
+
+// tsf-deep-integration-spec §2.3: an app's SetSelection, Finalize and Abort reach
+// the TIP, and the element reports the selection the TIP sets, not the app's.
+TEST(TsfTipCandidateUiCoordinatorTest, AppBehaviorCallsReachTheTipWhichMovesTheSelection) {
+  using azookey::tsf::CandidateListBehavior;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  BehaviorCalls calls;
+  HRESULT handler_result = S_OK;
+  CountingOwner owner;
+  std::vector<ULONG> owner_refs_inside;
+  coordinator.SetOnBehavior(
+      [&](CandidateListBehavior behavior, int index) {
+        calls.emplace_back(behavior, index);
+        owner_refs_inside.push_back(owner.refs);
+        return handler_result;
+      },
+      &owner);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  ITfCandidateListUIElementBehavior* behavior = QueryBehavior(thread_mgr.element);
+  ASSERT_NE(behavior, nullptr);
+
+  EXPECT_EQ(behavior->SetSelection(2), S_OK);
+  UINT selection = 99;
+  EXPECT_EQ(behavior->GetSelection(&selection), S_OK);
+  EXPECT_EQ(selection, 0u);
+  const int updates = thread_mgr.update_count;
+  EXPECT_EQ(coordinator.SetSelection(2), S_OK);
+  EXPECT_EQ(thread_mgr.update_count, updates + 1);
+  EXPECT_EQ(behavior->GetSelection(&selection), S_OK);
+  EXPECT_EQ(selection, 2u);
+  EXPECT_EQ(behavior->Finalize(), S_OK);
+  EXPECT_EQ(behavior->Abort(), S_OK);
+  // An index past the list never reaches the TIP; the TIP's failure reaches the app.
+  EXPECT_EQ(behavior->SetSelection(3), E_INVALIDARG);
+  handler_result = E_OUTOFMEMORY;
+  EXPECT_EQ(behavior->Finalize(), E_OUTOFMEMORY);
+  const BehaviorCalls expected{{CandidateListBehavior::SetSelection, 2},
+                               {CandidateListBehavior::Finalize, 0},
+                               {CandidateListBehavior::Abort, 0},
+                               {CandidateListBehavior::Finalize, 0}};
+  EXPECT_EQ(calls, expected);
+  // Each call holds the owner until it has ended.
+  EXPECT_EQ(owner_refs_inside, (std::vector<ULONG>{2, 2, 2, 2}));
+  EXPECT_EQ(owner.refs, 1u);
+  behavior->Release();
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+}
+
+// An app may keep the element after the list ends, also when the TIP ends it
+// inside Finalize; the element then reaches no list, nor a later one.
+TEST(TsfTipCandidateUiCoordinatorTest, AppBehaviorCallsAfterTheListEndsReachNothing) {
+  using azookey::tsf::CandidateListBehavior;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  BehaviorCalls calls;
+  coordinator.SetOnBehavior(
+      [&](CandidateListBehavior behavior, int index) {
+        calls.emplace_back(behavior, index);
+        return coordinator.EndUI();
+      },
+      nullptr);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 1), S_OK);
+  ITfCandidateListUIElementBehavior* behavior = QueryBehavior(thread_mgr.element);
+  ASSERT_NE(behavior, nullptr);
+
+  EXPECT_EQ(behavior->Finalize(), S_OK);
+  EXPECT_FALSE(coordinator.IsShowing());
+  EXPECT_EQ(thread_mgr.end_count, 1);
+  EXPECT_EQ(calls.size(), 1u);
+  EXPECT_EQ(behavior->Finalize(), E_FAIL);
+  EXPECT_EQ(behavior->SetSelection(0), E_FAIL);
+  EXPECT_EQ(behavior->Abort(), E_FAIL);
+
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_EQ(behavior->Finalize(), E_FAIL);
+  EXPECT_TRUE(coordinator.IsShowing());
+  EXPECT_EQ(calls.size(), 1u);
+  behavior->Release();
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+}
+
+// An app's sink may call back from inside Begin/Update/EndUIElement, and the
+// TIP's handling of a call notifies the app again; those nested calls get
+// E_FAIL and never reach the TIP.
+TEST(TsfTipCandidateUiCoordinatorTest, AppBehaviorCallsInsideTheTipsCallsAreRefused) {
+  using azookey::tsf::CandidateListBehavior;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  BehaviorCalls calls;
+  std::vector<HRESULT> nested;
+  coordinator.SetOnBehavior(
+      [&](CandidateListBehavior behavior, int index) {
+        calls.emplace_back(behavior, index);
+        ITfCandidateListUIElementBehavior* self = QueryBehavior(thread_mgr.element);
+        nested.push_back(self ? self->Abort() : S_OK);
+        if (self) self->Release();
+        return coordinator.SetSelection(index);
+      },
+      nullptr);
+  const auto call_from_sink = [&] {
+    ITfCandidateListUIElementBehavior* self = QueryBehavior(thread_mgr.element);
+    nested.push_back(self ? self->Finalize() : S_OK);
+    if (self) self->Release();
+  };
+  // BeginUIElement, and the first UpdateUIElement after it, inside BeginUI.
+  thread_mgr.on_begin = call_from_sink;
+  thread_mgr.on_update = call_from_sink;
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  thread_mgr.on_begin = nullptr;
+  EXPECT_TRUE(coordinator.IsShowing());
+  ITfCandidateListUIElementBehavior* behavior = QueryBehavior(thread_mgr.element);
+  ASSERT_NE(behavior, nullptr);
+
+  EXPECT_EQ(behavior->SetSelection(2), S_OK);
+  UINT selection = 0;
+  EXPECT_EQ(behavior->GetSelection(&selection), S_OK);
+  EXPECT_EQ(selection, 2u);
+  thread_mgr.on_update = nullptr;
+  thread_mgr.on_end = call_from_sink;
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+  thread_mgr.on_end = nullptr;
+  // Inside BeginUIElement and BeginUI's update, the handler's Abort, the
+  // handler's own update, and EndUIElement.
+  EXPECT_EQ(nested, (std::vector<HRESULT>{E_FAIL, E_FAIL, E_FAIL, E_FAIL, E_FAIL}));
+  EXPECT_EQ(calls, (BehaviorCalls{{CandidateListBehavior::SetSelection, 2}}));
+  behavior->Release();
 }

@@ -1821,6 +1821,51 @@ TEST(TsfTipEmojiTest, ListingTurnsPagesAndStaysInTheSearch) {
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
 }
 
+// DEV-2176 (tsf-deep-integration-spec §2.3): on the emoji list an app's
+// SetSelection moves the highlight as ↓ does and keeps the query shown,
+// Finalize commits as Enter does, and Abort goes back to the query as Esc does.
+TEST(TsfTipEmojiTest, AppBehaviorOnTheListDoesWhatItsKeysDo) {
+  const auto open = [](EmojiHarness& h) {
+    ASSERT_TRUE(h.Press(VK_OEM_1));
+    ASSERT_TRUE(h.Press('S'));
+    std::vector<azookey::ipc::CandidateField> list(2);
+    list[0].surface = "😄";
+    list[1].surface = "😀";
+    for (auto& candidate : list) candidate.source = "emoji";
+    h.service.set_cached_candidates_for_test(std::move(list));
+    h.service.show_candidate_window_from_cache_for_test();
+    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  };
+  {
+    SCOPED_TRACE("SetSelection and Finalize");
+    EmojiHarness h;
+    ASSERT_NO_FATAL_FAILURE(open(h));
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    EXPECT_EQ(behavior->SetSelection(1), S_OK);
+    EXPECT_EQ(h.service.candidate_selected_for_test(), 1);
+    EXPECT_EQ(h.service.preedit_kana_, ":s");
+    FakeCompositionAttachment attachment(h);
+    EXPECT_EQ(behavior->Finalize(), S_OK);
+    EXPECT_EQ(attachment.composition_range.last_text, L"😀");
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+  }
+  {
+    SCOPED_TRACE("Abort");
+    EmojiHarness h;
+    ASSERT_NO_FATAL_FAILURE(open(h));
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    EXPECT_EQ(behavior->Abort(), S_OK);
+    EXPECT_EQ(h.service.preedit_kana_, ":s");
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+    // Back in the query: the next key extends it.
+    ASSERT_TRUE(h.Press('M'));
+    EXPECT_EQ(h.service.pending_emoji_trigger_for_test(), "sm");
+  }
+}
+
 TEST(TsfTipEmojiTest, MinimumLengthAndDisabledTriggerAreRespected) {
   EmojiHarness h;
   h.service.set_emoji_rewriter_for_test(true, true, 2);
@@ -21818,6 +21863,329 @@ TEST(TsfTipSegmentEditingTest, ClickWaitsForTheFirstSegmentsListAndThenCommitsIt
   EXPECT_EQ(h.context.document->text, L"夏季く");
   ExpectRemainingKuAwaited(h);
   ExpectFirstSegmentObserved(h, "夏季");
+}
+
+// tsf-deep-integration-spec §2.3, §4: an app that draws the list moves the
+// whole reading's candidate with SetSelection as ↓ does, and Finalize commits
+// it as Enter does. The ended list's element reaches nothing.
+TEST(TsfTipCandidateListBehaviorTest, SetSelectionAndFinalizeCommitTheWholeReadingsCandidate) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  OpenKakiku(h);
+  const auto behavior = h.service.candidate_list_behavior_for_test();
+  ASSERT_TRUE(behavior);
+  EXPECT_EQ(behavior->SetSelection(1), S_OK);
+  EXPECT_EQ(h.context.document->text, L"柿区");
+  EXPECT_EQ(h.service.input_state_for_test().selected_index(), 1u);
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 1);
+  UINT selection = 0;
+  EXPECT_EQ(behavior->GetSelection(&selection), S_OK);
+  EXPECT_EQ(selection, 1u);
+
+  EXPECT_EQ(behavior->Finalize(), S_OK);
+  EXPECT_EQ(h.context.document->text, L"柿区");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->reading, "かきく");
+  EXPECT_EQ(observation->chosen.surface, "柿区");
+  EXPECT_EQ(behavior->Finalize(), E_FAIL);
+  EXPECT_EQ(behavior->SetSelection(0), E_FAIL);
+}
+
+// Segment-editing-spec §4, §6, §8: with the first segment resized,
+// SetSelection moves among its candidates and Finalize commits only it.
+TEST(TsfTipCandidateListBehaviorTest, SetSelectionAndFinalizeCommitOnlyTheResizedFirstSegment) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  OpenKakiku(h);
+  ShrinkToKaki(h);
+  const auto behavior = h.service.candidate_list_behavior_for_test();
+  ASSERT_TRUE(behavior);
+  EXPECT_EQ(behavior->SetSelection(1), S_OK);
+  EXPECT_EQ(h.context.document->text, L"夏季く");
+  EXPECT_EQ(h.service.input_state_for_test().segment_end(), 2u);
+  EXPECT_EQ(behavior->Finalize(), S_OK);
+  EXPECT_EQ(h.context.document->text, L"夏季く");
+  ExpectRemainingKuAwaited(h);
+  ExpectFirstSegmentObserved(h, "夏季");
+}
+
+// Segment-editing-spec §5.2: the list left from before the resize is not the
+// first segment's, so SetSelection and Finalize are consumed and do nothing;
+// the first segment's list then takes them.
+TEST(TsfTipCandidateListBehaviorTest, SetSelectionAndFinalizeWaitForTheFirstSegmentsList) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  OpenKakiku(h);
+  PressShifted(h, VK_LEFT);
+  ASSERT_TRUE(h.service.input_state_for_test().awaiting_segment_candidates());
+  const auto waiting = h.service.candidate_list_behavior_for_test();
+  ASSERT_TRUE(waiting);
+  EXPECT_EQ(waiting->SetSelection(1), S_OK);
+  EXPECT_EQ(waiting->Finalize(), S_OK);
+  EXPECT_TRUE(h.service.input_state_for_test().awaiting_segment_candidates());
+  EXPECT_EQ(h.context.document->text, L"かきく");
+  EXPECT_EQ(h.service.input_state_for_test().selected_index(), 0u);
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 0);
+  UINT selection = 99;
+  EXPECT_EQ(waiting->GetSelection(&selection), S_OK);
+  EXPECT_EQ(selection, 0u);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  AnswerLatestQuery(h, KakiCandidates());
+  EXPECT_EQ(waiting->Finalize(), E_FAIL);
+  const auto shown = h.service.candidate_list_behavior_for_test();
+  ASSERT_TRUE(shown);
+  EXPECT_EQ(shown->SetSelection(1), S_OK);
+  EXPECT_EQ(shown->Finalize(), S_OK);
+  EXPECT_EQ(h.context.document->text, L"夏季く");
+  ExpectRemainingKuAwaited(h);
+  ExpectFirstSegmentObserved(h, "夏季");
+}
+
+namespace {
+
+struct CandidateListOpener {
+  const char* name;
+  void (*open)(DocumentPreeditHarness& h);
+};
+
+// The first segment of か・に holds 蚊 and 可.
+void OpenBatchKani(DocumentPreeditHarness& h) {
+  ConfigureTypoHarness(h);
+  h.service.set_batch_romaji_options_for_test(true);
+  TypeTypoRomaji(h, "KANI");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const azookey::ipc::CandidateField ka{"蚊", "か", 1.0, "dictionary"};
+  const azookey::ipc::CandidateField ka2{"可", "か", 1.0, "dictionary"};
+  const azookey::ipc::CandidateField ni{"二", "に", 1.0, "dictionary"};
+  h.service.set_cached_batch_segments_for_test({{"か", {ka, ka2}}, {"に", {ni}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊二");
+}
+
+void OpenPreProcessingKakiku(DocumentPreeditHarness& h) {
+  ConfigureTypoHarness(h, /*legacy=*/true);
+  TypeTypoRomaji(h, "KAKIKU");
+  OpenCandidateWindow(h, KakikuCandidates());
+}
+
+struct CandidateListOutcome {
+  std::wstring text;
+  std::wstring composition;
+  std::string preedit;
+  bool window{false};
+  azookey::core::InputStateKind kind{azookey::core::InputStateKind::Idle};
+  size_t held_keys{0};
+  bool query{false};
+  size_t batch_segments{0};
+  size_t segment_cursor{0};
+  std::string batch_raw_romaji;
+};
+
+CandidateListOutcome OutcomeOf(DocumentPreeditHarness& h) {
+  return {h.context.document->text,
+          CompositionText(h),
+          h.service.preedit_kana_,
+          h.service.candidate_window_showing_for_test(),
+          h.service.input_state_for_test().kind(),
+          h.service.window_waiting_key_count_for_test(),
+          h.service.has_pending_ipc_query_for_test(),
+          h.service.shown_batch_segment_count_for_test(),
+          h.service.batch_segment_cursor_for_test(),
+          h.service.batch_raw_romaji_for_test()};
+}
+
+void ExpectSameOutcome(const CandidateListOutcome& app, const CandidateListOutcome& keys) {
+  EXPECT_EQ(app.text, keys.text);
+  EXPECT_EQ(app.composition, keys.composition);
+  EXPECT_EQ(app.preedit, keys.preedit);
+  EXPECT_EQ(app.window, keys.window);
+  EXPECT_EQ(app.kind, keys.kind);
+  EXPECT_EQ(app.held_keys, keys.held_keys);
+  EXPECT_EQ(app.query, keys.query);
+  EXPECT_EQ(app.batch_segments, keys.batch_segments);
+  EXPECT_EQ(app.segment_cursor, keys.segment_cursor);
+  EXPECT_EQ(app.batch_raw_romaji, keys.batch_raw_romaji);
+}
+
+// The batch window on its second segment after batch conversion was switched
+// off: Abort and Esc then cancel the input, dropping the segments.
+void OpenBatchKaniThenSwitchBatchOff(DocumentPreeditHarness& h) {
+  OpenBatchKani(h);
+  ASSERT_TRUE(h.Press(VK_RIGHT));
+  ASSERT_EQ(h.service.batch_segment_cursor_for_test(), 1u);
+  h.service.set_batch_romaji_options_for_test(false);
+}
+
+}  // namespace
+
+// tsf-deep-integration-spec §2.3: Abort is Esc on every kind of list. The whole
+// input goes, at once while the first segment waits, with the held keys; the
+// batch window closes to its reading; a pre-processing window goes with its input.
+TEST(TsfTipCandidateListBehaviorTest, AbortDoesWhatEscapeDoes) {
+  const CandidateListOpener openers[] = {
+      {"whole reading",
+       [](DocumentPreeditHarness& h) {
+         ConfigureTypoHarness(h);
+         OpenKakiku(h);
+       }},
+      {"resized",
+       [](DocumentPreeditHarness& h) {
+         ConfigureTypoHarness(h);
+         OpenKakiku(h);
+         ShrinkToKaki(h);
+       }},
+      {"first segment awaited with a held key",
+       [](DocumentPreeditHarness& h) {
+         ConfigureTypoHarness(h);
+         OpenKakiku(h);
+         PressShifted(h, VK_LEFT);
+         PressWhileSegmentWaits(h, VK_RETURN);
+       }},
+      {"pre-processing window", &OpenPreProcessingKakiku},
+      {"batch conversion", &OpenBatchKani},
+      {"batch window with batch conversion switched off", &OpenBatchKaniThenSwitchBatchOff},
+  };
+  for (const auto& opener : openers) {
+    SCOPED_TRACE(opener.name);
+    CandidateListOutcome escaped;
+    {
+      DocumentPreeditHarness h;
+      ASSERT_NO_FATAL_FAILURE(opener.open(h));
+      EXPECT_TRUE(h.Press(VK_ESCAPE));
+      escaped = OutcomeOf(h);
+    }
+    DocumentPreeditHarness h;
+    ASSERT_NO_FATAL_FAILURE(opener.open(h));
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    EXPECT_EQ(behavior->Abort(), S_OK);
+    const CandidateListOutcome aborted = OutcomeOf(h);
+    EXPECT_FALSE(aborted.window);
+    ExpectSameOutcome(aborted, escaped);
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+  }
+}
+
+// As with Esc, an allocation failure of the preedit update puts the TIP's own
+// list and its input back, the batch segments and their focus included.
+TEST(TsfTipCandidateListBehaviorTest, AbortWithoutThePreeditUpdateKeepsTheList) {
+  const CandidateListOpener openers[] = {
+      {"pre-processing window", &OpenPreProcessingKakiku},
+      {"batch conversion", &OpenBatchKani},
+      {"batch window with batch conversion switched off", &OpenBatchKaniThenSwitchBatchOff},
+  };
+  for (const auto& opener : openers) {
+    SCOPED_TRACE(opener.name);
+    DocumentPreeditHarness h;
+    ASSERT_NO_FATAL_FAILURE(opener.open(h));
+    const CandidateListOutcome opened = OutcomeOf(h);
+    const int selected = h.service.candidate_selected_for_test();
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+    EXPECT_EQ(behavior->Abort(), E_OUTOFMEMORY);
+    ExpectSameOutcome(OutcomeOf(h), opened);
+    EXPECT_EQ(h.service.candidate_selected_for_test(), selected);
+  }
+}
+
+// A commit waiting for its retry has closed the list, so a call that still
+// reaches the TIP is refused and changes nothing.
+TEST(TsfTipCandidateListBehaviorTest, CallsWhileACommitWaitsForItsRetryAreRefused) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  OpenKakiku(h);
+  const CandidateListOutcome opened = OutcomeOf(h);
+  const auto behavior = h.service.candidate_list_behavior_for_test();
+  ASSERT_TRUE(behavior);
+  h.service.set_committing_for_test(true);
+  EXPECT_EQ(behavior->SetSelection(1), E_FAIL);
+  EXPECT_EQ(behavior->Finalize(), E_FAIL);
+  EXPECT_EQ(behavior->Abort(), E_FAIL);
+  h.service.set_committing_for_test(false);
+  ExpectSameOutcome(OutcomeOf(h), opened);
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 0);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+// An allocation failure of the preedit update puts the selection back on the
+// TIP's own lists, and rolls the core's list back for SetSelection and Abort.
+TEST(TsfTipCandidateListBehaviorTest, CallsWithoutThePreeditUpdateRollBack) {
+  {
+    SCOPED_TRACE("SetSelection on a pre-processing window");
+    DocumentPreeditHarness h;
+    ASSERT_NO_FATAL_FAILURE(OpenPreProcessingKakiku(h));
+    const CandidateListOutcome opened = OutcomeOf(h);
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+    EXPECT_EQ(behavior->SetSelection(1), E_OUTOFMEMORY);
+    ExpectSameOutcome(OutcomeOf(h), opened);
+    EXPECT_EQ(h.service.candidate_selected_for_test(), 0);
+  }
+  for (const auto behavior_kind : {azookey::tsf::CandidateListBehavior::SetSelection,
+                                   azookey::tsf::CandidateListBehavior::Abort}) {
+    SCOPED_TRACE(behavior_kind == azookey::tsf::CandidateListBehavior::Abort
+                     ? "Abort on the core's list"
+                     : "SetSelection on the core's list");
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    OpenKakiku(h);
+    const CandidateListOutcome opened = OutcomeOf(h);
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+    EXPECT_EQ(behavior_kind == azookey::tsf::CandidateListBehavior::Abort
+                  ? behavior->Abort()
+                  : behavior->SetSelection(1),
+              E_OUTOFMEMORY);
+    const CandidateListOutcome after = OutcomeOf(h);
+    EXPECT_EQ(after.text, opened.text);
+    EXPECT_EQ(after.composition, opened.composition);
+    EXPECT_EQ(after.preedit, opened.preedit);
+    EXPECT_EQ(after.window, opened.window);
+    EXPECT_EQ(after.kind, opened.kind);
+    EXPECT_EQ(h.service.input_state_for_test().selected_index(), 0u);
+    EXPECT_EQ(h.service.candidate_selected_for_test(), 0);
+  }
+}
+
+// The TIP's own lists: SetSelection moves as ↓ does and Finalize commits as
+// Enter does (tsf-deep-integration-spec §2.3).
+TEST(TsfTipCandidateListBehaviorTest, SetSelectionAndFinalizeOnTheTipsOwnListsAreTheKeys) {
+  const CandidateListOpener openers[] = {
+      {"pre-processing window", &OpenPreProcessingKakiku},
+      {"batch conversion", &OpenBatchKani},
+  };
+  for (const auto& opener : openers) {
+    SCOPED_TRACE(opener.name);
+    CandidateListOutcome moved_by_key;
+    CandidateListOutcome committed_by_key;
+    {
+      DocumentPreeditHarness h;
+      ASSERT_NO_FATAL_FAILURE(opener.open(h));
+      EXPECT_TRUE(h.Press(VK_DOWN));
+      moved_by_key = OutcomeOf(h);
+      EXPECT_TRUE(h.Press(VK_RETURN));
+      committed_by_key = OutcomeOf(h);
+    }
+    DocumentPreeditHarness h;
+    ASSERT_NO_FATAL_FAILURE(opener.open(h));
+    const auto behavior = h.service.candidate_list_behavior_for_test();
+    ASSERT_TRUE(behavior);
+    const std::wstring opened = h.context.document->text;
+    EXPECT_EQ(behavior->SetSelection(1), S_OK);
+    EXPECT_NE(h.context.document->text, opened);
+    ExpectSameOutcome(OutcomeOf(h), moved_by_key);
+    EXPECT_EQ(h.service.candidate_selected_for_test(), 1);
+    EXPECT_EQ(behavior->Finalize(), S_OK);
+    ExpectSameOutcome(OutcomeOf(h), committed_by_key);
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  }
 }
 
 // §5.2: Esc, the off keys, the switch to alphanumeric mode and a focus loss

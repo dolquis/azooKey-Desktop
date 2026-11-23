@@ -30,6 +30,20 @@ std::vector<std::wstring> CandidateSurfaces(const std::vector<CandidateViewItem>
   return surfaces;
 }
 
+// Holds an app's Behavior calls off while the TIP calls out (SetOnBehavior).
+class ScopedCallout {
+ public:
+  explicit ScopedCallout(bool& calling_out)
+      : calling_out_(calling_out), previous_(std::exchange(calling_out, true)) {}
+  ~ScopedCallout() { calling_out_ = previous_; }
+  ScopedCallout(const ScopedCallout&) = delete;
+  ScopedCallout& operator=(const ScopedCallout&) = delete;
+
+ private:
+  bool& calling_out_;
+  bool previous_;
+};
+
 }  // namespace
 
 CandidateUiCoordinator::~CandidateUiCoordinator() { Destroy(); }
@@ -65,6 +79,12 @@ void CandidateUiCoordinator::SetUiLessMode(bool ui_less) {
 void CandidateUiCoordinator::SetOnClick(CandidateWindow::OnClickFn fn) {
   AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
   own_window_.SetOnClick(std::move(fn));
+}
+
+void CandidateUiCoordinator::SetOnBehavior(OnBehaviorFn fn, IUnknown* owner) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  on_behavior_ = std::move(fn);
+  behavior_owner_ = owner;
 }
 
 void CandidateUiCoordinator::SetOnPredictionClick(CandidateWindow::OnPredictionClickFn fn) {
@@ -210,6 +230,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, RECT anchor,
     }
     ui_element_.attach(element);
     ui_element_->SetShowCallback([this](bool show) { OnElementShow(show); });
+    ui_element_->SetBehaviorHandler(&CandidateUiCoordinator::OnElementBehavior, this);
 
     HRESULT hr = EnsureUiElementMgr(thread_mgr);
     if (FAILED(hr) || !ui_element_mgr_) {
@@ -232,8 +253,11 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, RECT anchor,
 
     BOOL pb_show = TRUE;
     DWORD ui_element_id = kInvalidUiElementId;
-    hr = ui_element_mgr_->BeginUIElement(static_cast<ITfUIElement*>(ui_element_.get()), &pb_show,
-                                         &ui_element_id);
+    {
+      const ScopedCallout callout(calling_out_);
+      hr = ui_element_mgr_->BeginUIElement(static_cast<ITfUIElement*>(ui_element_.get()), &pb_show,
+                                           &ui_element_id);
+    }
     if (FAILED(hr)) {
       NotifyBeginObserver(hr, true, false, FALSE, kInvalidUiElementId);
       ReleaseUiElement();
@@ -250,7 +274,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, RECT anchor,
     if (resume_health_banner && tip_draws_) own_window_.ResumeHealthBanner();
     if (!tip_draws_) {
       ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
-      hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
+      hr = NotifyUiElementUpdated();
       if (FAILED(hr)) {
         const HRESULT cleanup_hr = EndUI();
         UNREFERENCED_PARAMETER(cleanup_hr);
@@ -287,9 +311,7 @@ HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& i
     own_window_.Show(last_anchor_, items_, selected_idx_, notice_);
     return S_OK;
   }
-  if (ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
-    return ui_element_mgr_->UpdateUIElement(ui_element_id_);
-  }
+  if (ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) return NotifyUiElementUpdated();
   return S_OK;
 }
 
@@ -299,6 +321,7 @@ HRESULT CandidateUiCoordinator::EndUI() {
   // Closing the candidate list leaves predictions alone; they have their own lifetime.
   if (own_window_.mode() == CandidateWindow::Mode::Candidate) own_window_.Hide();
   if (showing_ && ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
+    const ScopedCallout callout(calling_out_);
     result = ui_element_mgr_->EndUIElement(ui_element_id_);
   }
   ui_element_id_ = kInvalidUiElementId;
@@ -322,14 +345,12 @@ HRESULT CandidateUiCoordinator::SetSelection(int selected_idx) {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   if (items_.empty()) return S_OK;
   selected_idx_ = ClampSelection(selected_idx);
-  if (ui_element_) ui_element_->SetSelection(selected_idx_, TF_CLUIE_SELECTION);
+  if (ui_element_) ui_element_->UpdateSelection(selected_idx_, TF_CLUIE_SELECTION);
   if (tip_draws_) {
     own_window_.SetSelected(selected_idx_);
     return S_OK;
   }
-  if (ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
-    return ui_element_mgr_->UpdateUIElement(ui_element_id_);
-  }
+  if (ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) return NotifyUiElementUpdated();
   return S_OK;
 }
 
@@ -364,6 +385,11 @@ HRESULT CandidateUiCoordinator::EnsureUiElementMgr(ITfThreadMgr* thread_mgr) {
     return hr;
   }
   return ui_element_mgr_ ? S_OK : E_NOINTERFACE;
+}
+
+HRESULT CandidateUiCoordinator::NotifyUiElementUpdated() {
+  const ScopedCallout callout(calling_out_);
+  return ui_element_mgr_->UpdateUIElement(ui_element_id_);
 }
 
 void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
@@ -437,7 +463,7 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
     own_window_.Hide();
     if (showing_ && ui_element_ && ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
       ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
-      const HRESULT update_hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
+      const HRESULT update_hr = NotifyUiElementUpdated();
       UNREFERENCED_PARAMETER(update_hr);
     }
     return;
@@ -450,9 +476,30 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
   }
 }
 
+HRESULT CandidateUiCoordinator::OnElementBehavior(CandidateListBehavior behavior, UINT index,
+                                                  void* context) noexcept {
+  auto& self = *static_cast<CandidateUiCoordinator*>(context);
+#ifdef _DEBUG
+  self.ui_thread_affinity_.AssertCurrentThreadIfBound();
+#endif
+  if (self.calling_out_ || !self.showing_ || !self.on_behavior_) return E_FAIL;
+  // Declared before the callout, so the owner, and `self` with it, lives
+  // until the callout has put the flag back.
+  const wil::com_ptr_nothrow<IUnknown> owner(self.behavior_owner_);
+  const ScopedCallout callout(self.calling_out_);
+  try {
+    return self.on_behavior_(behavior, static_cast<int>(index));
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
+  }
+}
+
 void CandidateUiCoordinator::ReleaseUiElement() {
   if (ui_element_) {
     ui_element_->SetShowCallback({});
+    ui_element_->SetBehaviorHandler(nullptr, nullptr);
     ui_element_.reset();
   }
 }

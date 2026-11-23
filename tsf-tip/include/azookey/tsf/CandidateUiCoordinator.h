@@ -33,6 +33,10 @@ using CandidateUiBeginObserver = void (*)(const CandidateUiBeginObservation& obs
 
 class CandidateUiCoordinator {
  public:
+  // An app's SetSelection (index below the list's count), Finalize or Abort
+  // (tsf-deep-integration-spec §2.3). The TIP decides what the list does.
+  using OnBehaviorFn = std::function<HRESULT(CandidateListBehavior behavior, int index)>;
+
   CandidateUiCoordinator() = default;
   ~CandidateUiCoordinator();
 
@@ -44,6 +48,12 @@ class CandidateUiCoordinator {
 
   void SetUiLessMode(bool ui_less);
   void SetOnClick(CandidateWindow::OnClickFn fn);
+  // Reaches the TIP only for the list on show, and not while an app's sink
+  // runs inside Begin/Update/EndUIElement or another such call is handled:
+  // those calls get E_FAIL. `owner`, the object that holds this coordinator,
+  // is not owned; each call holds a reference to it until the call has ended,
+  // so a TIP that drops its last reference inside `fn` outlives this frame.
+  void SetOnBehavior(OnBehaviorFn fn, IUnknown* owner);
   void SetOnRetry(CandidateWindow::OnRetryFn fn);
   // Called on the TSF UI thread after the IPC worker publishes a health snapshot.
   void SetHealthState(CandidateHealthState state, const std::string& host_generation_id);
@@ -110,14 +120,20 @@ class CandidateUiCoordinator {
   bool health_banner_pending_for_test() const { return health_banner_pending_; }
   bool secure_toast_pending_for_test() const { return secure_toast_pending_; }
   const CandidateWindow& own_window_for_test() const { return own_window_; }
+  // The list's UI element, as an app reaches it; null while none is shown.
+  CandidateListUIElement* ui_element_for_test() const { return ui_element_.get(); }
 #endif
 
  private:
   static constexpr DWORD kInvalidUiElementId = 0xFFFFFFFF;
 
   HRESULT EnsureUiElementMgr(ITfThreadMgr* thread_mgr);
+  // UpdateUIElement with an app's Behavior calls held off (SetOnBehavior).
+  HRESULT NotifyUiElementUpdated();
   void OnPbShown(bool tip_draws);
   void OnElementShow(bool show);
+  static HRESULT OnElementBehavior(CandidateListBehavior behavior, UINT index,
+                                   void* context) noexcept;
   void ShowPendingHealthBanner();
   void ShowPendingSecureToast();
   // The window is on screen with candidate rows, not predictions.
@@ -155,6 +171,10 @@ class CandidateUiCoordinator {
   bool secure_toast_pending_{false};
   CandidateUiBeginObserver begin_observer_{nullptr};
   void* begin_observer_context_{nullptr};
+  OnBehaviorFn on_behavior_;
+  IUnknown* behavior_owner_{nullptr};  // Not owned (SetOnBehavior).
+  // Inside Begin/Update/EndUIElement or the handling of a Behavior call.
+  bool calling_out_{false};
   std::vector<std::string> logged_render_failure_stages_;
   bool handling_render_result_{false};
 };

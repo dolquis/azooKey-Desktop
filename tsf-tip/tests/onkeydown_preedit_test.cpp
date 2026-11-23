@@ -21343,6 +21343,255 @@ TEST(TsfTipInputScopeFieldTest, AFailedFocusReadIsReadOnceMoreBeforeTheFirstKey)
   }
 }
 
+namespace {
+// What ActivateEx leaves for a document that already has focus: the mark, and
+// the advised context the posted candidates ready message reads.
+void ActivateInTheField(InputScopeFieldHarness& s) {
+  s.h.service.mark_input_scope_field_on_activation_for_test(&s.field_document);
+  s.h.service.set_text_edit_context_for_test(&s.h.context);
+}
+}  // namespace
+
+// §13.4 (DEV-2171): a field that has focus when the TIP is activated is read
+// once ActivateEx has returned; leaving returns the mode before. A read that
+// fails, or a key before the read, reads it before the first key instead.
+TEST(TsfTipInputScopeFieldTest, AFieldFocusedAtTheActivationIsReadAfterTheActivation) {
+  using azookey::tsf::InputModeIndicator;
+  using azookey::tsf::InputScopeField;
+  {
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    ASSERT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+    ASSERT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+    EXPECT_EQ(azookey::tsf::ResolveInputModeIndicator(s.h.service.keyboard_open(),
+                                                      s.h.service.alnum_mode_for_test()),
+              InputModeIndicator::Alphanumeric);
+    EXPECT_FALSE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.composition_, nullptr);
+    s.Focus(&s.plain_document, &s.field_document);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.plain, 'K'));
+  }
+  {
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    s.h.context.reject_read = true;
+    s.h.service.process_candidates_ready_for_test();
+    ASSERT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    s.h.context.reject_read = false;
+    EXPECT_FALSE(s.Type(s.h.context, 'K'));
+    EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    EXPECT_FALSE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    // The read after the activation finds it read and does nothing more.
+    ASSERT_TRUE(s.Type(s.h.context, VK_OEM_ATTN));
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    // A context of another document advised meanwhile is not read for it;
+    // the first key reads the field it comes from.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    s.h.service.set_text_edit_context_for_test(&s.plain);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(s.h.service.input_scope_field_read_after_activation_for_test());
+    EXPECT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_FALSE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  }
+}
+
+// §13.3, §13.5 (DEV-2171): after the activation, a field without a kind and
+// inputScopeSwitching false change nothing.
+TEST(TsfTipInputScopeFieldTest, TheReadAfterTheActivationKeepsFieldsWithoutAKindAndTheSettingOff) {
+  using azookey::tsf::InputScopeField;
+  {
+    InputScopeFieldHarness s(IS_DEFAULT);
+    ActivateInTheField(s);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+  }
+  {
+    InputScopeFieldHarness s;
+    s.h.service.set_bracket_settings_for_test(
+        azookey::core::ParseBracketSettings(R"({"inputScopeSwitching":false})"));
+    ActivateInTheField(s);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_FALSE(s.h.service.input_scope_field_applies_for_test());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+  }
+}
+
+// §13.4 (DEV-2171): the read posted at the activation does nothing once the
+// field was left or the TIP deactivated, and keeps input typed before it.
+TEST(TsfTipInputScopeFieldTest,
+     TheReadAfterTheActivationDoesNothingOnceTheFieldIsLeftOrInputBegan) {
+  using azookey::tsf::InputScopeField;
+  {
+    // The focus moves to another document before the read arrives.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    s.Focus(&s.plain_document, &s.field_document);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(s.h.service.input_scope_field_read_after_activation_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.plain, 'K'));
+  }
+  {
+    // The TIP is deactivated before the read arrives.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    EXPECT_EQ(s.h.service.Deactivate(), S_OK);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(s.h.service.input_scope_field_read_after_activation_for_test());
+    EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    // A composition is there when the read arrives: it is kept, the mode
+    // stays hiragana, and the field waits for a key without input.
+    InputScopeFieldHarness s;
+    ASSERT_TRUE(s.Type(s.h.context, 'K'));
+    ASSERT_TRUE(s.Type(s.h.context, 'A'));
+    ASSERT_NE(s.h.service.composition_, nullptr);
+    ActivateInTheField(s);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_NE(s.h.service.composition_, nullptr);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_FALSE(s.h.service.input_scope_field_read_after_activation_for_test());
+    EXPECT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+    ASSERT_TRUE(s.Type(s.h.context, VK_RETURN));
+    ASSERT_EQ(s.h.service.composition_, nullptr);
+    EXPECT_EQ(s.h.context.document->text, L"か");
+    // The late read keeps the entry the input kept (§13.4).
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+}
+
+// §13.4 (DEV-2171): the user's switch before the field is read holds; neither
+// the read after the activation nor the one before the first key undoes it.
+TEST(TsfTipInputScopeFieldTest, TheUsersSwitchBeforeTheFirstKeyAfterTheActivationHolds) {
+  using azookey::tsf::InputScopeField;
+  {
+    // Baseline: the alphanumeric key from hiragana enters alphanumeric.
+    InputScopeFieldHarness s;
+    ASSERT_TRUE(s.Type(s.h.context, VK_OEM_ATTN));
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    // The alphanumeric key is the first key, before the read.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    ASSERT_TRUE(s.Type(s.h.context, VK_OEM_ATTN));
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    s.h.service.process_candidates_ready_for_test();
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  }
+  for (const bool posted_read : {true, false}) {
+    // An off and on with the input indicator before the read.
+    SCOPED_TRACE(posted_read);
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    s.h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+    ASSERT_FALSE(s.h.service.keyboard_open());
+    s.h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    if (posted_read) {
+      s.h.service.process_candidates_ready_for_test();
+      EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+      EXPECT_TRUE(s.h.service.input_scope_field_applies_for_test());
+      EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    }
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    ASSERT_TRUE(s.Type(s.h.context, VK_RETURN));
+    // An off and on from outside no longer switches either: the user chose.
+    s.compartment.SetFromOutside(false);
+    s.compartment.SetFromOutside(true);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    // With the IME off the alphanumeric key reaches the app and switches
+    // nothing, so an On that is not the user's still switches the field.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    s.compartment.SetFromOutside(false);
+    ASSERT_FALSE(s.h.service.keyboard_open());
+    EXPECT_FALSE(s.Type(s.h.context, VK_OEM_ATTN));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    s.compartment.SetFromOutside(true);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    // An open key as the first key is the user's choice too.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    ASSERT_TRUE(s.Type(s.h.context, VK_IME_ON));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    s.compartment.SetFromOutside(false);
+    s.compartment.SetFromOutside(true);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    // The same holds while a failed focus read waits for the first key.
+    InputScopeFieldHarness s;
+    s.h.context.reject_read = true;
+    s.Enter();
+    ASSERT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+    s.h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+    s.h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    s.h.context.reject_read = false;
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    // After the read, the alphanumeric key switches back as in any field.
+    InputScopeFieldHarness s;
+    ActivateInTheField(s);
+    s.h.service.process_candidates_ready_for_test();
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    ASSERT_TRUE(s.Type(s.h.context, VK_OEM_ATTN));
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+}
+
 // §13.3, §13.5: M46 decides first. A secure field never switches; IS_PRIVATE
 // with a listed value switches and still withholds learning and AI.
 TEST(TsfTipInputScopeFieldTest, SecureFieldsNeverSwitchAndPrivateScopeKeepsItsBans) {

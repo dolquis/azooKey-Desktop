@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -771,6 +772,16 @@ inline constexpr std::string_view kLearningDataErrorStoreUnavailable = "store_un
 inline constexpr std::string_view kLearningDataErrorSaveFailed = "save_failed";
 inline constexpr std::string_view kLearningDataErrorUnsupported = "unsupported";
 inline constexpr std::string_view kLearningDataErrorBlocked = "blocked";
+
+// Add any new learning data error constant to this list.
+inline constexpr std::array kAllLearningDataErrors{
+    kLearningDataErrorInvalidRequest,
+    kLearningDataErrorNotAuthenticated,
+    kLearningDataErrorStoreUnavailable,
+    kLearningDataErrorSaveFailed,
+    kLearningDataErrorUnsupported,
+    kLearningDataErrorBlocked,
+};
 
 struct ListLearningEntriesRequest {
   // "learning" | "user_dict" | "typo" | "auto_word"; required.

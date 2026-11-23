@@ -79,14 +79,6 @@ spec = "docs/auto-word-registration-spec.md §14"
 reason = "辞書層の再設計で追加するインポータ。M53 で新設する"
 files = ["plans/windows-port-roadmap.md"]
 
-[[allow]]
-ref = "learning/src/TypoLearningStore.cpp"
-kind = "planned"
-milestone = "M55"
-spec = "docs/typo-correction-learning-spec.md §12.8"
-reason = "TypoCorrectionStore を改名・拡張した v2 の学習ストア。M55 で作る"
-files = ["plans/windows-port-roadmap.md"]
-
 # --- origin ------------------------------------------------------------------
 
 [[allow]]

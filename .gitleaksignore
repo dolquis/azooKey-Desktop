@@ -3,3 +3,13 @@
 # DEV-1974 (PR #717): test file names (azooKey-<ver>-x64.msi) read as an API key, not a secret; built from UpdatePackageFileName in the work tree by a5ececda.
 ca412825e76955b8919e464fc16403ff75542fb5:inference-host/tests/update_fetch_service_test.cpp:generic-api-key:229
 0d4ab8d3ada360ccfc65f5881a91d2a1d6cbd64e:inference-host/tests/update_fetch_service_test.cpp:generic-api-key:229
+# DEV-2148: the SQLite 3.54.1 amalgamation (third_party/sqlite/sqlite3.c, upstream bytes from sqlite.org) has #define lines for sqlite3_api members and an FTS5 rowid comparison that read as API keys; they are not secrets.
+# Renumber these lines (both forms: gitleaks dir for main, gitleaks git for the PR range) when SQLite is updated.
+third_party/sqlite/sqlite3.c:generic-api-key:143401
+third_party/sqlite/sqlite3.c:generic-api-key:143557
+third_party/sqlite/sqlite3.c:generic-api-key:143649
+third_party/sqlite/sqlite3.c:generic-api-key:261061
+b2a99a1cd3b3a5db13039dc4d1235c012b70338c:third_party/sqlite/sqlite3.c:generic-api-key:143401
+b2a99a1cd3b3a5db13039dc4d1235c012b70338c:third_party/sqlite/sqlite3.c:generic-api-key:143557
+b2a99a1cd3b3a5db13039dc4d1235c012b70338c:third_party/sqlite/sqlite3.c:generic-api-key:143649
+b2a99a1cd3b3a5db13039dc4d1235c012b70338c:third_party/sqlite/sqlite3.c:generic-api-key:261061

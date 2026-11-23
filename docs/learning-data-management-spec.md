@@ -413,7 +413,8 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
 ├── learning.tsv.enc       (DPAPI 暗号化。かなの学習)
 ├── learning_english.tsv.enc  (英語の学習)
 ├── user_dict.json.enc
-├── typo_corrections.tsv.enc
+├── typo_corrections.tsv.enc  (typo の読みの組。v1 の TSV)
+├── typo_patterns.tsv.enc  (typo のパターン。v2 だけが書く)
 ├── auto_words.tsv.enc
 ├── english_learning.tsv.enc
 └── settings.redacted.json  (include_settings=true 時のみ)
@@ -422,6 +423,18 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
 - **ZIP**: 圧縮しない STORE 方式だけを使う（§7）。読み込みも STORE 以外、ZIP64、
   暗号化フラグ、data descriptor を含む archive を拒否する。
 - **entry の中身**: 各ストアが保存時に書く平文（学習は v2 形式）を、ファイルごとに暗号化したもの。
+- **typo の例外**: typo の v2 ストアは SQLite の DB 全体を保存するが（`docs/typo-correction-learning-spec.md` §12.8）、
+  backup には DB を入れない。読みの組は item `typo_corrections` に v1 の TSV のまま書き、パターンは item
+  `typo_patterns` に書き、`typo_events` は入れない。import はどちらもテキストとして解析し、archive の
+  バイト列を SQLite として開かない（平文の export もありうるため）。v2 を持たない Host は `typo_patterns` を
+  知らないので読み飛ばし、`typo_corrections` は従来どおり取り込む。Host を v2 のストアへ切り替えるのは
+  DEV-2149 の組み込みであり、それまでの Host は v1 のストアから `typo_corrections` だけを書く。`typo_patterns` の
+  書き出しと merge は `learning/` の `TypoLearningStore` にだけある。
+  - `typo_patterns` の 1 行目は `# azookey-typo-patterns-tsv escaped=1` で、各行は
+    `observed_pattern`、`intended_pattern`、`typo_type`、`keyboard_layout`、採用の回数、拒否の回数、
+    `last_used_at`、`created_at`、`updated_at` をタブで区切る。文字列の列は `typo_corrections` と同じ
+    エスケープを使い、空の `keyboard_layout` と `last_used_at` は NULL を表す。1 行目が違う item は解析できない
+    item として扱う。
 - **読み込みの制限**: Host は archive をディスクへ展開しない。manifest が挙げた
   固定名の entry だけをメモリ上で読む。上限は archive 全体 64 MiB、entry 16 件、
   1 entry 32 MiB で、読む前に検査する。
@@ -454,6 +467,8 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
       "count": 42, "sha256": "..." },
     { "name": "typo_corrections", "file": "typo_corrections.tsv.enc",
       "count": 89, "sha256": "..." },
+    { "name": "typo_patterns", "file": "typo_patterns.tsv.enc",
+      "count": 12, "sha256": "..." },
     { "name": "auto_words", "file": "auto_words.tsv.enc",
       "count": 17, "sha256": "..." },
     { "name": "english_learning", "file": "english_learning.tsv.enc",
@@ -484,6 +499,7 @@ DPAPI ユーザースコープ（`CryptProtectData`）で各ファイルを暗�
 | learning で同 reading/surface/app_name | weight と各回数を加算、最終使用と最後のイベントは新しい方 | 上書き | 既存維持 |
 | user_dict で同 reading/word | 既存維持 | 上書き | 既存維持 |
 | typo で同 wrong/correct | count 加算（上限で飽和）、最終使用は新しい方 | 上書き | 既存維持 |
+| typo のパターンで同 observed/intended/typo_type/keyboard_layout | 採用と拒否の回数を加算（上限で飽和）、最終使用と更新は新しい方、作成は古い方。confidence を求め直す | 上書き（confidence を求め直す） | 既存維持 |
 | auto_word で同 surface/reading | count 加算、状態は既存維持 | 上書き | 既存維持 |
 | 形式バージョン違い | migration 実行 | migration 実行 | migration 実行 |
 | 暗号化データで復号失敗 | error 返却 | error 返却 | error 返却 |
@@ -494,6 +510,10 @@ DPAPI ユーザースコープ（`CryptProtectData`）で各ファイルを暗�
 - 各ストアのキーは一意なので、`keep_both` は同じキーに 2 つの値を持てず、既存を維持する。
 - auto_word の `merge` で状態を既存のまま残すのは、import によってユーザーが却下した語が
   候補に戻るのを防ぐためである。
+- typo の「v1 のまま読む」起動（`docs/typo-correction-learning-spec.md` §12.8）はパターンを持たないので、
+  `typo_patterns` の行をすべて `skipped` に数え、`typo_corrections` だけを取り込む。
+- typo のパターンの表が保持上限（同 §12.8）に達した後は、`typo_patterns` の新しいキーを取り込まずに `skipped` に
+  数える。既にあるキーとの衝突は方式どおりに扱う。
 - archive の読み込み、checksum、復号、各ストアの解析がすべて成功してから、
   ストアを変更する。どれかが失敗した場合はどのストアも変更しない。
   解析できない行を 1 行でも含む item は、Host が書いたものではないとみなし、

@@ -29,7 +29,8 @@ if(AZOOKEY_USE_COMPILER_CACHE AND NOT DEFINED CMAKE_CXX_COMPILER_LAUNCHER)
   endif()
 endif()
 
-project(azooKeyDesktopWindowsMvp LANGUAGES CXX)
+# C compiles the vendored SQLite amalgamation (learning/CMakeLists.txt).
+project(azooKeyDesktopWindowsMvp LANGUAGES C CXX)
 
 # clang-cl identifies as Clang but uses the MSVC ABI and linker conventions.
 set(AZOOKEY_CLANG_CL OFF)
@@ -142,9 +143,10 @@ function(azookey_add_llama_cpp)
     string(APPEND CMAKE_C_FLAGS " /guard:cf /Qspectre")
     string(APPEND CMAKE_CXX_FLAGS " /guard:cf /Qspectre")
   elseif(AZOOKEY_CLANG_CL)
-    # The root project enables only CXX; llama.cpp enables C later. Do not
-    # shadow CMAKE_C_FLAGS_INIT (including toolchain diagnostics) with a
-    # normal CMAKE_C_FLAGS variable before C's flags have been initialized.
+    # The root project enables C as well, so C's flags are initialized here.
+    # Should C ever be enabled later instead, do not shadow
+    # CMAKE_C_FLAGS_INIT (including toolchain diagnostics) with a normal
+    # CMAKE_C_FLAGS variable before C's flags have been initialized.
     if(CMAKE_C_COMPILER_LOADED OR DEFINED CMAKE_C_FLAGS)
       string(APPEND CMAKE_C_FLAGS " /guard:cf")
     else()

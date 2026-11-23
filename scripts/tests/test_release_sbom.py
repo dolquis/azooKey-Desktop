@@ -28,6 +28,18 @@ class ReleaseSbomTests(unittest.TestCase):
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
+        # A small stand-in for third_party/sqlite: the real amalgamation is checked
+        # against its record once, in test_repository_sqlite_matches_its_record.
+        self.vendored = self.root / "third_party" / "sqlite"
+        self.vendored.mkdir(parents=True)
+        for name in ("sqlite3.c", "sqlite3.h"):
+            (self.vendored / name).write_bytes(b"fixture " + name.encode())
+        self.vendored_record = {
+            "name": "SQLite", "version": "3.0.0",
+            "archive": {"url": "https://example.test/sqlite.zip", "sha256": "b" * 64},
+            "files": {name: SBOM.sha256(self.vendored / name) for name in ("sqlite3.c", "sqlite3.h")},
+        }
+        self.write_vendored_record()
         self.build = self.root / "build"
         self.build.mkdir()
         for name in ("llama_cpp", "wil"):
@@ -59,6 +71,9 @@ class ReleaseSbomTests(unittest.TestCase):
         # Portable tests substitute tiny bytes for the binary, preserving Syft's shape.
         package["checksums"][0]["checksumValue"] = SBOM.sha256(self.msi)
         package["versionInfo"] = "sha256:" + SBOM.sha256(self.msi)
+
+    def write_vendored_record(self):
+        (self.vendored / SBOM.VENDORED_RECORD).write_text(json.dumps(self.vendored_record), encoding="utf-8")
 
     def git(self, args, **_):
         if "diff" in args:
@@ -97,6 +112,52 @@ class ReleaseSbomTests(unittest.TestCase):
         self.assertEqual(result["packages"][0]["checksums"], before["packages"][0]["checksums"])
         dependencies = {x["relatedSpdxElement"] for x in result["relationships"] if x["spdxElementId"] == root_id}
         self.assertEqual(dependencies, {x["SPDXID"] for x in result["packages"][1:]})
+
+    def test_vendored_source_declares_record_version_and_archive_hash(self):
+        result = self.generate()
+        package = next(x for x in result["packages"] if x["name"] == "SQLite")
+        self.assertEqual(package["versionInfo"], "3.0.0")
+        self.assertEqual(package["downloadLocation"], "https://example.test/sqlite.zip")
+        self.assertEqual(package["checksums"], [{"algorithm": "SHA256", "checksumValue": "b" * 64}])
+        self.assertEqual(package["licenseDeclared"], "blessing")
+
+    def test_vendored_change_unrecorded_file_and_missing_attribution_are_rejected(self):
+        source = self.vendored / "sqlite3.c"
+        original = source.read_bytes()
+        source.write_bytes(original + b"\n")
+        with self.assertRaisesRegex(ValueError, "differs from its record"):
+            self.generate()
+        source.write_bytes(original)
+        (self.vendored / "shell.c").write_bytes(b"unrecorded")
+        with self.assertRaisesRegex(ValueError, "files and their record differ"):
+            self.generate()
+        (self.vendored / "shell.c").unlink()
+        for key, value in (("version", "latest"), ("archive", {"url": "http://example.test/a.zip", "sha256": "b" * 64})):
+            with self.subTest(key=key):
+                saved = self.vendored_record[key]
+                self.vendored_record[key] = value
+                self.write_vendored_record()
+                with self.assertRaises(ValueError):
+                    self.generate()
+                self.vendored_record[key] = saved
+                self.write_vendored_record()
+        # A selector whose directory lost its record is not covered either.
+        (self.vendored / SBOM.VENDORED_RECORD).unlink()
+        with self.assertRaisesRegex(ValueError, "coverage differs"):
+            self.generate()
+        self.write_vendored_record()
+        path = self.root / "THIRD_PARTY_LICENSES"
+        path.write_text(re.sub(r"## 配布物へ同梱する SQLite.*?(?=\n## )", "", path.read_text(encoding="utf-8"),
+                               flags=re.S), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "coverage differs"):
+            self.generate()
+
+    def test_repository_sqlite_matches_its_record(self):
+        version, url, checksums = SBOM.vendored(ROOT, "third_party/sqlite")
+        self.assertTrue(url.startswith("https://www.sqlite.org/"))
+        self.assertEqual(len(checksums), 1)
+        header = (ROOT / "third_party/sqlite/sqlite3.h").read_text(encoding="utf-8")
+        self.assertRegex(header, r'(?m)^#define SQLITE_VERSION\s+"' + re.escape(version) + '"$')
 
     def test_cache_pin_mismatch_is_rejected(self):
         self.cache.write_text("", encoding="utf-8")
@@ -150,7 +211,7 @@ class ReleaseSbomTests(unittest.TestCase):
             result = self.generate()
             self.assertEqual(result["documentDescribes"], [self.root_id])
             self.assertEqual(sum(p["name"].endswith(self.msi.name) for p in result["packages"]), 1)
-            self.assertEqual(len(result["packages"]), 15)
+            self.assertEqual(len(result["packages"]), 16)
             self.assertEqual(sum(r["relationshipType"] == "DESCRIBES" for r in result["relationships"]), len(relationships))
             self.assertTrue(all(r["spdxElementId"] == self.root_id for r in result["relationships"] if r["relationshipType"] == "DEPENDS_ON"))
 
@@ -276,7 +337,7 @@ class ReleaseSbomTests(unittest.TestCase):
         sdk = self.make_vulkan_sdk()
         result = self.generate_addon(sdk)
         packages = {x["name"]: x for x in result["packages"][1:]}
-        self.assertEqual(set(packages), {"llama.cpp", "WIL", "Vulkan-Headers", "SPIRV-Headers"})
+        self.assertEqual(set(packages), {"llama.cpp", "WIL", "SQLite", "Vulkan-Headers", "SPIRV-Headers"})
         self.assertEqual(packages["llama.cpp"]["versionInfo"], self.pins["AZOOKEY_LLAMA_CPP_GIT_TAG"])
         self.assertEqual(packages["Vulkan-Headers"]["versionInfo"], "1.4.357.0")
         self.assertEqual(packages["Vulkan-Headers"]["licenseDeclared"], "Apache-2.0 OR MIT")

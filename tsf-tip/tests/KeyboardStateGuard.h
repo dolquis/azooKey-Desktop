@@ -5,7 +5,6 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdlib>
 #include <mutex>
 
 #include "azookey/tsf/TextService.h"
@@ -28,10 +27,11 @@ class KeyboardStateGuard {
  public:
   KeyboardStateGuard() {
     const std::lock_guard lock(current_mutex_);
-    if (current_ && !current_->CheckOwnerThread()) std::abort();
+    if (current_ && !current_->CheckOwnerThread()) return;
     has_original_ = GetKeyboardState(original_.data()) != FALSE;
     EXPECT_TRUE(has_original_) << "GetKeyboardState failed: " << GetLastError();
     for (const int vk : kModifierKeys) managed_[static_cast<size_t>(vk)] = true;
+    active_ = true;
     Reapply();
     previous_ = current_;
     current_ = this;
@@ -40,19 +40,25 @@ class KeyboardStateGuard {
 
   // Guards nest last-in, first-out only.
   ~KeyboardStateGuard() {
-    if (!CheckOwnerThread()) std::abort();
+    if (!active_) return;
+    const bool on_owner_thread = CheckOwnerThread();
+    // Even on the wrong thread, detach the test guard under the mutex so a
+    // hook cannot reach it after destruction. Restore Win32 state only on its owner.
     const std::lock_guard lock(current_mutex_);
     EXPECT_EQ(current_, this) << "KeyboardStateGuard destroyed out of order";
-    current_ = previous_;
+    const bool was_current = current_ == this;
+    auto** link = &current_;
+    while (*link && *link != this) link = &(*link)->previous_;
+    if (*link) *link = previous_;
     azookey::tsf::testing::SetKeyStateHooksForTest(current_ ? &kHooks : nullptr);
-    if (has_original_) SetKeyboardState(original_.data());
+    if (was_current && on_owner_thread && has_original_) SetKeyboardState(original_.data());
   }
 
   KeyboardStateGuard(const KeyboardStateGuard&) = delete;
   KeyboardStateGuard& operator=(const KeyboardStateGuard&) = delete;
 
   void SetDown(int vk, bool down) {
-    if (!CheckOwnerThread()) return;
+    if (!active_ || !CheckOwnerThread()) return;
     const auto index = static_cast<size_t>(vk);
     managed_[index] = true;
     pinned_down_[index] = down;
@@ -64,7 +70,7 @@ class KeyboardStateGuard {
   static BOOL ReadKeyboardState(PBYTE state) { return HookGetKeyboardState(state); }
 
   void ClearSystemModifiers() {
-    if (!CheckOwnerThread()) return;
+    if (!active_ || !CheckOwnerThread()) return;
     SetDown(VK_CONTROL, false);
     SetDown(VK_LCONTROL, false);
     SetDown(VK_RCONTROL, false);
@@ -79,7 +85,7 @@ class KeyboardStateGuard {
   // key state and into the state TextService reads, keeping the toggle bits
   // and every other key as they are.
   void Reapply() {
-    if (!CheckOwnerThread()) return;
+    if (!active_ || !CheckOwnerThread()) return;
     down_ = pinned_down_;
     std::array<BYTE, 256> state{};
     if (!GetKeyboardState(state.data())) {
@@ -92,6 +98,8 @@ class KeyboardStateGuard {
   }
 
  private:
+  friend class KeyboardStateGuardOwnerThreadTest;
+
   static constexpr std::array<int, 11> kModifierKeys{
       VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL,
       VK_MENU,  VK_LMENU,  VK_RMENU,  VK_LWIN,    VK_RWIN};
@@ -150,6 +158,7 @@ class KeyboardStateGuard {
 
   const DWORD owner_thread_id_ = GetCurrentThreadId();
   std::array<BYTE, 256> original_{};
+  bool active_{false};
   bool has_original_{false};
   std::array<bool, 256> managed_{};
   std::array<bool, 256> pinned_down_{};

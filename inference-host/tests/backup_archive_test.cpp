@@ -75,12 +75,11 @@ class TempDir {
  public:
   TempDir() {
     static std::atomic<uint64_t> sequence{0};
-    const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    path_ = fs::temp_directory_path() /
-            ("azookey_backup_archive_" + std::string(info ? info->name() : "test") + "_" +
-             std::to_string(stamp) + "_" + std::to_string(sequence.fetch_add(1)));
-    fs::create_directories(path_);
+    const auto temp = fs::temp_directory_path();
+    do {
+      path_ = temp / ("azb_" + std::to_string(stamp) + "_" + std::to_string(sequence.fetch_add(1)));
+    } while (!fs::create_directory(path_));
   }
   ~TempDir() {
     std::error_code ec;

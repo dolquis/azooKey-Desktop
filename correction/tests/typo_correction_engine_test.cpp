@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -66,6 +67,10 @@ struct TypoCase {
   TypoType type;
   EditSpace space;  // the path expected to win the reading
 };
+
+// The discovered CTest name carries the printed parameter, so print only the
+// case name: the default byte dump holds pointers that differ between builds.
+void PrintTo(const TypoCase& value, std::ostream* out) { *out << value.name; }
 
 class TypoTypeTest : public ::testing::TestWithParam<TypoCase> {};
 

@@ -551,7 +551,12 @@ CREATE TABLE typo_patterns (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX typo_patterns_key ON typo_patterns
+  (observed_pattern, intended_pattern, typo_type, IFNULL(keyboard_layout, ''));
 ```
+
+パターンは 4 列（`observed_pattern`、`intended_pattern`、`typo_type`、`keyboard_layout`）で 1 つに決まり、
+`keyboard_layout` の NULL は空と同じに扱う。この索引が無い DB は、下記 5 の破損として扱う。
 
 #### typo_events
 
@@ -601,7 +606,7 @@ v2 は TSV の拡張を経ずに SQLite で始める（DEV-1955）。
 #### パス
 
 v2 のファイルと移行した v1 は、v1 の論理パス（既定は `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv`。
-host CLI の `--typo-store` で上書きできる。§5-1）と同じディレクトリに置き、名前は v1 の論理パスから導く。
+host CLI の `--typo-store` で上書きできる。§5-1）と同じディレクトリに置き、名前は下表と次の規則で決める。
 どれも既存の `ReadProtectedText` / `WriteProtectedText`（`learning/include/azookey/learning/DpapiCrypto.h`）に
 論理パスを渡して読み書きし、ディスク上は `<論理パス>.enc` になる。
 
@@ -611,6 +616,9 @@ host CLI の `--typo-store` で上書きできる。§5-1）と同じディレ�
 | v2 のストア | `typo_learning.v2.db` | `typo_learning.v2.db.enc` |
 | 移行した v1（以下「v1 の退避」） | `typo_corrections.v1.tsv.bak` | `typo_corrections.v1.tsv.bak.enc` |
 
+- v2 の名前は、v1 の名前によらず `typo_learning.v2.db` とする。
+- v1 の退避の名前は、v1 のファイル名の拡張子の前に `.v1` を入れ、末尾に `.bak` を付ける。`--typo-store` が
+  `mine.tsv` なら `mine.v1.tsv.bak`、拡張子の無い `typos` なら `typos.v1.bak` である。
 - v1 の退避の論理パスに `typo_corrections.tsv.bak` は使わない。M34 の平文移行が残す平文の退避と同名で、
   `WriteProtectedText` がこれを残った退避（orphan backup）とみなして保存を止めるためである。
 - M34 の平文移行が残す `typo_corrections.tsv.bak`（平文）は M34 の規則に従い、本節の移行と削除の対象に
@@ -642,23 +650,24 @@ v2 のストアはメモリ上の SQLite DB として開き、ディスクへは
 
 #### SQLite の取り込み
 
-- sqlite.org が配布する amalgamation（`sqlite3.c` と `sqlite3.h`）を repo の third_party/sqlite/ ディレクトリに commit する。
-  取得元の zip の版と SHA256 を同じディレクトリに記録する。
-  amalgamation の実物の追加は実装（DEV-2148）で行う。
+- sqlite.org が配布する amalgamation（`sqlite3.c` と `sqlite3.h`）を repo の third_party/sqlite/ ディレクトリに、
+  上流のバイト列のまま commit する（`.gitattributes` で改行を変換しない）。版、取得元の zip の URL と SHA256
+  （sqlite.org が公表する SHA3-256 も）、各ファイルの SHA256 を、同じディレクトリの `PROVENANCE.json` に記録する。
 - 既定の configure は、ネットワークに触れずに成功する（`docs/dev-infrastructure-spec.md` §1 のオフラインビルド原則）。
   そのため `docs/build-ci-spec.md` §3.1 の 2（ビルドが要る依存を opt-in の `FetchContent` で取る）ではなく、
   §3.1 の 4 によりソースを repo に置く。取得のための CMake option は設けない。
 - `azookey_learning` に静的リンクし、配布物に DLL を足さない。x64・ARM64・Linux で同じソースを使う。
 - 使わない機能を外して組み込む。少なくとも拡張の読み込みを外し（`SQLITE_OMIT_LOAD_EXTENSION`）、
   二重引用符の文字列リテラルを受けず（`SQLITE_DQS=0`）、一時ファイルを常にメモリに置く
-  （`SQLITE_TEMP_STORE=3`）。`sqlite3_serialize` / `sqlite3_deserialize` を含む版を使う
+  （`SQLITE_TEMP_STORE=3`）。削除した値と解放した領域を残さないため、`SQLITE_SECURE_DELETE` と
+  `SQLITE_DEFAULT_PCACHE_INITSZ=0` も定義する。`sqlite3_serialize` / `sqlite3_deserialize` を含む版を使う
   （3.36 以降は既定で含む）。
 - OS の `winsqlite3.dll` は使わない。版と compile option を固定できず、OS の更新に左右されるためである。
   vcpkg も使わない（`docs/build-ci-spec.md` §3.1 は vcpkg を必須にしない）。
 - ライセンスは public domain（SPDX `blessing`）で、帰属表示の義務は無い。それでも配布物に含むので、
-  取り込む PR で `THIRD_PARTY_LICENSES` に同梱の節を足す。リリース SBOM の生成
-  （`scripts/complete-release-sbom.py`）は CMake の Git commit の pin しか扱わないため、repo に置いたソースの
-  版と hash を扱えるように同じ PR で広げる。
+  `THIRD_PARTY_LICENSES` に同梱の節を置く。リリース SBOM の生成（`scripts/complete-release-sbom.py`）は、
+  その節の `vendored:` の選択子から `PROVENANCE.json` を読んで版と zip の SHA256 を載せ、記録した SHA256 と
+  ファイルが一致しないとき、記録に無いファイルがあるときに失敗する。
 
 #### 由来の印
 
@@ -692,7 +701,8 @@ Host は起動時にストアを読み、次の順に判定する。状態（あ
 4. `user_version` が既知の版より新しい: 新しい版の Host が書いたファイルとみなし、保存を止めて上書きしない。
    既知の版より古い版（1 以上）からの移し替えは、スキーマを変えるときに本節へ足す。
 5. `PRAGMA integrity_check` の結果が `ok` でない（または 3）: 暗号化したままのファイルを
-   `<ファイル名>.corrupt-<epoch 秒>` へ一度だけ複写する。複写に失敗したら保存を止める。複写の後は、
+   `<ファイル名>.corrupt-<epoch 秒>` へ一度だけ複写する。複写に失敗したら保存を止める。同じ名前の複写が
+   既にあるときは、中身が同じなら複写済みとし、違えば複写に失敗したものとして扱う。複写の後は、
    v1 のストア、v1 の退避の順に、「ある」方から移し直す（印は `v1_migrated`。v1 のストアから移したときは
    移行の手順 5 で退避へ移す）。どちらも無いか、移し直しに失敗したときは空のストアを作り直す（印は `rebuilt`）。
    どちらかが読めないときも、読めないファイルは動かさずに次へ進む。どの場合も学習を続ける。
@@ -741,7 +751,8 @@ Host は起動時にストアを読み、次の順に判定する。状態（あ
 5. v1 のストアから移したときは、v1 のストアを v1 の退避へ移す（暗号化したまま。平文に戻さない）。
    - 退避が無い: v1 のストアを退避へ rename する。
    - 退避がある: 退避を置き換えない。退避の内容の後ろに v1 のストアの内容をそのまま足したものを退避として書き
-     （DPAPI 暗号化と atomic replace）、書けてから v1 のストアを消す。v1 の parser は同じ組の後の行で前の行を
+     （DPAPI 暗号化と atomic replace）、書けてから v1 のストアを消す。退避の内容が改行で終わらないときは、
+     最後の行と v1 のストアの 1 行目がつながらないよう、間に改行を 1 つ補う。v1 の parser は同じ組の後の行で前の行を
      上書きし、2 行目以降の `#` の行を読み飛ばすので、合わせた退避を読むと v1 のストアの値が勝つ。退避と
      v1 のストアの解析できない行も、バイト列のまま残る。
    - 退避が読めない: 足さず、v1 のストアも退避も動かさない（判定 7 の「v1 のストアが読めない」と同じく、
@@ -805,9 +816,13 @@ Host は起動時にストアを読み、次の順に判定する。状態（あ
 
 #### バックアップと export
 
-`docs/learning-data-management-spec.md` §5・§5.1 の typo の entry（`typo_corrections.tsv.enc`、v1 の TSV）は
-v1 の形式である。v2 を有効にする実装（DEV-2148）は、この entry を v2 に合わせて改める変更を含み、
-改めるまで v2 を有効にしない（DEV-2148 の完了条件）。
+backup の entry は `docs/learning-data-management-spec.md` §5・§5.1 が持つ。v2 の読みの組は item
+`typo_corrections`（v1 の TSV）に、パターンは item `typo_patterns` に書き、`typo_events` は入れない。
+どちらの item もテキストとして解析し、archive のバイト列を SQLite として開かない。
+
+Host を v2 のストアへ切り替えるのは DEV-2149 の組み込みである。それまでの Host は v1 のストアを使い、backup にも
+item `typo_corrections` だけを書く。v2 のストアと、item `typo_patterns` の書き出しと merge は、`learning/` の
+`TypoLearningStore` にだけある。
 
 #### 保持上限
 
@@ -817,7 +832,11 @@ v1 の形式である。v2 を有効にする実装（DEV-2148）は、この en
 - 期間: 180 日（`created_at` / `last_updated_at` から。v1 の `Lookup` の期限と同じ）
 - 件数: 10000 行（`docs/user-learning-enhancement-spec.md` §3.1.1 の `learning_max_records` と同じ）
 
-どちらも初期値であり、M52 で校正する。
+`typo_patterns` は件数だけを上限（10000 行）とし、`updated_at` の古い行から消す。消すパターンの
+`pattern_id` を持つ `typo_events` の行も消す。backup の import の merge も、表が上限に達した後の新しいキーは
+取り込まずに skipped に数える（既にあるキーとの merge は続ける）。
+
+どれも初期値であり、M52 で校正する。
 
 ### 12.9 信頼度更新
 
@@ -872,6 +891,11 @@ confidence = clamp(raw_conf, min_confidence, max_confidence)
   順位付けの強さを表し、件数ゲートは昇格可否を表す（役割を分離する）。
 - `dominant_app(pattern)` は当該パターンの `typo_events`（§12.8）で
   `event_type='typo_accept'` が最多の `app_name`。同数・該当なしは bonus 0。
+- `last_used_at` は採用（`typo_accept`）で更新し、拒否（`typo_reject`）では更新しない。拒否で
+  `recency_bonus` が上がらないようにするためである。採用の無いパターン（`last_used_at` が NULL）は
+  `recency_bonus` を 0 とする。
+- `typo_patterns.confidence` 列には `app_specific_bonus` を含めない値を、イベントと import のたびに求め直して
+  持つ。app の加点は、問い合わせの時点の app で加える。
 - `accept_weight` / `reject_weight` / `B_rec` / `B_app` は初期値であり M52 で
   校正する（§12.16）。`reject_weight > accept_weight` の不変条件は固定する。
 
@@ -996,6 +1020,9 @@ intended_pattern  = 対応する canonical 形（Romaji Variant 正規化後、�
   文字列を誤って取り込まない。
 - `left_context` は §8 と同じく SHA-256 上位 4 bytes の hash で保存する
   （`docs/user-learning-enhancement-spec.md` §8.1 と同一算出式）。
+- ストア（`learning/` の `TypoLearningStore`）は、`observed_pattern` と `intended_pattern` の両方について、
+  上のトークンの文法、§12.13 の `raw_keys` の文字集合、編集 3 つまでという長さを検査し、外れた値を保存しない。
+  `intended_pattern` の canonical 形の決め方は、補正エンジン（§12.4）の実装が定める。
 
 #### 12.12.2 M46 secure 抑止との連携タイミング
 
@@ -1025,6 +1052,11 @@ private の学習停止を理由に予測を停止しない。secure 中は検�
 privacy 対応 TIP は handshake に `secure_flag` を広告し、毎 `QueryCandidates` /
 `ObserveTypo` / `CommitObservation` / `CommitSegmentsObservation` に
 `secure` と `learning_allowed` を載せる。学習ゲートは広告済みでも欠落・型不正を拒否する。
+
+v2 のストアは、呼び出し側が secure の間に書き込みを止める入口を持つ。止めている間は、読みの組の観測と
+パターンのイベントを拒み、保存はファイルに触れずに失敗し、忘却と全削除もファイルに触れずに失敗する。
+Host の学習ゲートに重ねる最後の段で、ゲートの代わりにはしない。起動時の読み込み（§12.8 の移行を含む）と
+import の merge は学習ではないので止めない。import の内容は、止めている間は保存されない。
 
 ### 12.13 IPC（protocol v1 の加算的拡張）
 

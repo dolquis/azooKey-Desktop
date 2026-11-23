@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -302,6 +303,19 @@ TEST(LearningPaneModelTest, EveryErrorStoreAndConflictOptionHasAString) {
   }
   for (const auto option : azookey::settings::kConflictResolutions) {
     EXPECT_TRUE(names.contains("LearningConflict_" + std::string(option))) << option;
+  }
+}
+
+TEST(LearningPaneModelTest, IpcLearningErrorsHaveDedicatedMessages) {
+  using azookey::settings::kLearningErrorCodes;
+  using azookey::settings::LearningErrorResource;
+  const auto names = ResourceNames();
+  for (const auto code : azookey::ipc::kAllLearningDataErrors) {
+    SCOPED_TRACE(code);
+    EXPECT_NE(std::ranges::find(kLearningErrorCodes, code), kLearningErrorCodes.end());
+    const auto name = LearningErrorResource(code);
+    EXPECT_NE(name, "LearningError_other");
+    EXPECT_TRUE(names.contains(name)) << name;
   }
 }
 

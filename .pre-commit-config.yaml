@@ -19,7 +19,8 @@ repos:
         args: [-i]
         language: system
         types_or: [c, c++]
-        exclude: '^legacy/'
+        # third_party/sqlite keeps the upstream bytes its PROVENANCE.json hashes.
+        exclude: '^(legacy|third_party)/'
 
       - id: gitleaks
         name: gitleaks (staged secret scan)

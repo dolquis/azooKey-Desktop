@@ -98,6 +98,17 @@ class TypoCorrectionStore {
   bool Remove(const std::string& wrong, const std::string& correct);
   // Adds every pair of `other`; Merge adds the counts of a pair on both sides.
   ImportCounts Merge(const TypoCorrectionStore& other, ImportConflictPolicy policy);
+  // Sets one pair as given (the typo v2 store writes its pairs back in this
+  // format). False, changing nothing, for a pair outside the accept filters or
+  // a zero count, which the parser would drop on reload.
+  bool Put(const TypoCorrectionEntry& entry);
+
+  // `text` (a v1 file, possibly with appended files) without the rows of the
+  // pair, every other byte kept, unparsable rows included. Rows match on their
+  // two reading fields, unescaped as the parser would. `removed` reports
+  // whether any row was dropped.
+  static std::string WithoutPairRows(std::string_view text, const std::string& wrong,
+                                     const std::string& correct, bool& removed);
 
   // Section 5-1: kana occupies three bytes in UTF-8, so both helpers work in
   // code points. Invalid sequences are consumed one byte at a time, matching

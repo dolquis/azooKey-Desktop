@@ -19,3 +19,8 @@ dictbuild/sources/*.lex.tsv text eol=lf
 # VM verification fixtures are identified by SHA-256 when copied into a guest,
 # and CRLF breaks the store header match and the last column of auto_words.tsv.
 scripts/vm-verify-fixtures/** text eol=lf
+
+# The vendored SQLite amalgamation is identified by the SHA-256 values in
+# third_party/sqlite/PROVENANCE.json; keep the upstream bytes unconverted.
+third_party/sqlite/sqlite3.c -text
+third_party/sqlite/sqlite3.h -text

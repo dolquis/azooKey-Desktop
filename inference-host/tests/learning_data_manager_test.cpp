@@ -519,6 +519,25 @@ TEST(LearningDataManagerTest, PathNamingAnAlternateDataStreamIsRejected) {
   EXPECT_EQ(exported.error, host::BackupError::InvalidPath);
 }
 
+// The user dictionary text import shares this check with the backup import.
+TEST(LearningDataManagerTest, UserDataSourcePathRefusesNetworkAndDeviceNamespaces) {
+  ScopedDirectory directory;
+  EXPECT_TRUE(host::IsAcceptableUserDataSourcePath(directory.File("dictionary.txt")));
+#ifdef _WIN32
+  EXPECT_TRUE(host::IsAcceptableUserDataSourcePath(L"C:\\dictionary.txt"));
+  EXPECT_TRUE(host::IsAcceptableUserDataSourcePath(L"c:/dictionary.txt"));
+  EXPECT_FALSE(host::IsAcceptableUserDataSourcePath(L"/??/UNC/server/share/d.txt"));
+  EXPECT_FALSE(host::IsAcceptableUserDataSourcePath(L"C:d.txt"));
+  for (const wchar_t* path :
+       {L"\\??\\UNC\\server\\share\\d.txt", L"\\??\\C:\\d.txt", L"\\\\?\\C:\\d.txt",
+        L"\\\\.\\C:\\d.txt", L"//?/C:/d.txt", L"//./C:/d.txt", L"\\\\server\\share\\d.txt",
+        L"//server/share/d.txt", L"\\\\?\\UNC\\server\\share\\d.txt",
+        L"\\??\\unc\\server\\share\\d.txt"}) {
+    EXPECT_FALSE(host::IsAcceptableUserDataSourcePath(path));
+  }
+#endif
+}
+
 TEST(LearningDataManagerTest, DevicePathsReservedNamesAndLinksAreRejected) {
   ScopedDirectory directory;
   Stores stores;
@@ -534,6 +553,17 @@ TEST(LearningDataManagerTest, DevicePathsReservedNamesAndLinksAreRejected) {
   EXPECT_EQ(export_to(L"\\\\?\\C:\\azookey-backup.zip"), host::BackupError::InvalidPath);
   EXPECT_EQ(export_to(L"\\\\.\\C:\\azookey-backup.zip"), host::BackupError::InvalidPath);
   EXPECT_EQ(export_to(L"\\\\server\\share\\azookey-backup.zip"), host::BackupError::InvalidPath);
+  // The NT namespace and mixed separators: only a plain "X:\" root is accepted.
+  EXPECT_EQ(export_to(L"\\??\\UNC\\server\\share\\azookey-backup.zip"),
+            host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"\\??\\C:\\azookey-backup.zip"), host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"//?/C:/azookey-backup.zip"), host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"//./C:/azookey-backup.zip"), host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"\\\\?\\UNC\\server\\share\\azookey-backup.zip"),
+            host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"/\\server\\share\\azookey-backup.zip"), host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"/??/UNC/server/share/azookey-backup.zip"), host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"C:azookey-backup.zip"), host::BackupError::InvalidPath);
 #endif
 
   const auto archive = directory.File("real.zip");

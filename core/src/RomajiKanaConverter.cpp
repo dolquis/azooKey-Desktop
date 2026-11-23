@@ -2,10 +2,17 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
+#include <queue>
+#include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
+
+#include "azookey/core/QwertyAdjacency.h"
+#include "azookey/core/Utf8.h"
 
 namespace azookey::core {
 namespace {
@@ -122,6 +129,41 @@ bool IsVowelOrY(char c) {
   const std::string set = "aeiouy";
   return set.find(c) != std::string::npos;
 }
+
+// The built-in keys in byte order, so a prefix lookup is a binary search.
+const std::vector<std::string>& SortedBuiltinKeys() {
+  static const std::vector<std::string> keys = [] {
+    std::vector<std::string> sorted;
+    sorted.reserve(kRomajiMap.size());
+    for (const auto& entry : kRomajiMap) sorted.push_back(entry.first);
+    std::sort(sorted.begin(), sorted.end());
+    return sorted;
+  }();
+  return keys;
+}
+
+bool HasBuiltinKeyStartingWith(std::string_view prefix) {
+  const auto& keys = SortedBuiltinKeys();
+  const auto it = std::lower_bound(
+      keys.begin(), keys.end(), prefix,
+      [](const std::string& key, std::string_view value) { return std::string_view(key) < value; });
+  return it != keys.end() && std::string_view(*it).starts_with(prefix);
+}
+
+// Hiragana U+3041-U+3096 and the prolonged sound mark U+30FC only, so a
+// reading that kept a letter, or a table symbol such as the arrow of "zj", is
+// not a kana interpretation. Empty text passes.
+bool IsKanaText(std::string_view text) {
+  size_t offset = 0;
+  while (offset < text.size()) {
+    char32_t codepoint = 0;
+    if (!DecodeNextUtf8(text, offset, codepoint)) return false;
+    if (!((codepoint >= 0x3041 && codepoint <= 0x3096) || codepoint == 0x30FC)) return false;
+  }
+  return true;
+}
+
+bool IsFuzzyInputCharacter(char c) { return (c >= 'a' && c <= 'z') || c == '-' || c == '\''; }
 
 }  // namespace
 
@@ -287,6 +329,190 @@ std::vector<std::string> RomajiKanaConverter::AmbiguousReadings(
     readings.push_back(convert(mask, nullptr));
   }
   return readings;
+}
+
+std::vector<FuzzyKanaCandidate> RomajiKanaConverter::FuzzyMatch(std::string_view input,
+                                                                size_t k) const {
+  if (custom_table_ || k == 0 || input.empty() || input.size() > kFuzzyMaxInputLength) return {};
+  if (!std::all_of(input.begin(), input.end(), IsFuzzyInputCharacter)) return {};
+  const std::string standard = ConvertForCommit(std::string(input));
+
+  // A state of the weighted edit graph: `romaji` is the edited key sequence fed
+  // so far, `position` the next input key, `kana` what `converter` has output.
+  // CheapEdits and CostlyEdits stand for the edit successors of the state they
+  // copy, at the cost of their cheapest successor: the cheap ones are a
+  // transposition and substitutions of adjacent or same-finger keys, the costly
+  // ones the other substitutions, insertions and deletions. Successors are
+  // built only when their group comes up, so those that cost more than the k-th
+  // reading are never built. A Finished state holds the flushed reading.
+  enum class Step : unsigned char { Expand, CheapEdits, CostlyEdits, Finished };
+  struct State {
+    int cost = 0;
+    std::string romaji;
+    size_t position = 0;
+    size_t edits = 0;
+    Step step = Step::Expand;
+    std::string kana;
+    RomajiKanaConverter converter;
+  };
+  static_assert(kQwertyTranspositionCost <= kQwertySameFingerSubstitutionCost &&
+                    kQwertySameFingerSubstitutionCost <= kQwertyAdjacentSubstitutionCost &&
+                    kQwertyAdjacentSubstitutionCost < kQwertyBaseEditCost,
+                "a group of successors must not cost more than any successor in it");
+
+  std::map<std::string, std::pair<int, std::string>> found;  // kana -> (cost, romaji)
+  int kth_cost = -1;
+  // The queue holds indexes into `states`, so popping copies nothing. Cheapest
+  // first; ties go by romaji so the order does not depend on the standard library.
+  std::vector<State> states;
+  const auto later = [&states](size_t a, size_t b) {
+    const State& left = states[a];
+    const State& right = states[b];
+    return std::tie(left.cost, left.romaji, left.position, left.edits, left.step) >
+           std::tie(right.cost, right.romaji, right.position, right.edits, right.step);
+  };
+  std::priority_queue<size_t, std::vector<size_t>, decltype(later)> queue(later);
+  const auto push = [&](State state) {
+    // Nothing above the k-th reading's cost is kept, and a reading already
+    // found was found at a lower or equal cost.
+    if (kth_cost >= 0 && state.cost > kth_cost) return;
+    if (state.step == Step::Finished && found.count(state.kana) != 0) return;
+    states.push_back(std::move(state));
+    queue.push(states.size() - 1);
+  };
+  // Queues a state to expand. One that may not edit again only reads the rest
+  // of the input, so it is read to the end and queued as finished at once.
+  const auto push_expand = [&](State state) {
+    if (state.edits >= kFuzzyMaxEdits) {
+      std::string out;
+      for (size_t index = state.position; index < input.size(); ++index) {
+        out += state.converter.Feed(input[index]);
+        if (!IsKanaText(out) || !state.converter.PendingCanContinue()) return;
+      }
+      state.romaji.append(input.substr(state.position));
+      state.kana += out + state.converter.Flush();
+      state.position = input.size();
+      state.step = Step::Finished;
+    }
+    push(std::move(state));
+  };
+  // Feeds `keys` after state `from` and queues the result while the keys can
+  // still become kana.
+  const auto feed = [&](size_t from, std::string_view keys, size_t position, size_t edits,
+                        int cost) {
+    if (kth_cost >= 0 && cost > kth_cost) return;
+    RomajiKanaConverter converter = states[from].converter;
+    std::string out;
+    for (char key : keys) {
+      out += converter.Feed(key);
+      if (!IsKanaText(out) || !converter.PendingCanContinue()) return;
+    }
+    push_expand(State{cost, states[from].romaji + std::string(keys), position, edits, Step::Expand,
+                      states[from].kana + out, std::move(converter)});
+  };
+  // Queues the group of successors of state `from` at the cost of its cheapest one.
+  const auto push_group = [&](size_t from, Step step, int extra_cost) {
+    State group = states[from];
+    group.step = step;
+    group.cost += extra_cost;
+    push(std::move(group));
+  };
+  push(State{});
+
+  std::set<std::tuple<size_t, size_t, std::string>> expanded;
+  size_t steps = 0;
+  while (!queue.empty() && steps++ < kFuzzyNodeBudget) {
+    // `states` grows while a state is handled, so it is read by index throughout.
+    const size_t index = queue.top();
+    queue.pop();
+    const int cost = states[index].cost;
+    // Keep the readings that tie with the k-th one, then pick by kana below.
+    if (kth_cost >= 0 && cost > kth_cost) break;
+    const Step step = states[index].step;
+    const size_t position = states[index].position;
+    const size_t edits = states[index].edits;
+    const bool at_end = position == input.size();
+
+    if (step == Step::Finished) {
+      const std::string& kana = states[index].kana;
+      if (kana != standard && !kana.empty() && IsKanaText(kana) &&
+          found.emplace(kana, std::pair{cost, states[index].romaji}).second && found.size() == k) {
+        kth_cost = cost;
+      }
+      continue;
+    }
+
+    if (step == Step::Expand) {
+      if (!expanded.emplace(position, edits, states[index].romaji).second) continue;
+      if (at_end) {
+        State finished = states[index];
+        finished.kana += finished.converter.Flush();
+        finished.step = Step::Finished;
+        push(std::move(finished));
+      } else {
+        feed(index, input.substr(position, 1), position + 1, edits, cost);
+      }
+      if (edits < kFuzzyMaxEdits) {
+        if (!at_end) push_group(index, Step::CheapEdits, kQwertyTranspositionCost);
+        push_group(index, Step::CostlyEdits, kQwertyBaseEditCost);
+      }
+      continue;
+    }
+
+    const size_t next_edits = edits + 1;
+    const char typed = at_end ? '\0' : input[position];
+    const bool typed_letter = typed >= 'a' && typed <= 'z';
+    if (step == Step::CheapEdits) {
+      const int base = cost - kQwertyTranspositionCost;
+      if (position + 1 < input.size() && input[position + 1] != typed) {
+        const char swapped[2] = {input[position + 1], typed};
+        feed(index, std::string_view(swapped, 2), position + 2, next_edits,
+             base + kQwertyTranspositionCost);
+      }
+      for (char key = 'a'; typed_letter && key <= 'z'; ++key) {
+        const int substitution = QwertySubstitutionCost(typed, key);
+        if (key == typed || substitution >= kQwertyBaseEditCost) continue;
+        feed(index, std::string_view(&key, 1), position + 1, next_edits, base + substitution);
+      }
+      continue;
+    }
+
+    // Step::CostlyEdits.
+    const int base = cost - kQwertyBaseEditCost;
+    for (char key = 'a'; key <= 'z'; ++key) {
+      feed(index, std::string_view(&key, 1), position, next_edits, base + kQwertyBaseEditCost);
+    }
+    constexpr char kApostrophe = '\'';
+    feed(index, std::string_view(&kApostrophe, 1), position, next_edits,
+         base + kQwertyBaseEditCost);
+    if (at_end) continue;
+    State skipped = states[index];
+    skipped.step = Step::Expand;
+    skipped.position = position + 1;
+    skipped.edits = next_edits;
+    skipped.cost = base + kQwertyBaseEditCost;
+    push_expand(std::move(skipped));
+    for (char key = 'a'; typed_letter && key <= 'z'; ++key) {
+      if (key == typed || QwertySubstitutionCost(typed, key) < kQwertyBaseEditCost) continue;
+      feed(index, std::string_view(&key, 1), position + 1, next_edits, base + kQwertyBaseEditCost);
+    }
+  }
+
+  std::vector<FuzzyKanaCandidate> candidates;
+  candidates.reserve(found.size());
+  for (const auto& [kana, entry] : found) {
+    candidates.push_back(
+        {kana, static_cast<double>(entry.first) / kQwertyEditCostScale, entry.second});
+  }
+  std::stable_sort(
+      candidates.begin(), candidates.end(),
+      [](const FuzzyKanaCandidate& a, const FuzzyKanaCandidate& b) { return a.cost < b.cost; });
+  if (candidates.size() > k) candidates.resize(k);
+  return candidates;
+}
+
+bool RomajiKanaConverter::PendingCanContinue() const {
+  return pending_.empty() || pending_ == "nn" || HasBuiltinKeyStartingWith(pending_);
 }
 
 std::string RomajiKanaConverter::ConvertPending(bool force_flush) {

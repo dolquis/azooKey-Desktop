@@ -320,3 +320,113 @@ TEST(RomajiKanaConverterTest, CustomTableKeepsApostropheAsTyped) {
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("n'a", parsed.table),
             RomajiKanaConverter::ConvertForCommit("n", parsed.table) + "'あ");
 }
+
+namespace {
+
+using azookey::core::FuzzyKanaCandidate;
+
+const FuzzyKanaCandidate* FindFuzzyKana(const std::vector<FuzzyKanaCandidate>& candidates,
+                                        const std::string& kana) {
+  for (const auto& candidate : candidates) {
+    if (candidate.kana == kana) return &candidate;
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+// docs/typo-correction-learning-spec.md section 12.4.6 cost table.
+TEST(RomajiKanaConverterTest, FuzzyMatchCostsFollowTheSectionTable) {
+  const azookey::core::RomajiKanaConverter converter{};
+  struct Case {
+    const char* input;
+    const char* kana;
+    const char* romaji;
+    double cost;
+  };
+  for (const Case& c : {Case{"kuoshin", "こうしん", "koushin", 0.5},     // transposition
+                        Case{"taberi", "たべる", "taberu", 0.7},         // adjacent keys
+                        Case{"buton", "ふとん", "futon", 0.6},           // same finger
+                        Case{"kitaku", "きがく", "kigaku", 0.6},         // adjacent and same finger
+                        Case{"arigato", "ありがとう", "arigatou", 1.0},  // insertion
+                        Case{"kiari", "きり", "kiri", 1.0}}) {           // deletion
+    const auto candidates = converter.FuzzyMatch(c.input, 256);
+    const FuzzyKanaCandidate* hit = FindFuzzyKana(candidates, c.kana);
+    ASSERT_NE(hit, nullptr) << c.input;
+    EXPECT_EQ(hit->cost, c.cost) << c.input;
+    EXPECT_EQ(hit->romaji, c.romaji) << c.input;
+    EXPECT_EQ(azookey::core::RomajiKanaConverter::ConvertForCommit(hit->romaji), hit->kana);
+  }
+}
+
+TEST(RomajiKanaConverterTest, FuzzyMatchListsDistinctKanaCheapestFirst) {
+  using azookey::core::RomajiKanaConverter;
+  const RomajiKanaConverter converter{};
+  const auto candidates = converter.FuzzyMatch("koujsyou", 256);
+  ASSERT_EQ(candidates.size(), 256u);
+  const std::string standard = RomajiKanaConverter::ConvertForCommit("koujsyou");
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    const auto& candidate = candidates[i];
+    EXPECT_NE(candidate.kana, standard);
+    // Hiragana and the prolonged sound mark only: no leftover letter and no
+    // table symbol such as the arrow of "zj".
+    EXPECT_EQ(candidate.kana.find_first_of("abcdefghijklmnopqrstuvwxyz'-"), std::string::npos);
+    EXPECT_EQ(candidate.kana.find("↓"), std::string::npos);
+    EXPECT_EQ(RomajiKanaConverter::ConvertForCommit(candidate.romaji), candidate.kana);
+    EXPECT_GT(candidate.cost, 0.0);
+    EXPECT_LE(candidate.cost, 2.0);
+    if (i > 0) {
+      const auto& previous = candidates[i - 1];
+      EXPECT_TRUE(previous.cost < candidate.cost ||
+                  (previous.cost == candidate.cost && previous.kana < candidate.kana));
+    }
+  }
+  const FuzzyKanaCandidate* dropped_j = FindFuzzyKana(candidates, "こうしょう");
+  ASSERT_NE(dropped_j, nullptr);
+  EXPECT_EQ(dropped_j->cost, 1.0);
+
+  const auto first_three = converter.FuzzyMatch("koujsyou", 3);
+  ASSERT_EQ(first_three.size(), 3u);
+  for (size_t i = 0; i < first_three.size(); ++i) {
+    EXPECT_EQ(first_three[i].kana, candidates[i].kana);
+    EXPECT_EQ(first_three[i].cost, candidates[i].cost);
+  }
+}
+
+// An inserted apostrophe ends "nn" at ん, so "kann'i" reaches かんい.
+TEST(RomajiKanaConverterTest, FuzzyMatchInsertsAnApostropheAfterN) {
+  const azookey::core::RomajiKanaConverter converter{};
+  const auto candidates = converter.FuzzyMatch("kanni", 256);
+  const FuzzyKanaCandidate* hit = FindFuzzyKana(candidates, "かんい");
+  ASSERT_NE(hit, nullptr);
+  EXPECT_EQ(hit->romaji, "kann'i");
+  EXPECT_EQ(hit->cost, 1.0);
+}
+
+TEST(RomajiKanaConverterTest, FuzzyMatchRejectsInputsItCannotRead) {
+  using azookey::core::RomajiKanaConverter;
+  const RomajiKanaConverter converter{};
+  EXPECT_TRUE(converter.FuzzyMatch("taberi", 0).empty());
+  EXPECT_TRUE(converter.FuzzyMatch("", 8).empty());
+  EXPECT_TRUE(converter.FuzzyMatch("Taberi", 8).empty());
+  EXPECT_TRUE(converter.FuzzyMatch("tabe1", 8).empty());
+  EXPECT_TRUE(
+      converter.FuzzyMatch(std::string(RomajiKanaConverter::kFuzzyMaxInputLength + 1, 'a'), 8)
+          .empty());
+  EXPECT_FALSE(
+      converter.FuzzyMatch(std::string(RomajiKanaConverter::kFuzzyMaxInputLength, 'a'), 8).empty());
+
+  const auto parsed = azookey::core::CustomRomajiLoader::Parse("ka\tか\nbe\tべ\n");
+  ASSERT_TRUE(parsed.table);
+  RomajiKanaConverter custom;
+  custom.SetCustomTable(parsed.table);
+  EXPECT_TRUE(custom.FuzzyMatch("taberi", 8).empty());
+}
+
+TEST(RomajiKanaConverterTest, FuzzyMatchLeavesPendingKeysAlone) {
+  azookey::core::RomajiKanaConverter converter;
+  converter.Feed('k');
+  EXPECT_FALSE(converter.FuzzyMatch("taberi", 8).empty());
+  EXPECT_EQ(converter.PreviewPending(), "k");
+  EXPECT_EQ(converter.Feed('a'), "か");
+}

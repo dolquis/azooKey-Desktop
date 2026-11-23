@@ -2,11 +2,19 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "azookey/core/CustomRomajiLoader.h"
 
 namespace azookey::core {
+
+// docs/typo-correction-learning-spec.md section 12.4.6.
+struct FuzzyKanaCandidate {
+  std::string kana;
+  double cost = 0.0;   // weighted edit distance from the input (section 12.4.6 table)
+  std::string romaji;  // the edited romaji that converts to `kana`
+};
 
 class RomajiKanaConverter {
  public:
@@ -49,6 +57,20 @@ class RomajiKanaConverter {
                                                     std::shared_ptr<const CustomRomajiTable> table,
                                                     size_t max_ambiguous = kMaxAmbiguousDoubleN);
 
+  static constexpr size_t kFuzzyMaxEdits = 2;
+  static constexpr size_t kFuzzyMaxInputLength = 64;
+  static constexpr size_t kFuzzyNodeBudget = 20000;
+  // Section 12.4.6: up to `k` kana readings of the built-in table that `input`
+  // reaches within kFuzzyMaxEdits edits, cheapest first and then by kana. An
+  // edit substitutes a letter, inserts a letter or '\'', deletes a key, or swaps
+  // two neighbouring keys. Each reading appears once at its lowest cost; the
+  // reading ConvertForCommit gives `input` and readings that keep a letter or a
+  // symbol are left out. Empty with a custom table, for an empty or longer than
+  // kFuzzyMaxInputLength input, or for a key other than 'a'-'z', '-' and '\''.
+  // The search stops after kFuzzyNodeBudget states, so a long input may yield
+  // fewer readings. The pending keys of this converter are not used.
+  std::vector<FuzzyKanaCandidate> FuzzyMatch(std::string_view input, size_t k) const;
+
  private:
   std::string pending_;
   std::shared_ptr<const CustomRomajiTable> custom_table_;
@@ -57,6 +79,8 @@ class RomajiKanaConverter {
   size_t ambiguous_double_n_seen_ = 0;
   std::string ConvertPending(bool force_flush);
   std::string ConvertCustomPending(bool force_flush);
+  // Built-in table only: the pending keys can still become kana.
+  bool PendingCanContinue() const;
 };
 
 }  // namespace azookey::core

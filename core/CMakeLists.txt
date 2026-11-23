@@ -27,6 +27,7 @@ add_library(azookey_core STATIC
   src/NumberRewriter.cpp
   src/PlatformPaths.cpp
   src/PunctuationRules.cpp
+  src/QwertyAdjacency.cpp
   src/Redaction.cpp
   src/RewriterIndex.cpp
   src/RewriterNormalization.cpp

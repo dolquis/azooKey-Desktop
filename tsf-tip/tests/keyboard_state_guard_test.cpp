@@ -66,8 +66,8 @@ TEST_F(KeyboardStateGuardOwnerThreadTest, ReapplyRejectsAnotherThread) {
 
 TEST_F(KeyboardStateGuardOwnerThreadTest, SetDownRejectsAnotherThreadWithoutChangingPinnedState) {
   KeyboardStateGuard guard;
-  EXPECT_NONFATAL_FAILURE_ON_ALL_THREADS(
-      OnWorkerThread([&] { guard.SetDown(VK_SHIFT, true); }), kOwnerFailure);
+  EXPECT_NONFATAL_FAILURE_ON_ALL_THREADS(OnWorkerThread([&] { guard.SetDown(VK_SHIFT, true); }),
+                                         kOwnerFailure);
   guard.Reapply();
   EXPECT_EQ(Hooks().get_key_state(VK_SHIFT) & 0x8000, 0);
 }
@@ -75,7 +75,7 @@ TEST_F(KeyboardStateGuardOwnerThreadTest, SetDownRejectsAnotherThreadWithoutChan
 TEST_F(KeyboardStateGuardOwnerThreadTest, ClearSystemModifiersRejectsAnotherThread) {
   KeyboardStateGuard guard;
   EXPECT_NONFATAL_FAILURE_ON_ALL_THREADS(OnWorkerThread([&] { guard.ClearSystemModifiers(); }),
-                                        kOwnerFailure);
+                                         kOwnerFailure);
 }
 
 TEST_F(KeyboardStateGuardOwnerThreadTest, ConstructionOnAnotherThreadLeavesTheNewGuardInactive) {

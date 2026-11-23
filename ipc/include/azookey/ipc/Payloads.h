@@ -775,12 +775,9 @@ inline constexpr std::string_view kLearningDataErrorBlocked = "blocked";
 
 // Add any new learning data error constant to this list.
 inline constexpr std::array kAllLearningDataErrors{
-    kLearningDataErrorInvalidRequest,
-    kLearningDataErrorNotAuthenticated,
-    kLearningDataErrorStoreUnavailable,
-    kLearningDataErrorSaveFailed,
-    kLearningDataErrorUnsupported,
-    kLearningDataErrorBlocked,
+    kLearningDataErrorInvalidRequest,   kLearningDataErrorNotAuthenticated,
+    kLearningDataErrorStoreUnavailable, kLearningDataErrorSaveFailed,
+    kLearningDataErrorUnsupported,      kLearningDataErrorBlocked,
 };
 
 struct ListLearningEntriesRequest {

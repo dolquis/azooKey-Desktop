@@ -10,6 +10,7 @@ on:
       - 'settings-app/packages.lock.json'
       - '.github/workflows/release.yml'
       - '.github/workflows/sbom.yml'
+      - 'third_party/**'
   push:
     branches: [main]
     paths:
@@ -21,6 +22,7 @@ on:
       - 'settings-app/packages.lock.json'
       - '.github/workflows/release.yml'
       - '.github/workflows/sbom.yml'
+      - 'third_party/**'
 permissions:
   contents: read
 concurrency:

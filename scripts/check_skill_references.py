@@ -44,6 +44,7 @@ REPOSITORY_ROOTS = (
     "cmake",
     "compat-test",
     "core",
+    "correction",
     "data",
     "diagnostics",
     "dictbuild",

@@ -4,7 +4,8 @@
 
 | 変更領域 | 最初に読む仕様 | 主な実装 | 優先テスト |
 |---|---|---|---|
-| ローマ字かな変換（Feed / Flush / Preview） | `docs/romaji-batch-conversion-spec.md` §3〜§5、`docs/legacy-parity-spec.md` | `core/src/RomajiKanaConverter.cpp` | `core_tests`（`core/tests/romaji_kana_converter_test.cpp`） |
+| ローマ字かな変換（Feed / Flush / Preview、`FuzzyMatch`） | `docs/romaji-batch-conversion-spec.md` §3〜§5、`docs/legacy-parity-spec.md`、`docs/typo-correction-learning-spec.md` §12.4.2・§12.4.6 | `core/src/RomajiKanaConverter.cpp`、`core/src/QwertyAdjacency.cpp` | `core_tests`（`core/tests/romaji_kana_converter_test.cpp`、`core/tests/qwerty_adjacency_test.cpp`） |
+| 打ち間違い補正の読みの仮説（M55。重み付き編集、キー隣接、ローマ字の揺れ、`raw_keys` のパターン抽象化） | `docs/typo-correction-learning-spec.md` §12.2〜§12.4、§12.12.1 | `correction/src/TypoCorrectionEngine.cpp`、`correction/src/ReadingHypothesis.cpp`、`correction/src/KeyboardAdjacencyModel.cpp`、`correction/src/RomajiVariantNormalizer.cpp` | `correction_tests`。個人パターンと学習ストアは `azookey-learning-data-safety` |
 | 固定辞書変換と bigram 文脈 | `docs/conversion-quality-benchmark-spec.md`、`docs/model-management-spec.md` | `core/src/SimpleConverter.cpp`、`core/include/azookey/core/IConverter.h` | `core_tests`（`core/tests/simple_converter_test.cpp`）、`host_engine_tests` |
 | 辞書 trie とレイヤ（静的・可変・ユーザー語） | `docs/auto-word-registration-spec.md`、`docs/azdic-physical-layer-spec.md` | `core/src/DoubleArrayTrie.cpp`、`learning/src/DictionaryStore.cpp`、`inference-host/src/DictionaryCandidateProvider.cpp` | `dictionary_tests`、`host_engine_tests` |
 | モデル非経由のラティス変換（`CONN`・`CMAT` の読み出し、構築、N-best、文節、語彙の持ち主と engine の合流） | `docs/lattice-conversion-spec.md`、`docs/azdic-physical-layer-spec.md` §15.5 | `core/src/LatticeConnection.cpp`、`core/src/LatticeDictionary.cpp`、`core/src/Lattice.cpp`、`core/src/LatticeSearch.cpp`、`learning/src/DictionaryStore.cpp`、`inference-host/src/InferenceEngine.cpp` | `lattice_tests`、`azookey_lattice_bench_smoke`、`dictionary_tests`、`host_engine_tests` |
@@ -25,6 +26,7 @@
 
 - core だけの変更: `core_tests`。Linux でも `cmake --preset linux-debug` で構成し、
   `ctest --preset linux-debug -R core_tests` を実行できる。
+- 打ち間違い補正の読みの仮説: `correction_tests`（`core/` の `FuzzyMatch` は `core_tests`）
 - 辞書レイヤ: `dictionary_tests`、`dictbuild_python_tests`
 - Host の候補生成に影響: `host_engine_tests`
 - 横断確認: `cmake --build --preset windows-debug --target azookey_check`

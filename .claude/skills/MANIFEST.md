@@ -58,7 +58,7 @@
 | `azookey-settings-schema-evolution` | `settings/*` |
 | `tsf-ipc-protocol` | `ipc/src/**`、`ipc/include/**` |
 | `tsf-tip-development` | `tsf-tip/src/**`、`tsf-tip/include/**` |
-| `azookey-core-conversion` | `core/src/**`、`core/include/**`、`dictbuild/*` |
+| `azookey-core-conversion` | `core/src/**`、`core/include/**`、`correction/src/**`、`correction/include/**`、`dictbuild/*` |
 | `azookey-observability-diagnostics` | `diagnostics/*`、`diagnostics/etw/**` |
 | `azookey-settings-app-ui` | `settings-app/*`、`settings-app/Strings/**` |
 | `azookey-ci-workflows` | `.github/workflows/**`、`CMakePresets.json`、`.pre-commit-config.yaml`、`justfile` |

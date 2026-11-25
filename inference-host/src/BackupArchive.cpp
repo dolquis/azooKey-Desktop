@@ -1,8 +1,8 @@
 #include "azookey/host/BackupArchive.h"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
-#include <fstream>
 #include <set>
 #include <system_error>
 #include <utility>
@@ -17,6 +17,12 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cerrno>
 #endif
 
 namespace azookey::host {
@@ -61,8 +67,9 @@ bool IsReservedDeviceName(const fs::path& filename) {
          base[3] >= '0' && base[3] <= '9';
 }
 
-// Absolute, no "." or ".." component, no UNC or device namespace, no ':' in
-// the file name and no reserved device name.
+// Absolute, no "." or ".." component, no UNC or device namespace, and no
+// component with a ':' or a reserved device name. Only the string is looked
+// at; OpenSourceFile and CheckDestination check where it leads.
 bool IsAcceptableSourcePath(const fs::path& path) {
   if (!path.is_absolute() || !path.has_filename()) return false;
   const auto& native = path.native();
@@ -83,13 +90,13 @@ bool IsAcceptableSourcePath(const fs::path& path) {
   // Two leading separators mean UNC or a device namespace.
   if (native.size() >= 2 && is_separator(native[0]) && is_separator(native[1])) return false;
 #endif
-  // A ':' in the file name would address an NTFS alternate data stream.
-  if (path.filename().native().find(fs::path::value_type{':'}) != fs::path::string_type::npos) {
-    return false;
-  }
-  if (IsReservedDeviceName(path.filename())) return false;
   for (const auto& part : path.relative_path()) {
     if (part == "." || part == "..") return false;
+    // A ':' would address an NTFS alternate data stream, also of a directory.
+    if (part.native().find(fs::path::value_type{':'}) != fs::path::string_type::npos) {
+      return false;
+    }
+    if (IsReservedDeviceName(part)) return false;
   }
   return true;
 }
@@ -107,6 +114,190 @@ bool IsAcceptableArchivePath(const fs::path& path) {
     if (ch != static_cast<fs::path::value_type>(kZip[i])) return false;
   }
   return true;
+}
+
+#ifdef _WIN32
+// Closes a kernel handle on every way out.
+class FileHandle {
+ public:
+  explicit FileHandle(HANDLE handle) : handle_(handle) {}
+  ~FileHandle() {
+    if (valid()) CloseHandle(handle_);
+  }
+  FileHandle(const FileHandle&) = delete;
+  FileHandle& operator=(const FileHandle&) = delete;
+  bool valid() const { return handle_ != INVALID_HANDLE_VALUE && handle_ != nullptr; }
+  HANDLE get() const { return handle_; }
+  void reset(HANDLE handle) {
+    if (valid()) CloseHandle(handle_);
+    handle_ = handle;
+  }
+  HANDLE release() { return std::exchange(handle_, INVALID_HANDLE_VALUE); }
+
+ private:
+  HANDLE handle_;
+};
+
+// The errors std::filesystem reports as a missing file (MSVC's
+// __std_is_file_not_found); any other failure to open is no missing file.
+BackupError OpenFailure(DWORD error) {
+  switch (error) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+    case ERROR_BAD_NETPATH:
+    case ERROR_INVALID_NAME:
+    case ERROR_BAD_PATHNAME:
+    case ERROR_DIRECTORY:
+    case ERROR_NETNAME_DELETED:
+      return BackupError::SourceMissing;
+    default:
+      return BackupError::Io;
+  }
+}
+
+// The final path of an open file or directory, every link and junction
+// resolved, in the "\\?\X:\..." form; "\\?\UNC\..." for a network file.
+std::optional<std::wstring> FinalPathOf(HANDLE handle) {
+  std::wstring buffer(MAX_PATH, L'\0');
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    const DWORD length =
+        GetFinalPathNameByHandleW(handle, buffer.data(), static_cast<DWORD>(buffer.size()),
+                                  FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (length == 0) return std::nullopt;
+    if (length < buffer.size()) {
+      buffer.resize(length);
+      return buffer;
+    }
+    buffer.assign(length, L'\0');  // Too small: length is the size it needs.
+  }
+  return std::nullopt;
+}
+
+// A file on a local disk whose final path has a drive letter.
+bool IsLocalDiskHandle(HANDLE handle) {
+  if (GetFileType(handle) != FILE_TYPE_DISK) return false;
+  const auto final_path = FinalPathOf(handle);
+  return final_path && IsLocalDriveFinalPath(*final_path);
+}
+
+// The file a path names, opened for reading (learning-data-management-spec
+// section 5). A link as the last component (a reparse point that names
+// another file: a symbolic link, a junction, a WSL symbolic link) is refused,
+// not followed; the directories before it are followed, and the file they
+// lead to must be on a local drive. Other reparse points (a cloud file, a
+// deduplicated or compressed file) are files and are read.
+BackupError OpenSourceFile(const fs::path& path, FileHandle& out) {
+  // FILE_FLAG_OPEN_REPARSE_POINT opens a link itself, to look at it.
+  FileHandle link(CreateFileW(
+      path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+  if (!link.valid()) return OpenFailure(GetLastError());
+  FILE_ATTRIBUTE_TAG_INFO tag{};
+  if (!GetFileInformationByHandleEx(link.get(), FileAttributeTagInfo, &tag, sizeof(tag))) {
+    return BackupError::Io;
+  }
+  if ((tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return BackupError::InvalidPath;
+  if ((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+      IsReparseTagNameSurrogate(tag.ReparseTag)) {
+    return BackupError::InvalidPath;
+  }
+  // Opened again to read through the reparse points that are files.
+  FileHandle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+  if (!file.valid()) return OpenFailure(GetLastError());
+  // The same file as the one looked at: a link put in its place in between
+  // is not followed.
+  BY_HANDLE_FILE_INFORMATION looked{};
+  BY_HANDLE_FILE_INFORMATION opened{};
+  if (!GetFileInformationByHandle(link.get(), &looked) ||
+      !GetFileInformationByHandle(file.get(), &opened)) {
+    return BackupError::Io;
+  }
+  if (looked.dwVolumeSerialNumber != opened.dwVolumeSerialNumber ||
+      looked.nFileIndexHigh != opened.nFileIndexHigh ||
+      looked.nFileIndexLow != opened.nFileIndexLow) {
+    return BackupError::InvalidPath;
+  }
+  if (!IsLocalDiskHandle(file.get())) return BackupError::InvalidPath;
+  out.reset(file.release());
+  return BackupError::None;
+}
+#endif
+
+// Reads a file of `size` bytes with read_some, which returns how many bytes it
+// read, 0 at the end, or nullopt on a failure. One byte more than the size is
+// asked for: a file that changed while it was read is refused.
+template <typename ReadSome>
+BackupError ReadKnownSize(uint64_t size, size_t max_bytes, std::string& out, ReadSome read_some) {
+  if (size > max_bytes) return BackupError::TooLarge;
+  const auto expected = static_cast<size_t>(size);
+  out.assign(expected + 1, '\0');
+  size_t filled = 0;
+  while (filled < out.size()) {
+    const std::optional<size_t> read = read_some(out.data() + filled, out.size() - filled);
+    if (!read) {
+      learning::SecureErase(out);
+      return BackupError::Io;
+    }
+    if (*read == 0) break;
+    filled += *read;
+  }
+  if (filled != expected) {
+    learning::SecureErase(out);
+    return filled > max_bytes ? BackupError::TooLarge : BackupError::Io;
+  }
+  out.resize(filled);
+  return BackupError::None;
+}
+
+// IsAcceptableSourcePath, then the file is read from the handle its checks
+// were made on, so what was checked is what is read. A file over max_bytes is
+// refused before it is read.
+BackupError ReadSourceFile(const fs::path& path, size_t max_bytes, std::string& out) {
+  out.clear();
+  if (!IsAcceptableSourcePath(path)) return BackupError::InvalidPath;
+#ifdef _WIN32
+  FileHandle file(INVALID_HANDLE_VALUE);
+  const BackupError opened = OpenSourceFile(path, file);
+  if (opened != BackupError::None) return opened;
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(file.get(), &size) || size.QuadPart < 0) return BackupError::Io;
+  return ReadKnownSize(static_cast<uint64_t>(size.QuadPart), max_bytes, out,
+                       [&](char* data, size_t length) -> std::optional<size_t> {
+                         DWORD read = 0;
+                         const auto chunk = static_cast<DWORD>(std::min<size_t>(length, 1u << 30));
+                         if (!ReadFile(file.get(), data, chunk, &read, nullptr)) {
+                           return std::nullopt;
+                         }
+                         return read;
+                       });
+#else
+  // O_NOFOLLOW refuses a link as the last component; O_NONBLOCK keeps a FIFO
+  // from blocking the open, and fstat then refuses it.
+  const int fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+  if (fd < 0) {
+    if (errno == ELOOP) return BackupError::InvalidPath;
+    if (errno == ENOENT || errno == ENOTDIR) return BackupError::SourceMissing;
+    return BackupError::Io;
+  }
+  struct CloseOnExit {
+    int fd;
+    ~CloseOnExit() { close(fd); }
+  } close_fd{fd};
+  struct stat info {};
+  if (fstat(fd, &info) != 0) return BackupError::Io;
+  // Never read a directory, a FIFO or a device.
+  if (!S_ISREG(info.st_mode)) return BackupError::InvalidPath;
+  if (info.st_size < 0) return BackupError::Io;
+  return ReadKnownSize(static_cast<uint64_t>(info.st_size), max_bytes, out,
+                       [&](char* data, size_t length) -> std::optional<size_t> {
+                         for (;;) {
+                           const ssize_t read_bytes = read(fd, data, length);
+                           if (read_bytes >= 0) return static_cast<size_t>(read_bytes);
+                           if (errno != EINTR) return std::nullopt;
+                         }
+                       });
+#endif
 }
 
 // [a-z0-9_.]+ without "..", so every token is also a safe ZIP entry name.
@@ -253,15 +444,71 @@ bool DecodeItem(std::string_view stored, bool encrypted, const learning::ByteCry
   return true;
 }
 
+#ifdef _WIN32
+// A local final path in the "X:\..." form a path is given in, for
+// WriteTextFileAtomically and MoveFileExW. nullopt when dropping "\\?\" would
+// change what it names: Win32 drops a trailing '.' or ' ' of a component and
+// maps a reserved device name, which a "\\?\" path keeps.
+std::optional<fs::path> DrivePathOf(std::wstring_view final_path) {
+  if (!IsLocalDriveFinalPath(final_path)) return std::nullopt;
+  fs::path path(final_path.substr(4));
+  for (const auto& part : path.relative_path()) {
+    const auto& name = part.native();
+    if (name.empty() || name.back() == L'.' || name.back() == L' ' ||
+        name.find(L':') != std::wstring::npos || IsReservedDeviceName(part)) {
+      return std::nullopt;
+    }
+  }
+  return path;
+}
+#endif
+
+// Where WriteArchive writes. On Windows the parent directory stays open until
+// the archive is committed.
+struct Destination {
+  fs::path path;
+#ifdef _WIN32
+  FileHandle parent{INVALID_HANDLE_VALUE};
+#endif
+};
+
 // Rejects anything that WriteTextFileAtomically would silently accept: it
 // creates missing parent directories and replaces an existing target.
-bool CheckDestination(const fs::path& destination, BackupError* error) {
+// On Windows the archive is written under the final path of the parent
+// directory, which must be on a local drive: a junction or link among the
+// directories can neither lead to a network share nor be pointed elsewhere
+// after this check. The parent is held open without sharing delete, so it
+// cannot be renamed or deleted until the commit.
+bool CheckDestination(const fs::path& destination, Destination& resolved, BackupError* error) {
   if (!IsAcceptableArchivePath(destination)) return Fail(error, BackupError::InvalidPath);
   std::error_code ec;
+#ifdef _WIN32
+  resolved.parent.reset(CreateFileW(destination.parent_path().c_str(), FILE_LIST_DIRECTORY,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                    FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+  if (!resolved.parent.valid()) {
+    const BackupError failure = OpenFailure(GetLastError());
+    return Fail(error, failure == BackupError::SourceMissing ? BackupError::InvalidPath : failure);
+  }
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!GetFileInformationByHandle(resolved.parent.get(), &info)) {
+    return Fail(error, BackupError::Io);
+  }
+  if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+      GetFileType(resolved.parent.get()) != FILE_TYPE_DISK) {
+    return Fail(error, BackupError::InvalidPath);
+  }
+  const auto final_parent = FinalPathOf(resolved.parent.get());
+  const auto parent = final_parent ? DrivePathOf(*final_parent) : std::nullopt;
+  if (!parent) return Fail(error, BackupError::InvalidPath);
+  resolved.path = *parent / destination.filename();
+#else
   if (!fs::is_directory(destination.parent_path(), ec)) {
     return Fail(error, BackupError::InvalidPath);
   }
-  const auto status = fs::symlink_status(destination, ec);
+  resolved.path = destination;
+#endif
+  const auto status = fs::symlink_status(resolved.path, ec);
   if (status.type() == fs::file_type::not_found) return true;
   if (ec) return Fail(error, BackupError::Io);
   return Fail(error, BackupError::DestinationExists);
@@ -295,7 +542,10 @@ bool CommitWithoutReplacing(const fs::path& destination, const std::string& arch
 bool WriteArchive(const fs::path& destination, const std::vector<BackupItem>& items, bool encrypt,
                   const learning::ByteCrypto& crypto, const BackupManifest& meta,
                   BackupManifest* written, uint64_t* file_size, BackupError* error) {
-  if (!CheckDestination(destination, error) || !ValidateItems(items, error)) return false;
+  Destination resolved;
+  if (!CheckDestination(destination, resolved, error) || !ValidateItems(items, error)) {
+    return false;
+  }
   const ZipLimits limits = ArchiveLimits();
 
   BackupManifest manifest;
@@ -325,7 +575,7 @@ bool WriteArchive(const fs::path& destination, const std::vector<BackupItem>& it
   const std::string archive = BuildStoreOnlyZip(entries);
   if (archive.size() > kMaxArchiveBytes) return Fail(error, BackupError::TooLarge);
 
-  if (!CommitWithoutReplacing(destination, archive, error)) return false;
+  if (!CommitWithoutReplacing(resolved.path, archive, error)) return false;
   if (written) *written = std::move(manifest);
   if (file_size) *file_size = archive.size();
   if (error) *error = BackupError::None;
@@ -334,22 +584,8 @@ bool WriteArchive(const fs::path& destination, const std::vector<BackupItem>& it
 
 bool ReadSourceBytes(const fs::path& source, std::string& bytes, BackupError* error) {
   if (!IsAcceptableArchivePath(source)) return Fail(error, BackupError::InvalidPath);
-  std::error_code ec;
-  // symlink_status: a link is rejected rather than followed somewhere else.
-  const auto status = fs::symlink_status(source, ec);
-  if (status.type() == fs::file_type::not_found) return Fail(error, BackupError::SourceMissing);
-  if (ec) return Fail(error, BackupError::Io);
-  // Never open a directory: on Linux the open succeeds and the read throws.
-  if (!fs::is_regular_file(status)) return Fail(error, BackupError::InvalidPath);
-  const uintmax_t size = fs::file_size(source, ec);
-  if (ec) return Fail(error, BackupError::Io);
-  if (size > kMaxArchiveBytes) return Fail(error, BackupError::TooLarge);
-
-  std::ifstream in(source, std::ios::binary);
-  if (!in.is_open()) return Fail(error, BackupError::Io);
-  bytes.assign(static_cast<size_t>(size), '\0');
-  in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  if (static_cast<uintmax_t>(in.gcount()) != size) return Fail(error, BackupError::Io);
+  const BackupError read = ReadSourceFile(source, kMaxArchiveBytes, bytes);
+  if (read != BackupError::None) return Fail(error, read);
   return true;
 }
 
@@ -422,6 +658,27 @@ std::optional<std::vector<BackupItem>> ReadArchive(const fs::path& source,
 bool IsAcceptableUserDataSourcePath(const std::filesystem::path& path) {
   return backup_archive_detail::IsAcceptableSourcePath(path);
 }
+
+BackupError ReadUserDataSourceFile(const std::filesystem::path& path, size_t max_bytes,
+                                   std::string& out) {
+  try {
+    return backup_archive_detail::ReadSourceFile(path, max_bytes, out);
+  } catch (const std::exception&) {
+    learning::SecureErase(out);
+    return BackupError::Io;
+  }
+}
+
+#ifdef _WIN32
+bool IsLocalDriveFinalPath(std::wstring_view final_path) {
+  constexpr std::wstring_view kPrefix = L"\\\\?\\";
+  if (final_path.size() < kPrefix.size() + 3 || !final_path.starts_with(kPrefix)) return false;
+  const wchar_t letter = final_path[kPrefix.size()];
+  const bool is_letter = (letter >= L'A' && letter <= L'Z') || (letter >= L'a' && letter <= L'z');
+  return is_letter && final_path[kPrefix.size() + 1] == L':' &&
+         final_path[kPrefix.size() + 2] == L'\\';
+}
+#endif
 
 std::string_view BackupErrorCode(BackupError error) {
   switch (error) {

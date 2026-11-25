@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -16,6 +17,10 @@
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/Sha256.h"
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 namespace fs = std::filesystem;
 namespace json = azookey::ipc::json;
 using azookey::host::BackupError;
@@ -25,6 +30,7 @@ using azookey::host::BackupManifest;
 using azookey::host::BuildStoreOnlyZip;
 using azookey::host::ParseStoreOnlyZip;
 using azookey::host::ReadBackupArchive;
+using azookey::host::ReadUserDataSourceFile;
 using azookey::host::WriteBackupArchive;
 using azookey::host::ZipEntry;
 
@@ -174,6 +180,16 @@ void MutateManifest(std::vector<ZipEntry>& entries,
   mutate(root);
   manifest->data = json::Stringify(json::Value(root));
 }
+
+#ifdef _WIN32
+// A junction (mount point) needs no privilege, unlike a directory symbolic
+// link.
+bool MakeJunction(const fs::path& link, const fs::path& target) {
+  const std::wstring command =
+      L"cmd.exe /c mklink /J \"" + link.native() + L"\" \"" + target.native() + L"\" >nul 2>&1";
+  return _wsystem(command.c_str()) == 0 && fs::is_directory(link);
+}
+#endif
 
 }  // namespace
 
@@ -372,6 +388,162 @@ TEST(BackupArchiveTest, ReadRejectsFileOverSizeLimitBeforeReading) {
   fs::resize_file(path, 64u * 1024 * 1024 + 1);
   EXPECT_EQ(ReadError(path), BackupError::TooLarge);
 }
+
+// learning-data-management-spec section 5: the rules hold for every
+// component, not only the file name.
+TEST(BackupArchiveTest, RejectsAColonOrAReservedNameInAnyComponent) {
+  TempDir dir;
+  for (const char* directory : {"a:b", "CON", "nul.d", "LPT1"}) {
+    SCOPED_TRACE(directory);
+    // Joined as text: on Windows, operator/ would take "a:b" for a path with
+    // the root name "a:" and drop the left side.
+    auto parent = dir.path();
+    parent += "/";
+    parent += directory;
+    const auto path = parent / "backup.zip";
+    ASSERT_TRUE(path.is_absolute());
+    EXPECT_EQ(WriteError(path, SampleItems()), BackupError::InvalidPath);
+    EXPECT_EQ(ReadError(path), BackupError::InvalidPath);
+    EXPECT_FALSE(azookey::host::IsAcceptableUserDataSourcePath(parent / "d.txt"));
+  }
+}
+
+TEST(BackupArchiveTest, ReadUserDataSourceFileReadsARegularFileUpToTheLimit) {
+  TempDir dir;
+  const auto path = dir.path() / "dictionary.txt";
+  WriteBytes(path, "abcd");
+  std::string out;
+  EXPECT_EQ(ReadUserDataSourceFile(path, 4, out), BackupError::None);
+  EXPECT_EQ(out, "abcd");
+  EXPECT_EQ(ReadUserDataSourceFile(path, 3, out), BackupError::TooLarge);
+  EXPECT_TRUE(out.empty());
+  WriteBytes(path, "");
+  EXPECT_EQ(ReadUserDataSourceFile(path, 4, out), BackupError::None);
+  EXPECT_TRUE(out.empty());
+  EXPECT_EQ(ReadUserDataSourceFile(dir.path() / "absent.txt", 4, out), BackupError::SourceMissing);
+  EXPECT_EQ(ReadUserDataSourceFile(dir.path() / "absent" / "d.txt", 4, out),
+            BackupError::SourceMissing);
+  EXPECT_EQ(ReadUserDataSourceFile(dir.path(), 4, out), BackupError::InvalidPath);
+  EXPECT_EQ(ReadUserDataSourceFile("dictionary.txt", 4, out), BackupError::InvalidPath);
+}
+
+// A link or junction as the last component is refused, not followed.
+TEST(BackupArchiveTest, ReadRefusesALinkAsTheLastComponent) {
+  TempDir dir;
+  const auto archive = WriteSample(dir);
+  std::string out;
+  std::string not_run;
+#ifdef _WIN32
+  const auto real = dir.path() / "real";
+  fs::create_directories(real);
+  const auto junction = dir.path() / "junction.zip";
+  if (MakeJunction(junction, real)) {
+    EXPECT_EQ(ReadError(junction), BackupError::InvalidPath);
+    EXPECT_EQ(ReadUserDataSourceFile(junction, 1024, out), BackupError::InvalidPath);
+    fs::remove(junction);  // The junction, not its target.
+  } else {
+    not_run = "could not create a junction here; ";
+  }
+#endif
+  const auto link = dir.path() / "link.zip";
+  std::error_code ec;
+  fs::create_symlink(archive, link, ec);
+  if (ec) GTEST_SKIP() << not_run << "symbolic links are not available: " << ec.message();
+  EXPECT_EQ(ReadError(link), BackupError::InvalidPath);
+  EXPECT_EQ(ReadUserDataSourceFile(link, 1024 * 1024, out), BackupError::InvalidPath);
+  EXPECT_TRUE(out.empty());
+  if (!not_run.empty()) GTEST_SKIP() << not_run;
+}
+
+#ifdef _WIN32
+TEST(BackupArchiveTest, LocalDriveFinalPathHasADriveLetter) {
+  EXPECT_TRUE(azookey::host::IsLocalDriveFinalPath(L"\\\\?\\C:\\a\\b.zip"));
+  EXPECT_TRUE(azookey::host::IsLocalDriveFinalPath(L"\\\\?\\d:\\b.zip"));
+  EXPECT_TRUE(azookey::host::IsLocalDriveFinalPath(L"\\\\?\\Z:\\"));
+  for (const wchar_t* path :
+       {L"", L"C:\\a\\b.zip", L"\\\\?\\UNC\\server\\share\\b.zip",
+        L"\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\b.zip", L"\\\\?\\C:",
+        L"\\\\?\\C:/b.zip", L"\\\\?\\1:\\b.zip", L"\\??\\C:\\b.zip", L"\\\\.\\C:\\b.zip"}) {
+    EXPECT_FALSE(azookey::host::IsLocalDriveFinalPath(path)) << fs::path(path).string();
+  }
+}
+
+// A junction among the directories is followed (learning-data-management-spec
+// section 5): the import reads the file it leads to, and the export writes
+// into the directory it leads to.
+TEST(BackupArchiveTest, AJunctionAmongTheDirectoriesIsFollowedToALocalDrive) {
+  TempDir dir;
+  const auto real = dir.path() / "real";
+  fs::create_directories(real);
+  const auto junction = dir.path() / "junction";
+  if (!MakeJunction(junction, real)) GTEST_SKIP() << "could not create a junction here";
+  const auto through = junction / "backup.zip";
+  BackupError error = BackupError::Io;
+  uint64_t size = 0;
+  ASSERT_TRUE(WriteBackupArchive(through, SampleItems(), true, UserKey(), SampleMeta(), nullptr,
+                                 &size, &error))
+      << BackupErrorCode(error);
+  ASSERT_TRUE(fs::is_regular_file(fs::symlink_status(real / "backup.zip")));
+  EXPECT_EQ(fs::file_size(real / "backup.zip"), size);
+  // No temporary file is left beside it.
+  EXPECT_EQ(std::distance(fs::directory_iterator(real), fs::directory_iterator()), 1);
+  const auto items = ReadBackupArchive(through, UserKey(), nullptr, &error);
+  ASSERT_TRUE(items.has_value()) << BackupErrorCode(error);
+  EXPECT_EQ(items->size(), SampleItems().size());
+  EXPECT_EQ(WriteError(through, SampleItems()), BackupError::DestinationExists);
+
+  WriteBytes(real / "dictionary.txt", "abc");
+  std::string out;
+  EXPECT_EQ(ReadUserDataSourceFile(junction / "dictionary.txt", 16, out), BackupError::None);
+  EXPECT_EQ(out, "abc");
+  fs::remove(junction);  // The junction, not its target.
+}
+
+// A directory link leading to a network share is refused, for the import and
+// the export (learning-data-management-spec section 5). The share is this
+// machine's administrative share, so the test runs only where a directory
+// symbolic link can be made and the share can be reached.
+TEST(BackupArchiveTest, ANetworkShareReachedThroughADirectoryLinkIsRefused) {
+  TempDir dir;
+  const auto real = dir.path() / "real";
+  fs::create_directories(real);
+  const auto archive = WriteSample(dir);
+  fs::copy_file(archive, real / "backup.zip");
+  WriteBytes(real / "dictionary.txt", "abc");
+  const auto local = fs::absolute(real).native();
+  if (local.size() < 3 || local[1] != L':') GTEST_SKIP() << "no drive letter";
+  const fs::path share =
+      L"\\\\localhost\\" + local.substr(0, 1) + L"$" + local.substr(2);  // \\localhost\C$\...
+  std::error_code ec;
+  if (!fs::is_regular_file(share / "backup.zip", ec)) {
+    GTEST_SKIP() << "the administrative share is not reachable";
+  }
+  const auto remote = dir.path() / "remote";
+  fs::create_directory_symlink(share, remote, ec);
+  if (ec) GTEST_SKIP() << "directory symbolic links are not available: " << ec.message();
+  if (!fs::is_regular_file(remote / "backup.zip", ec)) {
+    GTEST_SKIP() << "a link to a remote directory is not evaluated here";
+  }
+
+  EXPECT_EQ(ReadError(remote / "backup.zip"), BackupError::InvalidPath);
+  std::string out;
+  EXPECT_EQ(ReadUserDataSourceFile(remote / "dictionary.txt", 16, out), BackupError::InvalidPath);
+  EXPECT_TRUE(out.empty());
+  EXPECT_EQ(WriteError(remote / "written.zip", SampleItems()), BackupError::InvalidPath);
+  EXPECT_FALSE(fs::exists(real / "written.zip"));
+  fs::remove(remote, ec);  // The link, not its target.
+}
+#else
+// A FIFO is refused without blocking on the open.
+TEST(BackupArchiveTest, ReadRefusesAFifoWithoutBlocking) {
+  TempDir dir;
+  const auto fifo = dir.path() / "pipe.zip";
+  if (mkfifo(fifo.c_str(), 0600) != 0) GTEST_SKIP() << "mkfifo is not available";
+  EXPECT_EQ(ReadError(fifo), BackupError::InvalidPath);
+  std::string out;
+  EXPECT_EQ(ReadUserDataSourceFile(fifo, 1024, out), BackupError::InvalidPath);
+}
+#endif
 
 TEST(BackupArchiveTest, ReadRejectsNonZipAndCorruptedZip) {
   TempDir dir;

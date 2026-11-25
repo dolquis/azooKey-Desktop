@@ -583,12 +583,12 @@ Application Verifier の停止はブレークであり、debugger を接続し�
 
 ### Windows CLI / コンソールの別枠
 
-TIP 登録を必要としない非 ASCII argv、非 ASCII パスの GGUF 実ロード、user_dict の 2 writer、コンソール終了時の flush のゲートは、Windows CLI / コンソールの別枠で行う。
+TIP 登録を必要としない非 ASCII argv、非 ASCII パスの GGUF 実ロード、user_dict の 2 writer、コンソール終了時の flush、ネットワーク先と subst のパスのゲートは、Windows CLI / コンソールの別枠で行う。
 同じ VM を使う場合も対話 TIP レーンの進行条件にせず、各課題の前提と合格条件を確認して個別に記録する。
 user_dict の 2 writer は稼働中 Host と offline CLI の同時実行を要するが、TIP の打鍵は要しない。
 コンソール終了時の flush はコンソールを終了させるため、レーン 2 の Host と混同しない。
 
-非 ASCII の 2 ゲートとコンソール終了時の flush のコマンドと fixture は [`scripts/vm-verify-fixtures/README.md`](../../scripts/vm-verify-fixtures/README.md) が持つ。
+非 ASCII の 2 ゲート、コンソール終了時の flush、ネットワーク先と subst のパスのコマンドと fixture は [`scripts/vm-verify-fixtures/README.md`](../../scripts/vm-verify-fixtures/README.md) が持つ。
 本節は、README に無い実行条件だけを定める。
 
 | ゲート | README の節 | 実行条件 |
@@ -596,6 +596,7 @@ user_dict の 2 writer は稼働中 Host と offline CLI の同時実行を要�
 | 非 ASCII argv | 「非 ASCII パス」 | VMConnect の基本セッションの対話コンソールから実行する。PowerShell Direct 経由の実行は、課題が求める通常コンソールの条件を満たさない |
 | 非 ASCII パスの GGUF 実ロード | 「非 ASCII パス」 | 生成した `modelPath` を `--model` と `model.selectedPath` の両方で確認する。レーン 2 の Host と pipe を取り合うので、レーン 2 と 3 の証跡を回収した後に、supervisor ごと止めてから行う |
 | コンソール終了時の flush | 「stdio の行」 | 終了経路ごとに新しいデータルートで `--stdio` の Host を起動し、最初に Handshake の行を送る |
+| ネットワーク先と subst のパス | 「ネットワーク先と subst のパス」 | 設定アプリから行い、TIP の打鍵は要しない。`subst` と `net use` は Host と同じ、管理者でないログオンで実行する |
 
 非 ASCII の 2 ゲートは active code page で結果の意味が変わる。
 課題が求める code page と異なる環境で実行した場合は、実行した code page での結果として記録し、求められた code page を未実施と明記する。

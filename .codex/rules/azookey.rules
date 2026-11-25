@@ -1,7 +1,6 @@
 # Codex CLI の実行ポリシー（execpolicy）。.claude/settings.json の permissions と対応させる。
 # 書式: https://learn.chatgpt.com/docs/agent-configuration/rules
-# 判定は forbidden > prompt > allow の順で最も厳しいものが勝つ。allow はサンドボックス外で
-# 確認なしに実行する許可なので、限定した操作と検査付き helper に絞る。
+# 判定は forbidden > prompt > allow の順で最も厳しいものが勝つ。
 # prefix_rule は引数の全体検査ではない。未一致の操作は通常の承認判定へ戻る。
 # 検証: codex execpolicy check --pretty --rules .codex/rules/azookey.rules -- <command>
 # この repo の .codex/ 層が trust されたときだけ読み込まれる。
@@ -37,7 +36,7 @@ prefix_rule(
 prefix_rule(
     pattern = ["git", "push"],
     decision = "prompt",
-    justification = "任意の push は宛先とオプションを確認する。承認済みの通常 push は scripts/codex_push.py で検査する。",
+    justification = "push の宛先とオプションを確認する。通常の branch push には scripts/codex_push.py の検査も使える。",
     match = ["git push", "git push -u origin feature"],
     not_match = ["git pull origin main"],
 )
@@ -82,66 +81,5 @@ prefix_rule(
     not_match = ["git commit -m msg"],
 )
 
-# ── allow: 限定した読み取りと検査付き操作。サンドボックス外でも確認なし ──────
-
-# stash list/show と checkout -b / switch -c は通常の承認判定に委ねる。
-# 後続の --output や -f / -B などを prefix だけでは除外できないため、
-# 一律 prompt を外しても広い allow は設けない。
-
-prefix_rule(
-    pattern = ["python3", "scripts/codex_push.py"],
-    justification = "承認済みの作業branchだけを固定repositoryへ送る検査付き helper。既定は送信なし。",
-    match = ["python3 scripts/codex_push.py --branch dolquis/dev-1150-agents", "python3 scripts/codex_push.py --branch dolquis/dev-1150-agents --publish"],
-    not_match = ["python3 other.py", "git push origin feature"],
-)
-
-prefix_rule(
-    pattern = ["py", "-3.13", "scripts/codex_push.py"],
-    justification = "Windows Python launcher から同じ限定 helper を呼ぶ。",
-    match = ["py -3.13 scripts/codex_push.py --branch dolquis/dev-1150-agents --publish"],
-    not_match = ["py -3.13 -c code"],
-)
-
-prefix_rule(
-    pattern = ["git", ["status", "diff", "log", "show", "merge-base", "ls-files", "fetch", "rev-parse", "check-ignore"]],
-    justification = "読み取り系 git。pre-pr-self-review が要求する範囲確定に使う。",
-    match = ["git status -sb", "git diff --stat origin/main", "git log --oneline -5", "git fetch origin main"],
-    not_match = ["git push origin feature", "git reset --hard"],
-)
-
-prefix_rule(
-    pattern = ["git", "branch", ["--list", "--show-current", "-a", "-r"]],
-    justification = "branch の一覧と現在 branch の確認。",
-    match = ["git branch --show-current", "git branch --list", "git branch -a"],
-    not_match = ["git branch -D feature", "git branch feature"],
-)
-
-prefix_rule(
-    pattern = ["git", "remote", ["-v", "show", "get-url"]],
-    justification = "remote の確認。",
-    match = ["git remote -v", "git remote get-url origin"],
-    not_match = ["git remote add upstream https://example.invalid/x.git", "git remote set-url origin https://example.invalid/x.git"],
-)
-
-prefix_rule(
-    pattern = ["rg"],
-    justification = "文字列検索は読み取り専用。",
-    match = ["rg -n foo docs", "rg --files"],
-)
-
-prefix_rule(
-    pattern = ["python3", ["scripts/docs-lint.py", "scripts/check_agent_instruction_size.py", "scripts/check_test_inventory.py", "scripts/check_skill_references.py", "scripts/check_agent_definitions.py"]],
-    justification = "docs 系の検証スクリプト。CI と同じゲートをローカルで回す。",
-    match = ["python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json", "python3 scripts/check_test_inventory.py", "python3 scripts/check_agent_definitions.py"],
-    not_match = ["python3 scripts/register-dev.py"],
-)
-
-# cmake / ctest / ninja の名前だけでは任意 script や出力先を制限できない。
-# README と Windows Headless CMake Build に従い、実コマンドの承認判定を使う。
-
-prefix_rule(
-    pattern = ["just", ["doctor", "ci", "configure", "build", "test", "bench", "format-check", "lint"]],
-    justification = "justfile の標準レシピ。TIP の register / unregister は含まない（管理者 PowerShell で人間が行う）。",
-    match = ["just doctor --fix-hints", "just ci", "just test windows-debug"],
-    not_match = ["just register", "just unregister"],
-)
+# git の照会・fetch、rg、repo のスクリプトと just のレシピは通常の承認判定に従う。
+# prefix だけでは追加引数、スクリプトの実体、後続レシピの作用を限定できない。

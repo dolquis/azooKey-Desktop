@@ -13,6 +13,7 @@ canonical_for: ["Claude Code / Codex の MCP、ホスト前提、doctor、Human 
 
 - Claude Code の repo MCP は `.mcp.json`、プラグインと permissions は `.claude/settings.json`、カスタム agent は `.claude/agents/*.md` が定義する。`git push` は ask ルールではなく `.claude/settings.json` の PreToolUse hook（`.claude/hooks/git-push-guard.py`）が検査し、push 先が `dolquis/` 配下の remote で保護 branch と削除を含まないときだけ承認なしで通す。判定の詳細は hook の docstring が正典で、hook とそのテストは `dolquis/agent-ops` のベンダリングコピーである。
 - Codex の repo 共通 sandbox と `[agents]` は `.codex/config.toml`、カスタム agent は `.codex/agents/*.toml`、コマンドの実行ポリシー（execpolicy）は `.codex/rules/*.rules`、lifecycle hooks は `.codex/hooks.json` が定義する。いずれも project の `.codex/` 層を trust したときだけ読み込まれる。Windows sandbox の方式と任意 MCP はユーザー設定で選び、repo から上書きしない。`.codex/hooks/` は共有 hook への adapter を持つ。repo 固有 agent の本文は両ハーネスで同期するが、権限の強制方法は `.claude/agents/MANIFEST.md` に従う。
+- 文書 lint の hook は、初回と定義の変更時に Codex CLI の `/hooks` で対象 checkout のイベントと実行コマンドを確認して信頼する。確認が済むまでは Codex がその hook をスキップする。[公式の hook 信頼手順](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)
 - Context7 は各開発者が Claude Code と Codex のユーザー連携で有効にする。repo 設定には重複登録しない。Context7 が利用できない場合、Microsoft API は Microsoft Learn の公式リファレンスを優先する。
 - Skill の配置とミラー規則は `AGENTS.md`「Skill の配置」に従う。
 
@@ -106,7 +107,7 @@ Serena の診断は C++ の build / test / lint の代替にしない。
 
 ## Codex の branch push
 
-ユーザーが push / Draft PR 提出を依頼した範囲では、`scripts/codex_push.py` を使える。repo の execpolicy はこの helper を許可し、任意の `git push` は確認対象に残す。helper は現在 branch と指定名の一致、`dolquis/dev-<番号>-<slug>` の形、origin の単一 push URL がこの repository を指すことを検査する。送信する commit と宛先 ref を明示し、mirror、tag 追送、submodule の再帰 push を無効にする。force、削除、任意の Git オプションは受け付けない。
+ユーザーが push / Draft PR 提出を依頼した範囲では、`scripts/codex_push.py` を使える。helper の実行には通常の sandbox と承認ポリシーが適用される。helper は現在 branch と指定名の一致、`dolquis/dev-<番号>-<slug>` の形、origin の単一 push URL がこの repository を指すことを検査する。送信する commit と宛先 ref を明示し、mirror、tag 追送、submodule の再帰 push を無効にする。force、削除、任意の Git オプションは受け付けない。
 
 ```powershell
 # ローカル検査のみ。既定では送信しない。
@@ -117,7 +118,7 @@ py -3.13 scripts/codex_push.py --branch dolquis/dev-123-example --publish
 
 `--dry-run` は remote へ接続して検証するが ref は更新しない。helper は会話の承認範囲を判定する機構ではなく、送信先と操作範囲の検査を担う。`pre-pr-self-review` の検証と base / head 確認は省略しない。remote 設定を並行変更せず、信頼した checkout 内で使う。条件に合わない場合は勝手に権限を広げず、理由を確認する。
 
-ルール変更時は `codex execpolicy check --rules .codex/rules/azookey.rules -- <command>` で確認する。prefix 判定だけでは全引数を検査できないため、未一致を許可済みと解釈しない。新 branch 作成は一律 prompt から外すが、後続の破棄オプションまで許可する広い allow は設けない。通常の承認判定と sandbox 境界に従う。
+ルール変更時は `codex execpolicy check --rules .codex/rules/azookey.rules -- <command>` で確認する。`git fetch` はリモートへ接続し、取得結果をローカルの Git に書き込む。検索、fetch、検証スクリプト、`just` のレシピは通常の sandbox と承認ポリシーに従う。ルールに一致しない場合の動作は、ユーザー層と管理ポリシーも含めた実効設定で決まる。
 
 ## Claude Code on the web
 

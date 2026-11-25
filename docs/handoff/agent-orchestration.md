@@ -166,4 +166,4 @@ azooKey 固有の引継ぎ対象には、実機入力や管理者操作の承認
 checker とそのテストは `dolquis/agent-ops` を正典として再配布する。検査対象のパスは設定の `[references] roots`、Skill の接頭辞は `[skills] prefixes` が持つ。frontmatter は checker の限定パーサーで検査し、PyYAML や `check_skill_references.REPOSITORY_ROOTS` には依存しない。全 agent に Claude / Codex ペアを要求するため、`[mirror] claude_only` の例外は設けない。各 agent の `write_boundary` は `[boundary] require_declaration = true` で必須にする。MANIFEST の権限列と設定値の一致は親のレビューで確認する。設定の欠落・未知キー・不正な型は exit 2、定義の検査失敗は exit 1 とする。
 `scripts/tests/test_agent_readonly_guard.py` は read-only guard hook の allow / deny 表を固定する。
 
-共有 hook の再配布時は、repo 所有の `.codex/hooks.json` の matcher が `Bash` / `apply_patch` を含むこと、Windows command が `py -3` を使うこと、timeout が adapter の内部予算を上回ることを親が確認する。共有テストは repo 固有の配線を検査しない。
+共有 hook の再配布時は、repo 所有の `.codex/hooks.json` の matcher が `Bash` / `apply_patch` を含むこと、Windows command が `py -3` を使うこと、timeout が adapter の内部予算を上回ることを親が確認する。定義を変えた場合は `docs/handoff/agent-tooling-setup.md`「設定の正典」に従い、各 checkout で hook の信頼状態を確認する。共有テストは repo 固有の配線を検査しない。

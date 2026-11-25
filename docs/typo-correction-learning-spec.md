@@ -719,7 +719,7 @@ host CLI の `--typo-store` で上書きできる。§5-1）と同じディレ�
 - v1 の退避の論理パスに `typo_corrections.tsv.bak` は使わない。M34 の平文移行が残す平文の退避と同名で、
   `WriteProtectedText` がこれを残った退避（orphan backup）とみなして保存を止めるためである。
 - M34 の平文移行が残す `typo_corrections.tsv.bak`（平文）は M34 の規則に従い、本節の移行と削除の対象に
-  入れない（全ストア共通の見直しは DEV-2173 で行う）。
+  入れない（全削除で消すかの全ストア共通の見直しは DEV-2200 で行う）。
 - 各ファイルの状態は、論理パスを `ReadProtectedText` に渡した結果で決める。`Encrypted` と `Plaintext` は
   「ある」、`Missing` は「無い」、`Error` は「読めない」とする。ただし v1 のストアについて、
   `typo_corrections.tsv.enc` も平文の `typo_corrections.tsv` も無く、M34 の平文の退避 `typo_corrections.tsv.bak`

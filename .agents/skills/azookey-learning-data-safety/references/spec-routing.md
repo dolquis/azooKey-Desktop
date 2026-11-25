@@ -11,12 +11,13 @@
 | reranker と候補順位への学習反映 | `docs/user-learning-enhancement-spec.md` | `learning/src/Reranker.cpp` | `reranker_tests` |
 | secure input、ログ、外部送信 | `docs/privacy-and-secure-input-spec.md` | `inference-host/src/InferenceEngine.cpp`, `inference-host/src/Dispatcher.cpp` | `host_engine_tests`, `host_dispatcher_tests` |
 | 自動単語学習と辞書レイヤ | `docs/auto-word-registration-spec.md` | `learning/src/DictionaryStore.cpp`（静的・可変レイヤの優先度と無効化）、`inference-host/src/DictionaryCandidateProvider.cpp`、`learning/src/AutoWordStore.cpp`、`inference-host/src/NewWordsCli.cpp` | `dictionary_tests`、`host_engine_tests`、`auto_word_store_tests`、`host_dispatcher_tests`、`host_newwords_cli_tests` |
-| typo correction と学習の相互作用 | `docs/typo-correction-learning-spec.md` | `learning/src/DictionaryStore.cpp` の該当レイヤ、`inference-host/src/InferenceEngine.cpp` | `dictionary_tests`、`host_engine_tests` |
+| typo correction と学習の相互作用（補正エンジンが返す読みの仮説を含む） | `docs/typo-correction-learning-spec.md` | `learning/src/DictionaryStore.cpp` の該当レイヤ、`inference-host/src/InferenceEngine.cpp`、`correction/src/TypoCorrectionEngine.cpp` | `dictionary_tests`、`host_engine_tests`、`correction_tests` |
+| typo の v2 ストア（SQLite の保存、v1 からの移行、破損時の復旧、学習の削除） | `docs/typo-correction-learning-spec.md` §12.8・§12.9、`docs/learning-data-management-spec.md` §5・§6 | `learning/src/TypoLearningStore.cpp`、`learning/src/TypoPattern.cpp` | `typo_learning_store_tests`、`typo_correction_store_tests` |
 | bench 用一時学習ファイル | `docs/conversion-quality-benchmark-spec.md` §3 | `bench/TemporaryLearningFile.cpp` | `temporary_learning_file_tests` |
 
 ## 検証コマンドの選び方
 
-- 学習ライブラリ: `learning_tests`, `user_dictionary_tests`, `user_dictionary_text_import_tests`, `reranker_tests`, `atomic_file_tests`
+- 学習ライブラリ: `learning_tests`, `user_dictionary_tests`, `user_dictionary_text_import_tests`, `reranker_tests`, `atomic_file_tests`, `typo_learning_store_tests`
 - Host 経由の辞書操作: `host_userdict_cli_tests`
 - secure input や request lifecycle: `host_engine_tests`, `host_dispatcher_tests`
 - 辞書レイヤと自動単語: `dictionary_tests`

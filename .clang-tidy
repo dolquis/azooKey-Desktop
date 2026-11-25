@@ -27,6 +27,6 @@ Checks: >
   -performance-avoid-endl
 WarningsAsErrors: ''
 # Only diagnose headers under our own modules; skips _deps/ (FetchContent) and legacy/.
-HeaderFilterRegex: '.*[/\\](core|ipc|learning|inference-host|tsf-tip|bench)[/\\].*'
+HeaderFilterRegex: '.*[/\\](core|correction|ipc|learning|inference-host|tsf-tip|bench)[/\\].*'
 FormatStyle: file
 ...

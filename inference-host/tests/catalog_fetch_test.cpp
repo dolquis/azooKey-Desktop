@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -48,8 +49,11 @@ constexpr std::string_view kShaB =
 // Per-test directory: CTest runs each test in its own process, possibly in parallel.
 fs::path TestDir() {
   const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
-  auto path = fs::temp_directory_path() / (std::string("azookey_catalog_fetch_") +
-                                           info->test_suite_name() + "_" + info->name());
+  // A short name: the sidecar and its temp file sit below it, and a long TMP plus a long
+  // test name pushes the temp path past MAX_PATH (DEV-2190).
+  auto path = fs::temp_directory_path() /
+              ("azcf_" + std::to_string(std::hash<std::string>{}(
+                             std::string(info->test_suite_name()) + "." + info->name())));
   fs::remove_all(path);
   fs::create_directories(path);
   return path;

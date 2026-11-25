@@ -134,6 +134,7 @@ DOC_EXCLUDED_FILES = {"docs/handoff/docs-refactoring-plan.md"}
 
 CODE_DIRECTORIES = (
     "core/",
+    "correction/",
     "ipc/",
     "inference-host/",
     "tsf-tip/",

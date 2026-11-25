@@ -128,6 +128,17 @@ class RunClangTidyTests(unittest.TestCase):
                 self.assertIn("| 2 | 0 | 0 | 2 | 1 |", summary)
                 self.assertEqual(self.calls, [])
 
+    def test_correction_sources_are_analyzed(self):
+        self.changed = ["correction/src/reading.cpp"]
+        source = self.root / self.changed[0]
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("int main() {}", encoding="utf-8")
+        self.write_database([{"directory": str(self.root), "file": self.changed[0]}])
+        code, summary = self.run_tidy()
+        self.assertEqual(code, 0)
+        self.assertEqual([call[-1] for call in self.calls], self.changed)
+        self.assertIn("| 1 | 1 | 0 | 0 | 0 |", summary)
+
     def test_changed_sources_outside_portable_subset_are_ignored(self):
         self.changed = ["tsf-tip/src/windows.cpp", "core/include/header.h", "settings/readme.md"]
         code, summary = self.run_tidy()

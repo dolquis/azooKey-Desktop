@@ -2,7 +2,6 @@
 #include <sqlite3.h>
 
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>

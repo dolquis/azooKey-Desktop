@@ -13,6 +13,7 @@ paths:
   - "bench/**"
   - "compat-test/**"
   - "core/**"
+  - "correction/**"
   - "diagnostics/**"
   - "inference-host/**"
   - "ipc/**"

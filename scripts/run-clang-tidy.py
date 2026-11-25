@@ -8,7 +8,7 @@ import re
 import subprocess
 
 
-PORTABLE_SOURCE = re.compile(r"^(core|ipc|learning|inference-host|bench)/.*\.(cpp|cc)$")
+PORTABLE_SOURCE = re.compile(r"^(core|correction|ipc|learning|inference-host|bench)/.*\.(cpp|cc)$")
 
 
 def changed_sources(root, base):

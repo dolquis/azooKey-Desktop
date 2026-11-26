@@ -62,14 +62,49 @@ enum class BackupError {
 // snake_case identifier for IPC responses and logs ("invalid_path", ...).
 std::string_view BackupErrorCode(BackupError error);
 
-// The path rules of a file the settings app names for an import
+// The string rules of a path the settings app names for an import or export
 // (learning-data-management-spec section 5), without the extension: absolute,
-// no "." or ".." component, no UNC or device namespace, no ':' in the file
-// name, no reserved device name. user-dictionary-pos-spec section 6.8 uses it.
+// no "." or ".." component, no UNC or device namespace, and no component with
+// a ':' or a reserved device name. Where the path leads is checked when the
+// file is opened (ReadUserDataSourceFile).
 bool IsAcceptableUserDataSourcePath(const std::filesystem::path& path);
 
+// Reads a file the settings app names for an import
+// (learning-data-management-spec section 5; user-dictionary-pos-spec section
+// 6.8 uses it): IsAcceptableUserDataSourcePath, then the file is read from
+// the handle its checks were made on. A link as the last component (a
+// symbolic link, a junction, a WSL symbolic link) is refused, not followed.
+// On Windows the file it leads to must be on a local drive: a mapped network
+// drive, or a directory link or junction leading to a network share, is
+// refused. Errors: InvalidPath (path rules, a link, not a regular file, not
+// on a local drive, or a network location whose name or share is not found or
+// whose connection was lost), SourceMissing, TooLarge
+// (over max_bytes, refused before reading), Io (cannot be opened or read, or
+// changed while read). On failure `out` is erased; the caller erases it with
+// SecureErase after use.
+BackupError ReadUserDataSourceFile(const std::filesystem::path& path, size_t max_bytes,
+                                   std::string& out);
+
+#ifdef _WIN32
+// Whether a GetFinalPathNameByHandleW(VOLUME_NAME_DOS) result names a local
+// drive ("\\?\X:\..."), not a network share ("\\?\UNC\...") or a volume
+// without a drive letter.
+bool IsLocalDriveFinalPath(std::wstring_view final_path);
+
+namespace detail {
+// Exposed for tests; not an IPC API.
+// The error a Win32 error from opening a named file or directory reports.
+BackupError SourceOpenFailure(unsigned long win32_error);
+// The "X:\..." path the export writes under for a local final path, or
+// nullopt when dropping "\\?\" would change what it names.
+std::optional<std::filesystem::path> DrivePathOfFinalPath(std::wstring_view final_path);
+}  // namespace detail
+#endif
+
 // destination must be an absolute, lexically normal path ending in ".zip"
-// whose parent directory exists and which does not exist yet. Item names and
+// whose parent directory exists and which does not exist yet. On Windows the
+// archive is written under the final path of the parent directory, which must
+// be on a local drive (as for ReadUserDataSourceFile). Item names and
 // files must match [a-z0-9_.]+, be unique, and file must not be
 // "manifest.json". With encrypt, every plaintext is encrypted with crypto.
 // Only created_at, app_version and host_version are taken from meta.
@@ -81,8 +116,8 @@ bool WriteBackupArchive(const std::filesystem::path& destination,
                         BackupManifest* written, uint64_t* file_size, BackupError* error);
 
 // Checks run in this order, reporting the first failure:
-// InvalidPath (path rules, or source is not a regular file) / SourceMissing,
-// TooLarge (file over 64 MiB, or ZIP limits), NotArchive (any other ZIP
+// InvalidPath (".zip" and the rules of ReadUserDataSourceFile) /
+// SourceMissing / Io, TooLarge (file over 64 MiB, or ZIP limits), NotArchive (any other ZIP
 // defect), BadManifest (manifest.json absent, unparsable, or without an
 // integer version), UnsupportedVersion, BadManifest (any other field),
 // MissingItem, ChecksumMismatch (all items are verified before any is

@@ -2505,37 +2505,21 @@ std::optional<ipc::Envelope> Dispatcher::HandleImportUserDictionaryText(const ip
     return reply();
   }
 
-  // Step 1.
-  const auto source = core::Utf8Path(parsed->source_path);
-  if (!IsAcceptableUserDataSourcePath(source)) {
-    res.error = "invalid_path";
-    return reply();
-  }
-  std::error_code ec;
-  // symlink_status: a link is refused rather than followed somewhere else.
-  const auto status = std::filesystem::symlink_status(source, ec);
-  if (status.type() == std::filesystem::file_type::not_found) {
-    res.error = "source_missing";
-    return reply();
-  }
-  if (ec || !std::filesystem::is_regular_file(status)) {
-    res.error = "invalid_path";
-    return reply();
-  }
-
-  // Step 2, holding no lock. The plaintext is erased once parsed, and on any
-  // way out.
+  // Steps 1 and 2, holding no lock: the path is checked on the handle the file
+  // is read from. The plaintext is erased once parsed, and on any way out.
   std::string bytes;
   struct EraseOnExit {
     std::string& text;
     ~EraseOnExit() { learning::SecureErase(text); }
   } erase_bytes{bytes};
-  const auto read = learning::ReadUserDictionaryTextFile(source, bytes);
-  if (read != learning::TextImportError::None) {
-    // A file that cannot be read as a regular file is not one the import takes.
-    res.error = read == learning::TextImportError::ReadFailed
-                    ? std::string("invalid_path")
-                    : std::string(learning::TextImportErrorName(read));
+  const auto read = ReadUserDataSourceFile(core::Utf8Path(parsed->source_path),
+                                           learning::kTextImportMaxBytes, bytes);
+  if (read != BackupError::None) {
+    // A file that cannot be opened or read as a regular file is not one the
+    // import takes.
+    res.error = read == BackupError::SourceMissing ? "source_missing"
+                : read == BackupError::TooLarge    ? "too_large"
+                                                   : "invalid_path";
     return reply();
   }
   auto result = learning::ParseUserDictionaryText(bytes, *format);

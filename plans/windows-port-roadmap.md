@@ -2698,7 +2698,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   [`docs/decisions/2026-11-20-onnx-runtime-for-reranker.md`](../docs/decisions/2026-11-20-onnx-runtime-for-reranker.md)。
 - **変更対象**: `reranker/ModernBertScorer.h`、
   `reranker/ModernBertScorerOnnx.cpp`、
-  `models/modernbert-ja-70m.onnx`（新規アセット。repo と MSI には置かず、既定パスへダウンロードする。spec §6）、
+  `models/modernbert-ja-70m/`（新規アセット。repo と MSI には置かず、既定パスへダウンロードする。spec §6）、
   `inference-host/src/Dispatcher.cpp`（ambiguity 判定で起動制御）、
   `docs/modernbert-ja-scoring-spec.md`。
 - **受け入れ条件**:

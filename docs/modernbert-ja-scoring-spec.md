@@ -22,7 +22,7 @@ canonical_for: ["ModernBERT-Ja 候補スコアリング"]
 | §1〜§3 | M57 |
 | §4 | M57（起動条件。M46・M55・M56 に依存する） |
 | §5 | M57（§6.3 の実行 EP 上で実行する） |
-| §6 | M57（ロードゲートと RSS 上限、推論ランタイムと実行 EP。R2 の EP は M24 が前提） |
+| §6 | M57（ロードゲートと RSS 上限、推論ランタイムと実行 EP、モデルの取得と変換。R2 の EP は M24 が前提） |
 | §7 | M57（M56 で予約した `reranker.modernbert*` キーの正典） |
 | §8 | M57（M56 の `final_score` との統合） |
 | §9 | M57（M46 secure 中の完全 OFF） |
@@ -131,7 +131,7 @@ scoring_text に使う文脈は以下で固定する（PLL の forward 量と精
 | `left_context` | 確定済みテキスト末尾から最大 **64 token**（不足時はある分だけ） | 同音異義の弁別に十分かつ forward 量を抑制 |
 | `right_context` | 原則 0 token（IME 入力中は未確定の右文脈が存在しないため） | 逐次入力では右が無い |
 | 文頭処理 | `left_tokens == 0`（先頭・改行直後）では `context_dependency_score=0` で起動抑制（§4.1）。それでも `always` 時は候補単独を scoring_text とする | 文脈ゼロでの誤起動防止 |
-| トークナイザ | ModernBERT-Ja 同梱の WordPiece/BPE。token 数は同トークナイザ基準 | モデルと一致 |
+| トークナイザ | モデルと同じ revision の SentencePiece（`tokenizer.model`、§6.4）。token 数は同トークナイザ基準 | モデルと一致 |
 
 `left_context` は**確定（commit 済み）テキスト**のみを使い、未確定の編集中
 composition は含めない。これにより打鍵ごとに context が揺れず、cache（§5.2）が
@@ -229,15 +229,15 @@ timeout に当たりやすくなるため既定 5 を上限の目安とする。
 | 項目 | 値 |
 |---|---|
 | モデル | `modernbert-ja-70m`（70M params） |
-| 形式 | ONNX FP16 / INT8 量子化 |
-| サイズ | 140MB（FP16） / 80MB（INT8） |
-| 配置 | `%LOCALAPPDATA%\azooKey\models\modernbert-ja-70m.onnx` |
+| 形式 | ONNX FP16 / INT8 量子化（§6.4） |
+| サイズ | 約 141 MB（FP16） / 約 134 MB（INT8） |
+| 配置 | ディレクトリ `%LOCALAPPDATA%\azooKey\models\modernbert-ja-70m\` に `model-fp16.onnx`、`model-int8.onnx`、`tokenizer.model` を置く |
 | 実行 EP | §6.3 で許可した ONNX Runtime の EP |
 
-モデルは MSI に同梱せず、既定パスへダウンロードして配置する（`docs/neural-reranker-spec.md` §7.3）。
+モデルは MSI に同梱せず、既定のディレクトリへダウンロードして配置する（`docs/neural-reranker-spec.md` §7.3）。
 量子化（FP16 / INT8）ごとに別の artifact とする。CPU EP で INT8 の artifact が無ければロードせず、`not_loaded` で fallback する（§4.0 順 4）。
-ダウンロードの経路と catalog の artifact の定義は、モデル資産の Issue（DEV-2156）で決める。
-ベンチ用の manual download スクリプトも同じ Issue で用意する。M45（モデル管理 UI）は前提ではなく、
+製品が変換済みのモデルを取得する経路（配布元の URL、通信先）と catalog の artifact の定義は、DEV-2208 で決める。
+上流の重みを取得して手元で変換する手順は §6.4 が持ち、ベンチと実機の計測はその出力を使う。M45（モデル管理 UI）は前提ではなく、
 完了後の follow-up として GUI 経由のインストール / 切替を統合する位置づけ。
 
 ### 6.1 RSS 許容上限（ロードゲート）
@@ -368,7 +368,7 @@ ModernBERT は M56 と同じ ONNX Runtime で動かす（ランタイム、依�
 CPU EP を許すかは、推定ではなく実測で決める。本 spec は CPU の latency の推定値を持たない。
 
 1. 計測の対象: ONNX Runtime の CPU EP、INT8 の `modernbert-ja-70m`、§5.2 の batch（K=5 の候補単位）、
-   §5.0 の context window。量子化と ONNX への変換の手順はモデル資産の Issue（DEV-2156）で固定したものを使う。
+   §5.0 の context window。量子化と ONNX への変換は §6.4 の手順を使う。
 2. 計測の条件: R1 CPU の baseline と同じクラスの機材（`docs/decisions/2026-08-23-r1-cpu-baseline.md`）で、
    Zenzai（R1 CPU）が動いている状態で測る。ORT のスレッド数は上記の方針で決めた値にする。
 3. 計測の項目: 候補単位の forward の latency（p50 / p95）、K=5 を評価し終えるまでの時間、§6.1 の RSS 増分、
@@ -386,6 +386,73 @@ CPU EP を許すかは、推定ではなく実測で決める。本 spec は CPU
 合格の効く範囲: 合格は計測した機材のクラスでの結果であり、より遅い機材での速さは保証しない。そのため CPU EP では、
 実行時の降格として、1 リクエストで候補を 1 つも評価できずに予算（§5.4）が切れたことを、§5.4 の circuit breaker の
 連続失敗に数える。連続して閾値（既定 3 回）に達すると breaker が開き、以降は `circuit_open` で fallback する。
+
+### 6.4 モデルの取得と変換（決定）
+
+上流の重みから ONNX のモデルを作る手順は `scripts/modernbert_model.py` が持つ。固定する値（上流の repository と
+revision、ファイルのサイズと SHA256、量子化の条件、toolchain、出力のサイズと SHA256）の正典は
+`scripts/modernbert-ja-70m.manifest.json` で、本書は revision と SHA256 を写さない。依存の版は同スクリプトと
+`scripts/modernbert_model.py.lock` が固定する。重みと変換したモデルは repo にも MSI にも置かない。
+帰属は `THIRD_PARTY_LICENSES` が持つ。
+
+**手順**（Windows x64、uv。リポジトリのルートで実行する）
+
+```
+uv run --no-config --locked --script scripts/modernbert_model.py fetch --output-dir <空のディレクトリ>
+uv run --no-config --locked --script scripts/modernbert_model.py convert --input-dir <fetch の出力> --output-dir <空のディレクトリ>
+uv run --no-config --locked --script scripts/modernbert_model.py verify --input-dir <fetch の出力> --model-dir <convert の出力>
+```
+
+| サブコマンド | 内容 | 終了コード |
+|---|---|---|
+| `fetch` | 固定した revision の上流ファイルを `huggingface.co` とその転送先から HTTPS で取得し、サイズと SHA256 が一致するファイルだけを残す | 0 は成功、1 は失敗 |
+| `convert` | 入力を照合し、`model-fp32.onnx`、`model-fp16.onnx`、`model-int8.onnx`、`tokenizer.model` を書いて manifest の記録と比べる。`--record` は比べずに記録を書き換える | 0 は一致または記録、1 は不一致か失敗、2 は manifest に記録が無い |
+| `verify` | 上流の PyTorch モデルと fp32 の ONNX の一致を判定し、fp16 と int8 の CPU EP での実行の可否と fp32 との差を JSON で出す | 0 は合格、1 は不合格（manifest との不一致、fp32 の不一致、int8 の実行の失敗）か、固定値と違う入力やファイルの欠落などの失敗 |
+
+引数の誤りは、どのサブコマンドも 2 で終わる。manifest に出力の記録が無いとき、`verify` は記録との照合を
+省いて残りの項目で判定する。
+
+`fetch` のほかに通信するのは uv で、依存を `pypi.org` と `files.pythonhosted.org` から取得する。固定した版の
+Python が無ければ、uv は Python も取得する（既定の取得元は `releases.astral.sh` で、失敗すると `github.com`。
+uv の版と設定で変わる）。`convert` と `verify` のスクリプトは通信しない。
+`verify` が確かめるのは変換の正しさで、変換品質の合否は §6.3 の計測ゲートと M52 のベンチで判定する。
+
+**モデルの入出力**（fp32、fp16、int8 で同じ）
+
+| 名前 | 型と形 | 内容 |
+|---|---|---|
+| `input_ids`（入力） | int64 `[N, L]` | 1 行が 1 つの masked 文（§5.1）。短い行は `<pad>` で埋める |
+| `attention_mask`（入力） | int64 `[N, L]` | token の位置が 1、`<pad>` の位置が 0 |
+| `mask_positions`（入力） | int64 `[N]` | 各行で logit を取る位置。呼び出し側は `[0, L)` の値を渡す |
+| `logits`（出力） | float32 `[N, 102400]` | 各行の `mask_positions` の位置の語彙全体の logit。log softmax は Host が計算する |
+
+opset は 18 とする。tokenizer は SentencePiece の unigram（語彙に無い文字は byte fallback）で、呼び出し側が
+文頭に `<s>`（ID 1）、文末に `</s>`（ID 2）を付ける。`<pad>` は ID 3、mask に使う `<mask>` は ID 5 である。
+
+**量子化**
+
+- FP16: ONNX Runtime の float16 変換を使い、入出力の型は変えない。
+- INT8: ONNX Runtime の dynamic quantization で MatMul と Gather の重みを 8 bit の整数にする。MatMul の
+  重みは per channel の int8、Gather（embedding）の重みはテンソル全体で 1 つの scale を持つ uint8 になる。
+  FFN の出力側の MatMul（重みの形が 1536×384、層ごとに 1 つ）は fp32 に残す。この層を量子化すると
+  fp32 との差が大きくなるためである。ONNX Runtime 1.32.0 の CPU EP と短文 12 文（スクリプトの
+  `SENTENCE_PAIRS`）の比較では、mask 位置の log 確率の平均絶対差は、すべて量子化すると 1.07、この層を
+  残すと 0.17、ファイルの大きさは約 111 MB と約 134 MB だった。層は重みの形で選び、個数が manifest の値と
+  違えば変換を失敗させる。
+- INT8 では、embedding と decoder が共有する重みが、uint8 の重みと転置した int8 の重みの 2 本になる。
+- INT8 の score は batch の組み方で変わる（dynamic quantization は activation の値の範囲を batch 全体から決める）。
+  §5.2 の候補単位の batch では、同じ入力は同じ batch になる。INT8 の score を比べる計測は batch の組み方をそろえる。
+
+**再現性**
+
+- 同じ SHA256 を得る条件は、manifest に記録した toolchain（platform、Python、package の版、lock の SHA256）と
+  同じであることとする。CPU の機種など、記録していない条件が違う機材での一致は保証しない。
+- 記録する package の版は直接の依存だけである。推移的な依存の版は実行環境から照合しないので、上の手順の
+  `uv run --locked` で実行する。
+- `convert` が不一致で終了したときは、その出力を使わず、表示される記録と実行環境の toolchain を比べる。
+- 版や量子化の条件を変えるときは、lock を更新して `--record` で記録し直し、`verify` に合格することを確かめて、
+  スクリプト、lock、manifest を同じ PR で変える。上流の revision や本節と §6 に書いた値が変わるときは、
+  `THIRD_PARTY_LICENSES` と本書も同じ PR で合わせる。
 
 ## 7. 設定スキーマ
 
@@ -418,6 +485,8 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `rer
   - `always`: 曖昧性ゲート（§4.0 順 7）のみスキップ。secure / circuit breaker /
     RSS / 実行 EP / timeout の安全ゲートは適用され、上限超過時はロードしない
   - `off`: 無効
+- `modernbertModelPath`: モデルのファイルではなく、§6 の配置と同じファイルを持つディレクトリを指す。
+  読むファイルは、ロードする量子化（§6.1）の `.onnx` と `tokenizer.model` である。
 - `modernbertQuantization`: **初期ロード対象**（`fp16` 既定）。RSS 上限超過時は
   §6.1 の降格ラダー（fp16→int8→ロードせず）で実効値が変わりうる。CPU EP では値によらず
   INT8 をロードする（§6.3）。

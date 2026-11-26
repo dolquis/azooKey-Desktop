@@ -988,6 +988,42 @@ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 
+## 取得して使うモデル（同梱・再配布しない）: ModernBERT-Ja-70M
+
+- Source: <https://huggingface.co/sbintuitions/modernbert-ja-70m>
+  （revision `ca49e733a062934aef34312f496fea8f4a0beba8`）
+- License: MIT
+- Copyright: Copyright (c) 2025 SB Intuitions
+- Authors: Hayato Tsukagoshi, Shengzhe Li, Akihiko Fukuchi, Tomohide Shibata（上流のモデルカードの引用情報）
+- azooKey path: なし。`scripts/modernbert_model.py` が指定されたディレクトリへ取得する。固定する
+  ファイルと SHA256 は `scripts/modernbert-ja-70m.manifest.json`
+- Derived: yes。同スクリプトが ONNX へ変換し、FP16 と INT8 に量子化する改変を加える
+  （`docs/modernbert-ja-scoring-spec.md` §6.4）
+- Notes: 上流のモデルカードは、tokenizer と語彙を `sbintuitions/sarashina2-13b` のものとしている。
+  重み、変換したモデル、tokenizer は repo にも配布物にも含めない。
+
+MIT License
+
+Copyright (c) 2025 SB Intuitions
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## 追記の手順（第三者資産を同梱するとき）
 
 新たに第三者由来データ・コードを保守対象ツリーへ同梱する場合は、以下を必ず満たす。

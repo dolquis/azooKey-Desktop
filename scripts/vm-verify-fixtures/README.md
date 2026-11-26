@@ -304,6 +304,7 @@ subst U: Z:\
 | `Z:\`（マップドライブ） | `invalid_path`。export は何も書かない |
 | `U:\`（マップドライブを指す `subst`） | `invalid_path` |
 | `$root\remote\`（UNC を指すディレクトリのシンボリックリンク） | `invalid_path` |
+| `$root\nowhere\`（無い共有を指すディレクトリのシンボリックリンク。管理者の PowerShell で `New-Item -ItemType SymbolicLink -Path "$root\nowhere" -Target '\\localhost\azk-verify-no-such-share'` で作る） | `invalid_path`（`source_missing` や `io` ではない）。export は何も書かない |
 | OneDrive のオンデマンドのファイル（未ダウンロード） | 成功する |
 
 `invalid_path` のときに設定アプリが出す文言も記録する。

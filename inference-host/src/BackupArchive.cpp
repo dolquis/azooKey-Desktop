@@ -138,7 +138,7 @@ class FileHandle {
   HANDLE handle_;
 };
 
-// Opens an existing file or directory. If the path leads to a named pipe, its
+// Opens an existing file for the import. If the path leads to a named pipe, its
 // server may only identify the Host, not impersonate it. CreateFileW reads the
 // SECURITY_SQOS_PRESENT bit as FILE_FLAG_OPEN_NO_RECALL too, which would keep a
 // cloud file from being recalled to be read; CreateFile2 takes the two apart.
@@ -502,9 +502,12 @@ bool CheckDestination(const fs::path& destination, Destination& resolved, Backup
   if (!IsAcceptableArchivePath(destination)) return Fail(error, BackupError::InvalidPath);
   std::error_code ec;
 #ifdef _WIN32
-  resolved.parent.reset(OpenExisting(destination.parent_path(), FILE_LIST_DIRECTORY,
-                                     FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                     FILE_FLAG_BACKUP_SEMANTICS));
+  // Opened without the identification-only QoS of OpenExisting: with it, a
+  // parent on a network share was refused as Io, not InvalidPath, on the CI
+  // runners.
+  resolved.parent.reset(CreateFileW(destination.parent_path().c_str(), FILE_LIST_DIRECTORY,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                    FILE_FLAG_BACKUP_SEMANTICS, nullptr));
   if (!resolved.parent.valid()) {
     const BackupError failure = OpenFailure(GetLastError());
     return Fail(error, failure == BackupError::SourceMissing ? BackupError::InvalidPath : failure);

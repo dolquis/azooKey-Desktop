@@ -77,7 +77,8 @@ bool IsAcceptableUserDataSourcePath(const std::filesystem::path& path);
 // On Windows the file it leads to must be on a local drive: a mapped network
 // drive, or a directory link or junction leading to a network share, is
 // refused. Errors: InvalidPath (path rules, a link, not a regular file, not
-// on a local drive), SourceMissing, TooLarge
+// on a local drive, or a network location whose name or share is not found or
+// whose connection was lost), SourceMissing, TooLarge
 // (over max_bytes, refused before reading), Io (cannot be opened or read, or
 // changed while read). On failure `out` is erased; the caller erases it with
 // SecureErase after use.
@@ -89,6 +90,15 @@ BackupError ReadUserDataSourceFile(const std::filesystem::path& path, size_t max
 // drive ("\\?\X:\..."), not a network share ("\\?\UNC\...") or a volume
 // without a drive letter.
 bool IsLocalDriveFinalPath(std::wstring_view final_path);
+
+namespace detail {
+// Exposed for tests; not an IPC API.
+// The error a Win32 error from opening a named file or directory reports.
+BackupError SourceOpenFailure(unsigned long win32_error);
+// The "X:\..." path the export writes under for a local final path, or
+// nullopt when dropping "\\?\" would change what it names.
+std::optional<std::filesystem::path> DrivePathOfFinalPath(std::wstring_view final_path);
+}  // namespace detail
 #endif
 
 // destination must be an absolute, lexically normal path ending in ".zip"

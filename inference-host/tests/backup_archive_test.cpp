@@ -17,7 +17,12 @@
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/Sha256.h"
 
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#else
 #include <sys/stat.h>
 #endif
 
@@ -468,6 +473,61 @@ TEST(BackupArchiveTest, LocalDriveFinalPathHasADriveLetter) {
   }
 }
 
+// The export writes under the final path without "\\?\" only where dropping
+// it names the same place (learning-data-management-spec section 5).
+TEST(BackupArchiveTest, AFinalPathLosesItsPrefixOnlyWhereItStillNamesTheSamePlace) {
+  const auto written = [](const wchar_t* final_path) -> std::wstring {
+    const auto path = azookey::host::detail::DrivePathOfFinalPath(final_path);
+    return path ? path->native() : L"(refused)";
+  };
+  EXPECT_EQ(written(L"\\\\?\\C:\\a\\b.zip"), L"C:\\a\\b.zip");
+  EXPECT_EQ(written(L"\\\\?\\d:\\a.b\\c d"), L"d:\\a.b\\c d");
+  EXPECT_EQ(written(L"\\\\?\\C:\\CONSOLE\\COM10"), L"C:\\CONSOLE\\COM10");
+  EXPECT_EQ(written(L"\\\\?\\Z:\\"), L"Z:\\");
+  for (const wchar_t* final_path : {
+           // Win32 drops a trailing '.' or ' ' of a component,
+           L"\\\\?\\C:\\a.\\b",
+           L"\\\\?\\C:\\a\\b.",
+           L"\\\\?\\C:\\a \\b",
+           // takes a ':' for a stream, and maps a reserved name, also with an
+           // extension.
+           L"\\\\?\\C:\\a\\b:c",
+           L"\\\\?\\C:\\CON\\b",
+           L"\\\\?\\C:\\a\\nul.txt",
+           L"\\\\?\\C:\\a\\COM1",
+           // Not a local drive, and not a final path.
+           L"\\\\?\\UNC\\server\\share\\a",
+           L"C:\\a\\b",
+       }) {
+    EXPECT_EQ(written(final_path), L"(refused)") << fs::path(final_path).string();
+  }
+}
+
+// learning-data-management-spec section 5: a network location whose name or
+// share is not found, or whose connection was lost, is refused like any other
+// place that is not a local drive; a missing file stays a missing file.
+TEST(BackupArchiveTest, AFailureToOpenIsReportedByItsCause) {
+  const struct {
+    unsigned long win32_error;
+    BackupError expected;
+  } cases[] = {
+      {ERROR_BAD_NETPATH, BackupError::InvalidPath},
+      {ERROR_BAD_NET_NAME, BackupError::InvalidPath},
+      {ERROR_NETNAME_DELETED, BackupError::InvalidPath},
+      {ERROR_FILE_NOT_FOUND, BackupError::SourceMissing},
+      {ERROR_PATH_NOT_FOUND, BackupError::SourceMissing},
+      {ERROR_INVALID_NAME, BackupError::SourceMissing},
+      {ERROR_BAD_PATHNAME, BackupError::SourceMissing},
+      {ERROR_DIRECTORY, BackupError::SourceMissing},
+      {ERROR_ACCESS_DENIED, BackupError::Io},
+      {ERROR_SHARING_VIOLATION, BackupError::Io},
+      {ERROR_LOGON_FAILURE, BackupError::Io},
+  };
+  for (const auto& c : cases) {
+    EXPECT_EQ(azookey::host::detail::SourceOpenFailure(c.win32_error), c.expected) << c.win32_error;
+  }
+}
+
 // A junction among the directories is followed (learning-data-management-spec
 // section 5): the import reads the file it leads to, and the export writes
 // into the directory it leads to.
@@ -532,6 +592,36 @@ TEST(BackupArchiveTest, ANetworkShareReachedThroughADirectoryLinkIsRefused) {
   EXPECT_EQ(WriteError(remote / "written.zip", SampleItems()), BackupError::InvalidPath);
   EXPECT_FALSE(fs::exists(real / "written.zip"));
   fs::remove(remote, ec);  // The link, not its target.
+}
+
+// A directory link leading to a share that does not exist is refused as a
+// network location, not reported as a missing file, for the import, the
+// export and the read the user dictionary import makes
+// (learning-data-management-spec section 5).
+TEST(BackupArchiveTest, AShareThatCannotBeReachedIsRefusedAsANetworkLocation) {
+  TempDir dir;
+  const auto remote = dir.path() / "remote";
+  std::error_code ec;
+  fs::create_directory_symlink(L"\\\\localhost\\azookey-test-no-such-share", remote, ec);
+  if (ec) GTEST_SKIP() << "directory symbolic links are not available: " << ec.message();
+  // Only where the link is evaluated and this machine answers that it has no
+  // such share.
+  const HANDLE probe = CreateFileW((remote / "backup.zip").c_str(), FILE_READ_ATTRIBUTES,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                   OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  const DWORD probe_error = probe == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+  if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
+  if (probe_error != ERROR_BAD_NET_NAME && probe_error != ERROR_BAD_NETPATH) {
+    fs::remove(remote, ec);
+    GTEST_SKIP() << "the share is not reported missing here: error " << probe_error;
+  }
+
+  EXPECT_EQ(ReadError(remote / "backup.zip"), BackupError::InvalidPath);
+  std::string out;
+  EXPECT_EQ(ReadUserDataSourceFile(remote / "dictionary.txt", 16, out), BackupError::InvalidPath);
+  EXPECT_TRUE(out.empty());
+  EXPECT_EQ(WriteError(remote / "written.zip", SampleItems()), BackupError::InvalidPath);
+  fs::remove(remote, ec);  // The link.
 }
 #else
 // A FIFO is refused without blocking on the open.

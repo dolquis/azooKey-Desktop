@@ -138,17 +138,34 @@ class FileHandle {
   HANDLE handle_;
 };
 
-// The errors std::filesystem reports as a missing file (MSVC's
-// __std_is_file_not_found); any other failure to open is no missing file.
+// Opens an existing file or directory. If the path leads to a named pipe, its
+// server may only identify the Host, not impersonate it. CreateFileW reads the
+// SECURITY_SQOS_PRESENT bit as FILE_FLAG_OPEN_NO_RECALL too, which would keep a
+// cloud file from being recalled to be read; CreateFile2 takes the two apart.
+HANDLE OpenExisting(const fs::path& path, DWORD access, DWORD share, DWORD flags) {
+  CREATEFILE2_EXTENDED_PARAMETERS params{};
+  params.dwSize = sizeof(params);
+  params.dwFileFlags = flags;
+  params.dwSecurityQosFlags = SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION;
+  return CreateFile2(path.c_str(), access, share, OPEN_EXISTING, &params);
+}
+
+// A failure to open a named file. A network location whose name or share is
+// not found, or whose connection was lost, is no local drive
+// (learning-data-management-spec section 5). The other errors
+// std::filesystem reports as a missing file (MSVC's __std_is_file_not_found)
+// are a missing file; any other failure to open is no missing file.
 BackupError OpenFailure(DWORD error) {
   switch (error) {
+    case ERROR_BAD_NETPATH:
+    case ERROR_BAD_NET_NAME:
+    case ERROR_NETNAME_DELETED:
+      return BackupError::InvalidPath;
     case ERROR_FILE_NOT_FOUND:
     case ERROR_PATH_NOT_FOUND:
-    case ERROR_BAD_NETPATH:
     case ERROR_INVALID_NAME:
     case ERROR_BAD_PATHNAME:
     case ERROR_DIRECTORY:
-    case ERROR_NETNAME_DELETED:
       return BackupError::SourceMissing;
     default:
       return BackupError::Io;
@@ -188,9 +205,9 @@ bool IsLocalDiskHandle(HANDLE handle) {
 // deduplicated or compressed file) are files and are read.
 BackupError OpenSourceFile(const fs::path& path, FileHandle& out) {
   // FILE_FLAG_OPEN_REPARSE_POINT opens a link itself, to look at it.
-  FileHandle link(CreateFileW(
-      path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-      nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+  FileHandle link(OpenExisting(path, FILE_READ_ATTRIBUTES,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS));
   if (!link.valid()) return OpenFailure(GetLastError());
   FILE_ATTRIBUTE_TAG_INFO tag{};
   if (!GetFileInformationByHandleEx(link.get(), FileAttributeTagInfo, &tag, sizeof(tag))) {
@@ -202,8 +219,8 @@ BackupError OpenSourceFile(const fs::path& path, FileHandle& out) {
     return BackupError::InvalidPath;
   }
   // Opened again to read through the reparse points that are files.
-  FileHandle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+  FileHandle file(OpenExisting(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               FILE_FLAG_SEQUENTIAL_SCAN));
   if (!file.valid()) return OpenFailure(GetLastError());
   // The same file as the one looked at: a link put in its place in between
   // is not followed.
@@ -476,16 +493,18 @@ struct Destination {
 // creates missing parent directories and replaces an existing target.
 // On Windows the archive is written under the final path of the parent
 // directory, which must be on a local drive: a junction or link among the
-// directories can neither lead to a network share nor be pointed elsewhere
-// after this check. The parent is held open without sharing delete, so it
-// cannot be renamed or deleted until the commit.
+// directories cannot lead to a network share. The parent is held open without
+// sharing delete, so it cannot be renamed or deleted until the commit. The
+// archive is still written and committed by path, not through this handle,
+// and the parent shares write: an empty parent can be made a junction after
+// this check, and the archive then goes where the junction leads.
 bool CheckDestination(const fs::path& destination, Destination& resolved, BackupError* error) {
   if (!IsAcceptableArchivePath(destination)) return Fail(error, BackupError::InvalidPath);
   std::error_code ec;
 #ifdef _WIN32
-  resolved.parent.reset(CreateFileW(destination.parent_path().c_str(), FILE_LIST_DIRECTORY,
-                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-                                    FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+  resolved.parent.reset(OpenExisting(destination.parent_path(), FILE_LIST_DIRECTORY,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                     FILE_FLAG_BACKUP_SEMANTICS));
   if (!resolved.parent.valid()) {
     const BackupError failure = OpenFailure(GetLastError());
     return Fail(error, failure == BackupError::SourceMissing ? BackupError::InvalidPath : failure);
@@ -678,6 +697,16 @@ bool IsLocalDriveFinalPath(std::wstring_view final_path) {
   return is_letter && final_path[kPrefix.size() + 1] == L':' &&
          final_path[kPrefix.size() + 2] == L'\\';
 }
+
+namespace detail {
+BackupError SourceOpenFailure(unsigned long win32_error) {
+  return backup_archive_detail::OpenFailure(win32_error);
+}
+
+std::optional<std::filesystem::path> DrivePathOfFinalPath(std::wstring_view final_path) {
+  return backup_archive_detail::DrivePathOf(final_path);
+}
+}  // namespace detail
 #endif
 
 std::string_view BackupErrorCode(BackupError error) {

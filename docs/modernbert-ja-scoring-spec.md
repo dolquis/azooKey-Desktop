@@ -434,11 +434,18 @@ opset は 18 とする。tokenizer は SentencePiece の unigram（語彙に無�
 - FP16: ONNX Runtime の float16 変換を使い、入出力の型は変えない。
 - INT8: ONNX Runtime の dynamic quantization で MatMul と Gather の重みを 8 bit の整数にする。MatMul の
   重みは per channel の int8、Gather（embedding）の重みはテンソル全体で 1 つの scale を持つ uint8 になる。
-  FFN の出力側の MatMul（重みの形が 1536×384、層ごとに 1 つ）は fp32 に残す。この層を量子化すると
-  fp32 との差が大きくなるためである。ONNX Runtime 1.32.0 の CPU EP と短文 12 文（スクリプトの
-  `SENTENCE_PAIRS`）の比較では、mask 位置の log 確率の平均絶対差は、すべて量子化すると 1.07、この層を
-  残すと 0.17、ファイルの大きさは約 111 MB と約 134 MB だった。層は重みの形で選び、個数が manifest の値と
-  違えば変換を失敗させる。
+  FFN の出力側の MatMul（重みの形が 1536×384、層ごとに 1 つ）は fp32 に残す。層は重みの形で選び、
+  個数が manifest の値と違えば変換を失敗させる。
+- この層を fp32 に残すのは、量子化すると fp32 との差が大きくなるためである。比較は ONNX Runtime 1.32.0 の
+  CPU EP で、短文 12 文（スクリプトの `SENTENCE_PAIRS`）の special token を除く各位置を mask し、
+  1 つの batch にして行った。位置の差は mask 位置の log 確率の絶対差の平均である。score の差は、文ごとに
+  この log 確率を足した値の絶対差の最大で、§5.1 の `modernbert_score` とは足す範囲と割り方が違う。
+
+  | 量子化する重み | ファイルの大きさ | 位置の差 | score の差 |
+  |---|---|---|---|
+  | MatMul と Gather のすべて | 110.9 MB | 1.07 | 8.0 |
+  | FFN の出力側の MatMul を除く（採用） | 133.8 MB | 0.17 | 1.6 |
+
 - INT8 では、embedding と decoder が共有する重みが、uint8 の重みと転置した int8 の重みの 2 本になる。
 - INT8 の score は batch の組み方で変わる（dynamic quantization は activation の値の範囲を batch 全体から決める）。
   §5.2 の候補単位の batch では、同じ入力は同じ batch になる。INT8 の score を比べる計測は batch の組み方をそろえる。

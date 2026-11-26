@@ -325,20 +325,23 @@ class ConvertPinTests(TemporaryDirectoryTest):
         self.assertFalse(self.manifest_path.exists())
 
     def test_a_model_that_names_a_local_path_is_rejected(self):
+        # The temporary directory may be under the real home, which would hide the other checks.
+        home = self.root / "home"
         leaks = {
             "input": str(self.input),
             "output, forward slashes": (self.root / "output-1").as_posix(),
-            "home, other case": str(Path.home()).upper(),
+            "home, other case": str(home).upper(),
             "packages": "lib/site-packages/torch",
         }
         for index, (name, text) in enumerate(leaks.items()):
             directory = f"output-{index}"
             self.fp16 = b"\x08\x0a" + text.encode("utf-8") + b"\x00"
-            with self.subTest(name), \
-                    self.assertRaisesRegex(MODEL.ModelError, MODEL.FP16_NAME):
-                self.convert(directory, record=True)
-            self.assertEqual(self.names(directory), [])
-            self.assertFalse(self.manifest_path.exists())
+            self.manifest_path.unlink(missing_ok=True)
+            with self.subTest(name), mock.patch.object(MODEL.Path, "home", return_value=home):
+                with self.assertRaisesRegex(MODEL.ModelError, MODEL.FP16_NAME):
+                    self.convert(directory, record=True)
+                self.assertEqual(self.names(directory), [])
+                self.assertFalse(self.manifest_path.exists())
 
     def test_output_directory_with_files_is_left_alone(self):
         used = self.root / "used"

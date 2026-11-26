@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "sbintuitions/modernbert-ja-70m",
+    "revision": "ca49e733a062934aef34312f496fea8f4a0beba8",
+    "license": "MIT",
+    "files": [
+      {
+        "name": "LICENSE",
+        "sizeBytes": 1070,
+        "sha256": "284353c80e0d52c06e97af62fd40e4dd1d253fa28f5d1e756121ea1d5d441509"
+      },
+      {
+        "name": "config.json",
+        "sizeBytes": 1278,
+        "sha256": "beee64d07000f7fd4edf13dfaee6319c38a4f6b446f761ea0a7cac3e7976521a"
+      },
+      {
+        "name": "model.safetensors",
+        "sizeBytes": 281020736,
+        "sha256": "3640f22d6ee83fef5452267ff56ffbd3cbcabb122aea79f79286c4a186c7fb94"
+      },
+      {
+        "name": "tokenizer.model",
+        "sizeBytes": 1831879,
+        "sha256": "008293028e1a9d9a1038d9b63d989a2319797dfeaa03f171093a57b33a3a8277"
+      }
+    ]
+  },
+  "conversion": {
+    "opset": 18,
+    "int8": {
+      "operators": [
+        "MatMul",
+        "Gather"
+      ],
+      "weightType": "QInt8",
+      "perChannel": true,
+      "fp32LinearWeightShape": [
+        1536,
+        384
+      ],
+      "fp32LinearCount": 13
+    },
+    "toolchain": {
+      "platform": "win32-AMD64",
+      "python": "3.13.13",
+      "packages": {
+        "numpy": "2.5.5",
+        "onnx": "1.23.2",
+        "onnxruntime": "1.32.0",
+        "onnxscript": "0.7.2",
+        "safetensors": "0.8.0",
+        "sentencepiece": "0.2.3",
+        "torch": "2.15.0",
+        "transformers": "4.57.6"
+      },
+      "lockSha256": "fc823c507e93e7b214c799cd2889707fe15c98d0ec51496e5b4e34bed9b15208"
+    },
+    "outputs": [
+      {
+        "fileName": "model-fp32.onnx",
+        "sizeBytes": 281095331,
+        "sha256": "42249cbbb555324f99a970c7e64acffbb820ddaf35217e8f7ab7d973063df4d0"
+      },
+      {
+        "fileName": "model-fp16.onnx",
+        "sizeBytes": 140589183,
+        "sha256": "202d63dba0e367577b5afcb2a861fd7aba35df6244ec82a94215cc5cb0cf177c"
+      },
+      {
+        "fileName": "model-int8.onnx",
+        "sizeBytes": 133841671,
+        "sha256": "7ea8e3fa2737503c808b09d6f7e2e8747b181aaa319735ce46aac6e40fdaced2"
+      },
+      {
+        "fileName": "tokenizer.model",
+        "sizeBytes": 1831879,
+        "sha256": "008293028e1a9d9a1038d9b63d989a2319797dfeaa03f171093a57b33a3a8277"
+      }
+    ]
+  }
+}

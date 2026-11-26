@@ -19,11 +19,13 @@ The pins (upstream files, toolchain, output digests) live in the manifest next t
 this file; docs/modernbert-ja-scoring-spec.md describes the model contract.
 
     uv run --no-config --locked --script scripts/modernbert_model.py \
-        fetch --output-dir <empty dir>
+        fetch --output-dir build/modernbert/input
     uv run --no-config --locked --script scripts/modernbert_model.py \
-        convert --input-dir <fetched dir> --output-dir <empty dir>
+        convert --input-dir build/modernbert/input --output-dir build/modernbert/model
     uv run --no-config --locked --script scripts/modernbert_model.py \
-        verify --input-dir <fetched dir> --model-dir <converted dir>
+        verify --input-dir build/modernbert/input --model-dir build/modernbert/model
+
+An output directory must be new or empty.
 
 Only the standard library is imported at module level.
 """
@@ -31,6 +33,7 @@ Only the standard library is imported at module level.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import http.client
 import importlib.metadata
@@ -203,7 +206,15 @@ def check_file(path: Path, size: int, digest: str) -> None:
 
 
 def check_inputs(manifest: dict, input_dir: Path) -> None:
-    for entry in manifest["source"]["files"]:
+    entries = manifest["source"]["files"]
+    if not input_dir.is_dir():
+        raise ModelError(f"{input_dir} is not a directory")
+    # The model loader may read other files in the directory.
+    pinned = {entry["name"] for entry in entries}
+    unpinned = sorted(path.name for path in input_dir.iterdir() if path.name not in pinned)
+    if unpinned:
+        raise ModelError(f"{input_dir} holds files that are not pinned: {', '.join(unpinned)}")
+    for entry in entries:
         check_file(input_dir / entry["name"], entry["sizeBytes"], entry["sha256"])
 
 
@@ -211,6 +222,19 @@ def require_new_directory(path: Path) -> None:
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         raise ModelError(f"{path} must be a new or empty directory")
     path.mkdir(parents=True, exist_ok=True)
+
+
+def publish(staging: Path, output_dir: Path, names) -> None:
+    """Give the finished files their final names: all of them, or none."""
+    moved = []
+    try:
+        for name in names:
+            os.replace(staging / name, output_dir / name)
+            moved.append(output_dir / name)
+    except BaseException:
+        for path in moved:
+            path.unlink(missing_ok=True)
+        raise
 
 
 # --- fetch ------------------------------------------------------------------
@@ -251,11 +275,16 @@ def download(url: str, destination: Path, size: int, digest: str, opener=None) -
 
 def fetch(manifest: dict, output_dir: Path) -> None:
     require_new_directory(output_dir)
-    for entry in manifest["source"]["files"]:
-        print(f"fetch {entry['name']} ({entry['sizeBytes']} bytes)", flush=True)
-        download(source_url(manifest, entry["name"]), output_dir / entry["name"],
-                 entry["sizeBytes"], entry["sha256"])
-    print(f"fetched {len(manifest['source']['files'])} files into {output_dir}")
+    entries = manifest["source"]["files"]
+    # A failed run leaves output_dir empty, so the same command can be run again.
+    with tempfile.TemporaryDirectory(dir=output_dir) as temporary:
+        staging = Path(temporary)
+        for entry in entries:
+            print(f"fetch {entry['name']} ({entry['sizeBytes']} bytes)", flush=True)
+            download(source_url(manifest, entry["name"]), staging / entry["name"],
+                     entry["sizeBytes"], entry["sha256"])
+        publish(staging, output_dir, [entry["name"] for entry in entries])
+    print(f"fetched {len(entries)} files into {output_dir}")
 
 
 # --- environment ------------------------------------------------------------
@@ -419,6 +448,10 @@ def fp32_linear_nodes(graph, shape: list[int], count: int) -> list[str]:
     if len(names) != count:
         raise ModelError(
             f"expected {count} MatMul nodes with a {shape} weight, found {len(names)}")
+    # The quantizer excludes by name, so each name must point at exactly one node.
+    uses = Counter(node.name for node in graph.node)
+    if any(not name or uses[name] != 1 for name in names):
+        raise ModelError("every MatMul node that stays in fp32 needs a name of its own")
     return names
 
 
@@ -466,6 +499,19 @@ def output_differences(recorded: list[dict], actual: list[dict]) -> list[str]:
     return differences
 
 
+def check_no_local_paths(models: list[Path], directories: list[Path]) -> None:
+    """Fail when a serialized model names a directory of this machine."""
+    texts = {"site-packages"}
+    for directory in directories:
+        texts.update((str(directory), directory.as_posix()))
+    for model in models:
+        # Windows paths ignore case.
+        data = model.read_bytes().lower()
+        found = sorted(text for text in texts if text.encode("utf-8").lower() in data)
+        if found:
+            raise ModelError(f"{model.name} contains local path text: {', '.join(found)}")
+
+
 def write_manifest(manifest: dict, path: Path = MANIFEST_PATH) -> None:
     text = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     temporary = path.with_name(path.name + ".part")
@@ -478,40 +524,46 @@ def convert(manifest: dict, input_dir: Path, output_dir: Path, record: bool,
     check_inputs(manifest, input_dir)
     toolchain = current_toolchain()
     require_new_directory(output_dir)
+    # Nothing gets its final name until every output exists and is accepted.
     with tempfile.TemporaryDirectory(dir=output_dir) as temporary:
-        work_dir = Path(temporary)
+        staging = Path(temporary)
         print("export fp32", flush=True)
-        export_fp32(manifest, input_dir, work_dir, output_dir / FP32_NAME)
+        export_fp32(manifest, input_dir, staging, staging / FP32_NAME)
         print("convert fp16", flush=True)
-        convert_fp16(output_dir / FP32_NAME, output_dir / FP16_NAME)
+        convert_fp16(staging / FP32_NAME, staging / FP16_NAME)
         print("quantize int8", flush=True)
-        convert_int8(manifest["conversion"]["int8"], output_dir / FP32_NAME, work_dir,
-                     output_dir / INT8_NAME)
-    shutil.copyfile(input_dir / TOKENIZER_NAME, output_dir / TOKENIZER_NAME)
-    outputs = describe_outputs(output_dir)
-    for entry in outputs:
-        print(f"{entry['fileName']}: {entry['sizeBytes']} bytes, sha256 {entry['sha256']}")
+        convert_int8(manifest["conversion"]["int8"], staging / FP32_NAME, staging,
+                     staging / INT8_NAME)
+        check_no_local_paths(
+            [staging / name for name in (FP32_NAME, FP16_NAME, INT8_NAME)],
+            [input_dir, output_dir, Path.home()])
+        shutil.copyfile(input_dir / TOKENIZER_NAME, staging / TOKENIZER_NAME)
+        outputs = describe_outputs(staging)
+        for entry in outputs:
+            print(f"{entry['fileName']}: {entry['sizeBytes']} bytes, sha256 {entry['sha256']}")
 
-    if record:
-        manifest["conversion"]["toolchain"] = toolchain
-        manifest["conversion"]["outputs"] = outputs
-        write_manifest(manifest, manifest_path)
-        print(f"recorded the outputs in {manifest_path.name}")
-        return 0
-    recorded = manifest["conversion"]["outputs"]
-    if not recorded:
-        print("the manifest has no recorded outputs; rerun with --record to pin them",
-              file=sys.stderr)
-        return 2
-    differences = output_differences(recorded, outputs)
-    if differences:
-        print("the outputs do not match the manifest:", file=sys.stderr)
-        for line in differences:
-            print(f"  {line}", file=sys.stderr)
-        print(f"  recorded toolchain: {json.dumps(manifest['conversion']['toolchain'])}",
-              file=sys.stderr)
-        print(f"  current toolchain:  {json.dumps(toolchain)}", file=sys.stderr)
-        return 1
+        if record:
+            manifest["conversion"]["toolchain"] = toolchain
+            manifest["conversion"]["outputs"] = outputs
+            write_manifest(manifest, manifest_path)
+            publish(staging, output_dir, OUTPUT_NAMES)
+            print(f"recorded the outputs in {manifest_path.name}")
+            return 0
+        recorded = manifest["conversion"]["outputs"]
+        if not recorded:
+            print("the manifest has no recorded outputs, so none was kept; "
+                  "rerun with --record to pin them", file=sys.stderr)
+            return 2
+        differences = output_differences(recorded, outputs)
+        if differences:
+            print("the outputs do not match the manifest, so none was kept:", file=sys.stderr)
+            for line in differences:
+                print(f"  {line}", file=sys.stderr)
+            print(f"  recorded toolchain: {json.dumps(manifest['conversion']['toolchain'])}",
+                  file=sys.stderr)
+            print(f"  current toolchain:  {json.dumps(toolchain)}", file=sys.stderr)
+            return 1
+        publish(staging, output_dir, OUTPUT_NAMES)
     print("all outputs match the manifest")
     return 0
 

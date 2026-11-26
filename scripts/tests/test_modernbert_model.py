@@ -213,11 +213,16 @@ class DownloadTests(TemporaryDirectoryTest):
         self.assertTrue(any(isinstance(handler, MODEL._HttpsOnlyRedirect)
                             for handler in build.call_args.args))
 
-    def test_fetch_requests_each_pinned_file_at_the_revision(self):
-        manifest = MODEL.load_manifest()
-        with mock.patch.object(MODEL, "download") as download, \
+    def fetch(self, manifest, side_effect):
+        with mock.patch.object(MODEL, "download", side_effect=side_effect) as download, \
                 contextlib.redirect_stdout(io.StringIO()):
             MODEL.fetch(manifest, self.root / "input")
+        return download
+
+    def test_fetch_requests_each_pinned_file_at_the_revision(self):
+        manifest = MODEL.load_manifest()
+        download = self.fetch(
+            manifest, lambda url, destination, size, digest: destination.write_bytes(b"x"))
         prefix = ("https://huggingface.co/sbintuitions/modernbert-ja-70m/resolve/"
                   f"{manifest['source']['revision']}/")
         self.assertEqual([call.args[0] for call in download.call_args_list],
@@ -225,6 +230,31 @@ class DownloadTests(TemporaryDirectoryTest):
         self.assertEqual([call.args[2:] for call in download.call_args_list],
                          [(entry["sizeBytes"], entry["sha256"])
                           for entry in manifest["source"]["files"]])
+        self.assertEqual(sorted(path.name for path in (self.root / "input").iterdir()),
+                         sorted(SOURCE_FILES))
+
+    def test_a_failed_fetch_leaves_the_output_directory_empty(self):
+        def second_file_fails(url, destination, size, digest):
+            if url.endswith("config.json"):
+                raise MODEL.ModelError("config.json: download failed")
+            destination.write_bytes(b"x")
+
+        manifest = MODEL.load_manifest()
+        with self.assertRaises(MODEL.ModelError):
+            self.fetch(manifest, second_file_fails)
+        self.assertEqual(list((self.root / "input").iterdir()), [])
+        # The same directory can be used for the next attempt.
+        self.fetch(manifest, lambda url, destination, size, digest: destination.write_bytes(b"x"))
+        self.assertEqual(len(list((self.root / "input").iterdir())), len(SOURCE_FILES))
+
+    def test_publish_moves_every_file_or_none(self):
+        staging, output = self.root / "staging", self.root / "output"
+        staging.mkdir()
+        output.mkdir()
+        (staging / "first").write_bytes(b"x")
+        with self.assertRaises(OSError):
+            MODEL.publish(staging, output, ["first", "absent"])
+        self.assertEqual(list(output.iterdir()), [])
 
 
 class ConvertPinTests(TemporaryDirectoryTest):
@@ -257,11 +287,16 @@ class ConvertPinTests(TemporaryDirectoryTest):
             return MODEL.convert(self.manifest, self.input, self.root / directory, record,
                                  self.manifest_path)
 
+    def names(self, directory):
+        return sorted(path.name for path in (self.root / directory).iterdir())
+
     def test_unrecorded_then_recorded_then_matching_then_different(self):
         self.assertEqual(self.convert("first"), 2)
         self.assertFalse(self.manifest_path.exists())
+        self.assertEqual(self.names("first"), [])
 
         self.assertEqual(self.convert("second", record=True), 0)
+        self.assertEqual(self.names("second"), sorted(MODEL.OUTPUT_NAMES))
         recorded = json.loads(self.manifest_path.read_text(encoding="utf-8"))["conversion"]
         self.assertEqual(recorded["toolchain"], {"python": "test"})
         self.assertEqual([entry["fileName"] for entry in recorded["outputs"]],
@@ -269,8 +304,7 @@ class ConvertPinTests(TemporaryDirectoryTest):
         self.assertNotIn(b"\r", self.manifest_path.read_bytes())
 
         self.assertEqual(self.convert("third"), 0)
-        self.assertEqual(sorted(path.name for path in (self.root / "third").iterdir()),
-                         sorted(MODEL.OUTPUT_NAMES))
+        self.assertEqual(self.names("third"), sorted(MODEL.OUTPUT_NAMES))
 
         self.fp16 = b"changed"
         written = self.manifest_path.read_bytes()
@@ -278,6 +312,33 @@ class ConvertPinTests(TemporaryDirectoryTest):
         self.assertIn(MODEL.FP16_NAME, self.stderr.getvalue())
         self.assertNotIn(MODEL.INT8_NAME, self.stderr.getvalue())
         self.assertEqual(self.manifest_path.read_bytes(), written)
+        self.assertEqual(self.names("fourth"), [])
+
+    def test_a_conversion_that_raises_keeps_no_output(self):
+        def fail(settings, source, work, to):
+            raise MODEL.ModelError("quantization failed")
+
+        with mock.patch.object(MODEL, "convert_int8", fail), \
+                self.assertRaisesRegex(MODEL.ModelError, "quantization failed"):
+            self.convert("output", record=True)
+        self.assertEqual(self.names("output"), [])
+        self.assertFalse(self.manifest_path.exists())
+
+    def test_a_model_that_names_a_local_path_is_rejected(self):
+        leaks = {
+            "input": str(self.input),
+            "output, forward slashes": (self.root / "output-1").as_posix(),
+            "home, other case": str(Path.home()).upper(),
+            "packages": "lib/site-packages/torch",
+        }
+        for index, (name, text) in enumerate(leaks.items()):
+            directory = f"output-{index}"
+            self.fp16 = b"\x08\x0a" + text.encode("utf-8") + b"\x00"
+            with self.subTest(name), \
+                    self.assertRaisesRegex(MODEL.ModelError, MODEL.FP16_NAME):
+                self.convert(directory, record=True)
+            self.assertEqual(self.names(directory), [])
+            self.assertFalse(self.manifest_path.exists())
 
     def test_output_directory_with_files_is_left_alone(self):
         used = self.root / "used"
@@ -306,6 +367,24 @@ class ModelDirectoryTests(TemporaryDirectoryTest):
         export.assert_not_called()
         self.assertFalse(output.exists())
 
+    def test_inputs_must_be_exactly_the_pinned_files(self):
+        manifest = MODEL.load_manifest()
+        for entry in manifest["source"]["files"]:
+            data = entry["name"].encode()
+            entry["sizeBytes"], entry["sha256"] = pin(data)
+            (self.root / entry["name"]).write_bytes(data)
+        MODEL.check_inputs(manifest, self.root)
+        extra = self.root / "modeling_modernbert.py"
+        extra.write_bytes(b"x")
+        with self.assertRaisesRegex(MODEL.ModelError, extra.name):
+            MODEL.check_inputs(manifest, self.root)
+        extra.unlink()
+        (self.root / "nested").mkdir()
+        with self.assertRaisesRegex(MODEL.ModelError, "nested"):
+            MODEL.check_inputs(manifest, self.root)
+        with self.assertRaises(MODEL.ModelError):
+            MODEL.check_inputs(manifest, self.root / "absent")
+
     def test_a_missing_output_file_is_reported_by_name(self):
         (self.root / MODEL.FP32_NAME).write_bytes(b"fp32")
         with self.assertRaisesRegex(MODEL.ModelError, MODEL.FP16_NAME):
@@ -330,6 +409,15 @@ class GraphSelectionTests(unittest.TestCase):
         for count in (0, 2):
             with self.subTest(count=count), self.assertRaises(MODEL.ModelError):
                 MODEL.fp32_linear_nodes(self.graph, [1536, 384], count)
+
+    def test_a_selected_node_needs_a_name_of_its_own(self):
+        # (index of the renamed node, new name): empty, or shared with a node that is not selected.
+        for index, name in ((0, ""), (0, "second"), (2, "first")):
+            graph = copy.deepcopy(self.graph)
+            graph.node[index].name = name
+            with self.subTest(index=index, name=name), \
+                    self.assertRaisesRegex(MODEL.ModelError, "name of its own"):
+                MODEL.fp32_linear_nodes(graph, [1536, 384], 1)
 
 
 class MaskedPositionTests(unittest.TestCase):

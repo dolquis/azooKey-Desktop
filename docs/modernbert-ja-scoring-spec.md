@@ -398,19 +398,25 @@ revision、ファイルのサイズと SHA256、量子化の条件、toolchain�
 **手順**（Windows x64、uv。リポジトリのルートで実行する）
 
 ```
-uv run --no-config --locked --script scripts/modernbert_model.py fetch --output-dir <空のディレクトリ>
-uv run --no-config --locked --script scripts/modernbert_model.py convert --input-dir <fetch の出力> --output-dir <空のディレクトリ>
-uv run --no-config --locked --script scripts/modernbert_model.py verify --input-dir <fetch の出力> --model-dir <convert の出力>
+uv run --no-config --locked --script scripts/modernbert_model.py fetch --output-dir build/modernbert/input
+uv run --no-config --locked --script scripts/modernbert_model.py convert --input-dir build/modernbert/input --output-dir build/modernbert/model
+uv run --no-config --locked --script scripts/modernbert_model.py verify --input-dir build/modernbert/input --model-dir build/modernbert/model
 ```
+
+`fetch` と `convert` の出力先は、新しいか空のディレクトリにする。§6 の配置先へ運ぶのは `model-int8.onnx`、
+`model-fp16.onnx`、`tokenizer.model` の 3 つで、`model-fp32.onnx` は運ばない。`convert` の出力先を配置先の
+ディレクトリに直接向けない。
 
 | サブコマンド | 内容 | 終了コード |
 |---|---|---|
-| `fetch` | 固定した revision の上流ファイルを `huggingface.co` とその転送先から HTTPS で取得し、サイズと SHA256 が一致するファイルだけを残す | 0 は成功、1 は失敗 |
-| `convert` | 入力を照合し、`model-fp32.onnx`、`model-fp16.onnx`、`model-int8.onnx`、`tokenizer.model` を書いて manifest の記録と比べる。`--record` は比べずに記録を書き換える | 0 は一致または記録、1 は不一致か失敗、2 は manifest に記録が無い |
+| `fetch` | 固定した revision の上流ファイルを `huggingface.co` とその転送先から HTTPS で取得し、全ファイルのサイズと SHA256 が一致したときだけ出力先に残す | 0 は成功、1 は失敗 |
+| `convert` | 入力を照合し、`model-fp32.onnx`、`model-fp16.onnx`、`model-int8.onnx`、`tokenizer.model` を一時ディレクトリに作り、manifest の記録と一致したときだけ出力先に残す。`--record` は比べずに記録を書き換えて残す | 0 は一致または記録、1 は不一致か失敗、2 は manifest に記録が無い |
 | `verify` | 上流の PyTorch モデルと fp32 の ONNX の一致を判定し、fp16 と int8 の CPU EP での実行の可否と fp32 との差を JSON で出す | 0 は合格、1 は不合格（manifest との不一致、fp32 の不一致、int8 の実行の失敗）か、固定値と違う入力やファイルの欠落などの失敗 |
 
 引数の誤りは、どのサブコマンドも 2 で終わる。manifest に出力の記録が無いとき、`verify` は記録との照合を
-省いて残りの項目で判定する。
+省いて残りの項目で判定する。`convert` と `verify` は、入力のディレクトリに固定したファイル以外があれば
+失敗する。`convert` は、`.onnx` に入力・出力・ホームのディレクトリのパスか `site-packages` の文字列が
+含まれる場合も失敗する。
 
 `fetch` のほかに通信するのは uv で、依存を `pypi.org` と `files.pythonhosted.org` から取得する。固定した版の
 Python が無ければ、uv は Python も取得する（既定の取得元は `releases.astral.sh` で、失敗すると `github.com`。
@@ -456,7 +462,7 @@ opset は 18 とする。tokenizer は SentencePiece の unigram（語彙に無�
   同じであることとする。CPU の機種など、記録していない条件が違う機材での一致は保証しない。
 - 記録する package の版は直接の依存だけである。推移的な依存の版は実行環境から照合しないので、上の手順の
   `uv run --locked` で実行する。
-- `convert` が不一致で終了したときは、その出力を使わず、表示される記録と実行環境の toolchain を比べる。
+- `convert` が不一致で終了したときは、表示される出力の差と、記録と実行環境の toolchain を比べる。
 - 版や量子化の条件を変えるときは、lock を更新して `--record` で記録し直し、`verify` に合格することを確かめて、
   スクリプト、lock、manifest を同じ PR で変える。上流の revision や本節と §6 に書いた値が変わるときは、
   `THIRD_PARTY_LICENSES` と本書も同じ PR で合わせる。

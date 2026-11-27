@@ -240,7 +240,8 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 が持つ。
 - `secure` は入力欄が secure かを表す任意フィールドで、欠落と bool 以外の値は true（secure）とする。
   TIP は secure でない入力の要求にだけ false を載せる。Host は true の要求に英単語候補を加えず、
-  `mode=ai-cleanup` でも AI backend を呼ばない（§5）。
+  読みを補正せず（`docs/typo-correction-learning-spec.md` §12.12.2）、`mode=ai-cleanup` でも
+  AI backend を呼ばない（§5）。
   secure の入力では、TIP は生ローマ字で読みを分割したうえで、送る要求に `raw_romaji` を載せない
   （`mode=ai-cleanup` の必須条件は、secure では AI 整文が無効になるので当たらない。`raw_romaji` の無い
   `ai-cleanup` は Host が backend を `none` にして `neural` へ戻す）。

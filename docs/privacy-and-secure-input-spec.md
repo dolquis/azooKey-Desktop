@@ -276,8 +276,8 @@ TIP の学習フラグは `!secure`、グローバルモードの学習許可、
 batch の学習対象条件をすべて満たす場合に
 `learning_allowed = true` とする。グローバルの private / custom による禁止は
 app profile の `privacyMode = normal` でも解除できない。
-`QueryCandidates` にも両フラグを載せるが、Host の候補要求処理はどちらも
-補正適用の判定には用いない。M55 の補正適用ゲートは別の機能契約とする。wire 契約は
+`QueryCandidates` にも両フラグを載せる。Host の候補要求処理は `secure` が true の要求を補正せず、
+`learning_allowed` は補正適用の判定に用いない（`docs/typo-correction-learning-spec.md` §12.12.2）。wire 契約は
 `docs/typo-correction-learning-spec.md` §12.13 と payload 定義を参照する。
 
 Host は `SettingsStore::LockPrivacyPolicy()` の `PrivacyGuard` を学習判定から

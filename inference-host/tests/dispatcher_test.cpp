@@ -5896,8 +5896,7 @@ TEST_F(DispatcherTest, EngineSafeModeStopsLearningWithoutTheSettingsOverride) {
   EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
   EXPECT_EQ(typo.ReadingPairs().size(), 0u);
   EXPECT_FALSE(std::filesystem::exists(mining_path));
-  EXPECT_FALSE(
-      std::filesystem::exists(azookey::learning::EncryptedPathFor(typo.paths().v2_store)));
+  EXPECT_FALSE(std::filesystem::exists(azookey::learning::EncryptedPathFor(typo.paths().v2_store)));
 
   // The same requests write once SafeMode ends, so the stop above is SafeMode's.
   (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::SafeModeCleared);

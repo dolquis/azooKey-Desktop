@@ -101,8 +101,11 @@ struct Stores {
   }
 
   std::vector<std::string> Texts() const {
-    return {kana.SerializeText(), english.SerializeText(), user_dictionary.SerializeText(),
-            typo.SerializeReadingPairsText(), typo.SerializePatternsText(),
+    return {kana.SerializeText(),
+            english.SerializeText(),
+            user_dictionary.SerializeText(),
+            typo.SerializeReadingPairsText(),
+            typo.SerializePatternsText(),
             auto_word.SerializeText()};
   }
 };
@@ -114,8 +117,8 @@ const std::vector<LearningDataStore> kAllStores = {
 // A pattern event in the abstraction tokens the typo store accepts
 // (typo-correction-learning-spec section 12.8).
 learning::TypoPatternEvent PatternEvent(std::string observed, std::string intended,
-                                        std::string typo_type,
-                                        learning::TypoPatternOutcome outcome, uint64_t now) {
+                                        std::string typo_type, learning::TypoPatternOutcome outcome,
+                                        uint64_t now) {
   learning::TypoPatternEvent event;
   event.observed_pattern = std::move(observed);
   event.intended_pattern = std::move(intended);
@@ -300,11 +303,11 @@ TEST(LearningDataManagerTest, TypoPatternsAreListedPerPairAndForgottenTogether) 
                   .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u",
                                                    "extra_char", TypoPatternOutcome::Accept, kNow))
                   .has_value());
-  ASSERT_TRUE(stores.typo
-                  .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u",
-                                                   "adjacent_key", TypoPatternOutcome::Reject,
-                                                   kNow + 5))
-                  .has_value());
+  ASSERT_TRUE(
+      stores.typo
+          .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u", "adjacent_key",
+                                           TypoPatternOutcome::Reject, kNow + 5))
+          .has_value());
   ASSERT_TRUE(stores.typo
                   .RecordPatternEvent(PatternEvent("z_sub_x", "x_sub_z", "adjacent_key",
                                                    TypoPatternOutcome::Accept, kNow))

@@ -946,10 +946,9 @@ bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
     // learning_flush_interval_sec through the flush worker.
     const auto observed_steady = std::chrono::steady_clock::now();
     const bool burst_start =
-        typo_unsaved_observations_ == 0 &&
-        (!last_successful_typo_save_steady_.has_value() ||
-         observed_steady - *last_successful_typo_save_steady_ >=
-             std::chrono::seconds(flush_interval_sec));
+        typo_unsaved_observations_ == 0 && (!last_successful_typo_save_steady_.has_value() ||
+                                            observed_steady - *last_successful_typo_save_steady_ >=
+                                                std::chrono::seconds(flush_interval_sec));
     ++typo_unsaved_observations_;
     typo_last_observation_epoch_sec_ = now_epoch_sec;
     if (burst_start || flush_interval_sec == 0 ||
@@ -3032,8 +3031,8 @@ void InferenceEngine::ScheduleTypoFlush() {
   // observation. With interval 0 every observation saves at once, and a failed
   // save waits for the next observation, as in the learning store.
   if (typo_flush_due_steady_.has_value() || config_.learning_flush_interval_sec == 0) return;
-  typo_flush_due_steady_ = std::chrono::steady_clock::now() +
-                           std::chrono::seconds(config_.learning_flush_interval_sec);
+  typo_flush_due_steady_ =
+      std::chrono::steady_clock::now() + std::chrono::seconds(config_.learning_flush_interval_sec);
   learning_flush_cv_.notify_all();
 }
 

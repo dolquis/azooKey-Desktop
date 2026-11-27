@@ -555,9 +555,9 @@ LearningImportResult InferenceEngine::ImportLearningData(
     // The typo merges change the store in memory. Io from them means one of
     // the two failed, possibly after the other had changed the store; either
     // way the next save writes what memory holds.
-    const bool typo_merged =
-        detail::LearningStoreSelected(selected, LearningDataStore::Typo) && typo_store_ &&
-        (result.error == BackupError::None || result.error == BackupError::Io);
+    const bool typo_merged = detail::LearningStoreSelected(selected, LearningDataStore::Typo) &&
+                             typo_store_ &&
+                             (result.error == BackupError::None || result.error == BackupError::Io);
     if (typo_merged) {
       typo_unsaved_observations_ = (std::max)(typo_unsaved_observations_, size_t{1});
       typo_last_observation_epoch_sec_ =

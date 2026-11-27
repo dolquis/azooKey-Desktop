@@ -946,10 +946,10 @@ int main(int argc, char** argv) {
   // migrates the v1 store or rebuilds a corrupt file as it goes. The log
   // carries the outcome and counts only, never a reading.
   azookey::learning::TypoLearningStore typo_store(user_paths->typo_store_path);
-  const auto typo_load = typo_store.Load(
-      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
-                                .count()));
+  const auto typo_load =
+      typo_store.Load(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                                std::chrono::system_clock::now().time_since_epoch())
+                                                .count()));
   {
     using azookey::learning::TypoLearningLoadIssue;
     using azookey::learning::TypoLearningMode;
@@ -986,7 +986,8 @@ int main(int argc, char** argv) {
                           typo_load.issue != TypoLearningLoadIssue::None ||
                           typo_load.rebuilt_from_corruption;
     runtime_log.Log(
-        degraded ? azookey::logging::RuntimeLogLevel::Warn : azookey::logging::RuntimeLogLevel::Info,
+        degraded ? azookey::logging::RuntimeLogLevel::Warn
+                 : azookey::logging::RuntimeLogLevel::Info,
         "typo_store_load",
         {{"result", SafeLogText(typo_load.mode == TypoLearningMode::Blocked ? "error" : "ok")},
          {"mode", SafeLogText(mode)},

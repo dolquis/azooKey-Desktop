@@ -276,6 +276,42 @@ stub は要求の本文とヘッダーを読み捨てる。
 コンソールと `-LogPath` に出るのは、UTC 時刻、メソッド、パス、本文の長さ、返した status だけである。
 応答の本文は固定の文字列で、要求の内容を含まない。
 
+## ネットワーク先と subst のパス（DEV-2186）
+
+学習データの backup と、ユーザー辞書のテキストの取り込みは、開いたファイルの最終パスで行き先を判定する
+（`docs/learning-data-management-spec.md` §5）。ローカルのドライブへ解決されるパスは通り、ネットワーク先へ解決されるパスは
+`invalid_path` になることを、設定アプリから確かめる。fixture は次で作る。共有の作成とシンボリックリンクの作成だけ管理者の
+PowerShell で行い、`subst` と `net use` は Host と同じ、管理者でない PowerShell で行う（ドライブの割り当ては
+ログオンセッションと昇格の有無ごとに分かれ、管理者の PowerShell で割り当てたドライブは Host から見えない）。
+
+```powershell
+# 管理者の PowerShell
+$root = 'C:\azookey-verify\paths'
+New-Item -ItemType Directory -Force "$root\real" | Out-Null
+New-SmbShare -Name azk-verify -Path "$root\real" -FullAccess $env:USERNAME
+New-Item -ItemType SymbolicLink -Path "$root\remote" -Target '\\localhost\azk-verify'
+
+# 管理者でない PowerShell
+subst S: C:\azookey-verify\paths\real
+net use Z: \\localhost\azk-verify
+subst U: Z:\
+```
+
+`$root\real` に、設定アプリから export した backup と、取り込むユーザー辞書のテキスト（Google 日本語入力の形式）を置く。
+次のパスで、backup の import とユーザー辞書の取り込みを行い、export は同じディレクトリの別名の `.zip` へ行う。
+
+| パス | 期待 |
+|---|---|
+| `S:\`（ローカルを指す `subst`） | 成功する。export は `$root\real` に書かれる |
+| `Z:\`（マップドライブ） | `invalid_path`。export は何も書かない |
+| `U:\`（マップドライブを指す `subst`） | `invalid_path` |
+| `$root\remote\`（UNC を指すディレクトリのシンボリックリンク） | `invalid_path` |
+| `$root\nowhere\`（無い共有を指すディレクトリのシンボリックリンク。管理者の PowerShell で `New-Item -ItemType SymbolicLink -Path "$root\nowhere" -Target '\\localhost\azk-verify-no-such-share'` で作る） | `invalid_path`（`source_missing` や `io` ではない）。export は何も書かない |
+| OneDrive のオンデマンドのファイル（未ダウンロード） | 成功する |
+
+`invalid_path` のときに設定アプリが出す文言も記録する。
+後片付けは `subst S: /D`、`subst U: /D`、`net use Z: /delete`、`Remove-SmbShare -Name azk-verify`、`$root` の削除で行う。
+
 ## gate map
 
 `gate-map.json` は、自動判定の ID とそれを転記する課題の対応表である。

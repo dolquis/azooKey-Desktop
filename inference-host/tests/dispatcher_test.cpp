@@ -8730,3 +8730,67 @@ TEST_F(DispatcherTest, ImportUserDictionaryTextRefusesUnreadableBlockedAndOversi
   EXPECT_EQ(ReadAllBytes(encrypted), corrupt);
   std::filesystem::remove_all(dir);
 }
+
+// Section 6.8, steps 1 and 2: the path is checked on the file opened
+// (learning-data-management-spec section 5). A junction among the directories
+// is followed, a link as the file is refused, and a file over the limit is
+// refused before it is read.
+TEST_F(DispatcherTest, ImportUserDictionaryTextChecksTheFileItOpens) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_text_links"));
+  std::filesystem::remove_all(dir);
+  const auto real = dir / "real";
+  std::filesystem::create_directories(real);
+  const auto good = real / "google.txt";
+  WriteTextFile(good, kGoogleDictionary);
+  const auto size_before = user_dict.Size();
+  const auto expect_error = [&](const std::optional<ipc::ImportUserDictionaryTextResponse>& r,
+                                const char* error) {
+    ASSERT_TRUE(r.has_value());
+    EXPECT_FALSE(r->ok);
+    EXPECT_EQ(r->error, std::optional<std::string>(error));
+    EXPECT_FALSE(r->format.has_value());
+    EXPECT_EQ(user_dict.Size(), size_before);
+  };
+
+  const auto huge = real / "huge.txt";
+  WriteTextFile(huge, "");
+  std::filesystem::resize_file(huge, azookey::learning::kTextImportMaxBytes + 1);
+  expect_error(ImportText(dispatcher, 860, huge), "too_large");
+  expect_error(ImportText(dispatcher, 861, dir / "CON" / "google.txt"), "invalid_path");
+  // Joined as text: on Windows, operator/ would take "a:b" for a path with the
+  // root name "a:" and drop the left side.
+  auto stream_parent = dir;
+  stream_parent += "/a:b";
+  ASSERT_TRUE(stream_parent.is_absolute());
+  expect_error(ImportText(dispatcher, 862, stream_parent / "google.txt"), "invalid_path");
+
+  // What could not be set up here is reported as a skip at the end, after the
+  // checks that did run.
+  std::string not_run;
+#ifdef _WIN32
+  // A junction (mount point) needs no privilege, unlike a directory symbolic link.
+  const auto junction = dir / "junction";
+  const std::wstring command =
+      L"cmd.exe /c mklink /J \"" + junction.native() + L"\" \"" + real.native() + L"\" >nul 2>&1";
+  if (_wsystem(command.c_str()) == 0 && std::filesystem::exists(junction / "google.txt")) {
+    const auto through = ImportText(dispatcher, 863, junction / "google.txt", "merge", true);
+    ASSERT_TRUE(through);
+    EXPECT_TRUE(through->ok) << through->error.value_or("");
+    EXPECT_EQ(through->format, std::optional<std::string>("google"));
+    EXPECT_EQ(user_dict.Size(), size_before);
+    std::filesystem::remove(junction);  // The junction, not its target.
+  } else {
+    not_run += "could not create a junction here; ";
+  }
+#endif
+  const auto link = dir / "link.txt";
+  std::error_code ec;
+  std::filesystem::create_symlink(good, link, ec);
+  if (!ec) {
+    expect_error(ImportText(dispatcher, 864, link), "invalid_path");
+  } else {
+    not_run += "symbolic links are not available: " + ec.message();
+  }
+  std::filesystem::remove_all(dir);
+  if (!not_run.empty()) GTEST_SKIP() << not_run;
+}

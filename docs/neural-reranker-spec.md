@@ -424,7 +424,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 
 ### 7.3 推論ランタイム（決定）
 
-M56 の `tiny_reranker.onnx` と M57 の `modernbert-ja-70m.onnx` は、同じ推論ランタイムで Host が動かす。
+M56 の `tiny_reranker.onnx` と M57 の `modernbert-ja-70m` の ONNX モデルは、同じ推論ランタイムで Host が動かす。
 本節を両者の正典とし、M57 固有の実行 EP の条件は `docs/modernbert-ja-scoring-spec.md` §6.3 が持つ。
 比べた候補と根拠は [decisions/2026-11-20-onnx-runtime-for-reranker.md](decisions/2026-11-20-onnx-runtime-for-reranker.md) にある。
 
@@ -439,8 +439,8 @@ M56 の `tiny_reranker.onnx` と M57 の `modernbert-ja-70m.onnx` は、同じ�
 | fallback | 上の読み込みの失敗は、§7.1 と §7.2 の `reason=load_failed` に含める（M57 は `docs/modernbert-ja-scoring-spec.md` §4.0 順 4 の `not_loaded`）。原因の内訳（DLL が無い、API の版が合わない、など）は構造化ログにだけ出し、`reason` の値の集合と IPC・設定は変えない |
 | BackendSelector | M24 の `BackendSelector`（Zenzai の backend の判定）には加えない。reranker は自分のロードの成否で使えるかを決める |
 | ライセンス | ORT は MIT License（© Microsoft）。prebuilt に同梱される第三者表記（ThirdPartyNotices）は、配布物の第三者表記へ全文を引き継ぐ。取り込む PR で `THIRD_PARTY_LICENSES` に同梱の節を足し、リリース SBOM の生成（`scripts/complete-release-sbom.py` の source の種別）を URL と hash の pin に対応させる。表記の範囲は Human Gate の DEV-2174 で確定し、取り込む PR は DEV-2174 の確定の後に出す |
-| opset | ONNX export の opset は、固定した版の ORT が読める範囲で、学習パイプラインが 1 つの値に固定する。ORT の版を上げるときは、固定した opset を読めることと latency を確かめる（`docs/build-ci-spec.md` §3.4 の比較項目） |
-| 量子化 | M56 のモデルは fp32 とする。M57 の量子化は `docs/modernbert-ja-scoring-spec.md` §6.3 に従う |
+| opset | ONNX export の opset は、固定した版の ORT が読める範囲で、M56 は学習パイプラインが、M57 は変換スクリプト（`docs/modernbert-ja-scoring-spec.md` §6.4）が 1 つの値に固定する。ORT の版を上げるときは、固定した opset を読めることと latency を確かめる（`docs/build-ci-spec.md` §3.4 の比較項目） |
+| 量子化 | M56 のモデルは fp32 とする。M57 の量子化は `docs/modernbert-ja-scoring-spec.md` §6.3（ロードする量子化）と §6.4（作り方）に従う |
 | スレッド数 | ORT の intra-op / inter-op のスレッド数は明示して設定し、ORT の既定（全コア）は使わない。llama.cpp の推論スレッド数（`docs/copilot-pc-backend-spec.md` §6.2）と合わせて論理コア数を超えない値にする。M56 の値は取り込む PR の計測で、M57 の CPU EP の値は `docs/modernbert-ja-scoring-spec.md` §6.3 の計測ゲートで決める |
 
 ## 8. 設定スキーマ

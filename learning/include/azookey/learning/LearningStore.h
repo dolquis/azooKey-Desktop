@@ -126,7 +126,12 @@ class LearningStore {
   // retry_budget bounds transient file-conflict retries; zero tries once.
   bool Save(std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) const;
   void Reset();
+  // A full erasure saves even a clean, empty table and discards malformed rows.
+  void PrepareFullReset();
+  // Restores the rows after a failed full reset. Call after the empty save attempt.
+  void RestoreAfterFailedFullReset(LearningStore&& before);
   bool dirty() const;
+  std::filesystem::path v2_path() const { return LearningStoreV2PathFor(path_); }
   // Number of (reading, surface, app_name) rows.
   size_t size() const;
   std::vector<LearningEntry> All() const;

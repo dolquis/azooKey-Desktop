@@ -19,6 +19,13 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
+
 #include "../../learning/tests/TestByteCrypto.h"
 #include "IpcTestData.h"
 #include "ScopedTempDirectory.h"
@@ -6759,7 +6766,232 @@ void WriteAllBytes(const std::filesystem::path& path, const std::string& bytes) 
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   out << bytes;
 }
+
+std::filesystem::path WithSuffix(std::filesystem::path path, const char* suffix) {
+  path += suffix;
+  return path;
+}
+
+std::vector<std::filesystem::path> CorruptCopiesOf(const std::filesystem::path& path,
+                                                  const char* suffix) {
+  const auto prefix = WithSuffix(path.filename(), suffix).native();
+  std::vector<std::filesystem::path> copies;
+  for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
+    if (entry.is_regular_file() && entry.path().filename().native().starts_with(prefix)) {
+      copies.push_back(entry.path());
+    }
+  }
+  return copies;
+}
 }  // namespace
+
+class ResetLearningStoreTest : public DispatcherTest {
+ protected:
+  class SaveFailureCrypto final : public azookey::learning::ByteCrypto {
+   public:
+    bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+      return !fail && crypto_.Encrypt(plain, cipher);
+    }
+    bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+      return crypto_.Decrypt(cipher, plain);
+    }
+
+    bool fail = false;
+
+   private:
+    azookey::learning::test::TestByteCrypto crypto_;
+  };
+
+  void TearDown() override { engine.SetEnglishLearningStore(nullptr); }
+
+  std::optional<ipc::ResetLearningStoreResponse> ResetStore(const std::string& name) {
+    ipc::ResetLearningStoreRequest request;
+    request.store = name;
+    const auto response = dispatcher.Dispatch(MakeReq(
+        750, ipc::MessageType::ResetLearningStore, ipc::BuildResetLearningStoreRequest(request)));
+    return response ? ipc::ParseResetLearningStoreResponse(response->payload_json) : std::nullopt;
+  }
+
+  SaveFailureCrypto english_crypto;
+  const std::filesystem::path kana_v2 = azookey::learning::LearningStoreV2PathFor(learning_path);
+  const std::filesystem::path english_path = temp_directory.File("learning_english.tsv");
+  const std::filesystem::path english_v2 = azookey::learning::LearningStoreV2PathFor(english_path);
+  azookey::learning::LearningStore english_store{english_path, &english_crypto};
+};
+
+TEST_F(ResetLearningStoreTest, LearningRemovesCorruptCopiesAndSavesBothChannels) {
+  using namespace azookey::learning;
+  ASSERT_TRUE(store.LoadText("かな\t仮名\t1 100\n"));
+  ASSERT_TRUE(WriteProtectedText(kana_v2, store.SerializeText() + "malformed\n", test::Crypto()));
+  const auto malformed_only = std::string(kLearningStoreV2Header) + "\nmalformed\n";
+  ASSERT_TRUE(WriteProtectedText(english_v2, malformed_only, english_crypto));
+  ASSERT_TRUE(store.Load());
+  ASSERT_EQ(store.size(), 1u);
+  ASSERT_TRUE(english_store.Load());
+  ASSERT_EQ(english_store.size(), 0u);
+  ASSERT_FALSE(english_store.dirty());
+  engine.SetEnglishLearningStore(&english_store);
+
+  for (const auto& v2 : {kana_v2, english_v2}) {
+    WriteAllBytes(WithSuffix(v2, ".corrupt-1"), "plain copy");
+    WriteAllBytes(WithSuffix(EncryptedPathFor(v2), ".corrupt-2"), "encrypted copy");
+  }
+  const auto backup = WithSuffix(kana_v2, ".bak");
+  const auto other_copy = WithSuffix(user_dict_path, ".corrupt.1");
+  const auto directory = WithSuffix(kana_v2, ".corrupt-directory");
+  ASSERT_TRUE(std::filesystem::create_directory(directory));
+  WriteAllBytes(backup, "backup");
+  WriteAllBytes(other_copy, "other store");
+
+  const auto result = ResetStore("learning");
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->ok);
+  for (const auto& v2 : {kana_v2, english_v2}) {
+    EXPECT_TRUE(CorruptCopiesOf(v2, ".corrupt-").empty());
+    EXPECT_TRUE(CorruptCopiesOf(EncryptedPathFor(v2), ".corrupt-").empty());
+  }
+  EXPECT_TRUE(std::filesystem::is_directory(directory));
+  EXPECT_EQ(ReadAllBytes(backup), "backup");
+  EXPECT_EQ(ReadAllBytes(other_copy), "other store");
+  EXPECT_EQ(store.size(), 0u);
+
+  std::string text;
+  const auto empty = std::string(kLearningStoreV2Header) + "\n";
+  ASSERT_EQ(ReadProtectedText(kana_v2, test::Crypto(), text), ProtectedFileSource::Encrypted);
+  EXPECT_EQ(text, empty);
+  ASSERT_EQ(ReadProtectedText(english_v2, english_crypto, text), ProtectedFileSource::Encrypted);
+  EXPECT_EQ(text, empty);
+}
+
+TEST_F(ResetLearningStoreTest, LearningRestoresCorruptCopyOnlyForChannelWhoseSaveFailed) {
+  using namespace azookey::learning;
+  ASSERT_TRUE(store.LoadText("かな\t仮名\t1 100\n"));
+  ASSERT_TRUE(english_store.LoadText("azoo\tazooKey\t1 100\n"));
+  const auto kana_before = store.SerializeText();
+  const auto english_before = english_store.SerializeText();
+  ASSERT_TRUE(WriteProtectedText(kana_v2, kana_before + "malformed\n", test::Crypto()));
+  ASSERT_TRUE(WriteProtectedText(english_v2, english_before + "malformed\n", english_crypto));
+  ASSERT_TRUE(store.Load());
+  ASSERT_TRUE(english_store.Load());
+  engine.SetEnglishLearningStore(&english_store);
+
+  english_crypto.fail = true;
+  const auto result = ResetStore("learning");
+  ASSERT_TRUE(result);
+  EXPECT_FALSE(result->ok);
+  EXPECT_EQ(result->error, std::optional<std::string>("save_failed"));
+  EXPECT_EQ(store.SerializeText(), kana_before);
+  EXPECT_EQ(english_store.SerializeText(), english_before);
+  EXPECT_TRUE(english_store.dirty());
+  const auto kana_file = EncryptedPathFor(kana_v2);
+  const auto english_file = EncryptedPathFor(english_v2);
+  EXPECT_TRUE(CorruptCopiesOf(kana_file, ".corrupt-").empty());
+  const auto copies = CorruptCopiesOf(english_file, ".corrupt-");
+  ASSERT_EQ(copies.size(), 1u);
+  EXPECT_EQ(ReadAllBytes(copies.front()), ReadAllBytes(english_file));
+
+  std::string text;
+  ASSERT_EQ(ReadProtectedText(kana_v2, test::Crypto(), text), ProtectedFileSource::Encrypted);
+  EXPECT_EQ(text, kana_before);
+  ASSERT_EQ(ReadProtectedText(english_v2, english_crypto, text), ProtectedFileSource::Encrypted);
+  EXPECT_EQ(text, english_before + "malformed\n");
+}
+
+TEST_F(ResetLearningStoreTest, UserDictionaryRemovesOnlyItsCorruptCopies) {
+  ASSERT_TRUE(user_dict.Add({"azooKey", "あずきー"}));
+  ASSERT_TRUE(user_dict.Save());
+  const auto backup = WithSuffix(user_dict_path, ".bak");
+  const auto other_copy = WithSuffix(kana_v2, ".corrupt-1");
+  WriteAllBytes(backup, "backup");
+  WriteAllBytes(other_copy, "other store");
+  for (const char* suffix : {".corrupt.1", ".corrupt.2"}) {
+    WriteAllBytes(WithSuffix(user_dict_path, suffix), "quarantined dictionary");
+  }
+
+  const auto result = ResetStore("user_dict");
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->ok);
+  EXPECT_TRUE(CorruptCopiesOf(user_dict_path, ".corrupt.").empty());
+  EXPECT_EQ(ReadAllBytes(backup), "backup");
+  EXPECT_EQ(ReadAllBytes(other_copy), "other store");
+  EXPECT_TRUE(user_dict.Lookup("あずきー").empty());
+  azookey::learning::UserDictionary reloaded(user_dict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_TRUE(reloaded.Lookup("あずきー").empty());
+}
+
+TEST_F(ResetLearningStoreTest, UserDictionaryKeepsCorruptCopiesWhenSavingIsBlocked) {
+  const auto copy = WithSuffix(user_dict_path, ".corrupt.1");
+  WriteAllBytes(copy, "quarantined dictionary");
+  const auto encrypted = user_dict.storage_path();
+  WriteAllBytes(encrypted, "not a protected blob");
+  ASSERT_FALSE(user_dict.Load());
+  ASSERT_TRUE(user_dict.save_blocked());
+
+  const auto result = ResetStore("user_dict");
+  ASSERT_TRUE(result);
+  EXPECT_FALSE(result->ok);
+  EXPECT_EQ(result->error, std::optional<std::string>("save_failed"));
+  EXPECT_EQ(ReadAllBytes(copy), "quarantined dictionary");
+  EXPECT_EQ(ReadAllBytes(encrypted), "not a protected blob");
+}
+
+TEST_F(ResetLearningStoreTest, UserDictionaryKeepsNewQuarantineOnReloadFailureUntilRetry) {
+  ASSERT_TRUE(user_dict.Add({"azooKey", "あずきー"}));
+  ASSERT_TRUE(user_dict.Save());
+  ASSERT_TRUE(std::filesystem::remove(user_dict.storage_path()));
+  WriteAllBytes(user_dict_path, "not a dictionary");
+
+  const auto failed = ResetStore("user_dict");
+  ASSERT_TRUE(failed);
+  EXPECT_FALSE(failed->ok);
+  EXPECT_EQ(failed->error, std::optional<std::string>("save_failed"));
+  EXPECT_FALSE(user_dict.Lookup("あずきー").empty());
+  const auto copies = CorruptCopiesOf(user_dict_path, ".corrupt.");
+  ASSERT_EQ(copies.size(), 1u);
+  EXPECT_EQ(ReadAllBytes(copies.front()), "not a dictionary");
+
+  const auto retried = ResetStore("user_dict");
+  ASSERT_TRUE(retried);
+  EXPECT_TRUE(retried->ok);
+  EXPECT_FALSE(std::filesystem::exists(copies.front()));
+  EXPECT_TRUE(user_dict.Lookup("あずきー").empty());
+}
+
+#ifdef _WIN32
+TEST_F(ResetLearningStoreTest, LockedCorruptCopyMakesResetFailWithoutChangingPublishedContent) {
+  using azookey::learning::EncryptedPathFor;
+  ASSERT_TRUE(store.LoadText("かな\t仮名\t1 100\n"));
+  ASSERT_TRUE(store.Save());
+  ASSERT_TRUE(user_dict.Add({"azooKey", "あずきー"}));
+  ASSERT_TRUE(user_dict.Save());
+  const auto kana_before = store.SerializeText();
+  const auto dict_before = user_dict.Serialize();
+  const auto kana_file = EncryptedPathFor(kana_v2);
+  const auto kana_bytes = ReadAllBytes(kana_file);
+  const auto dict_bytes = ReadAllBytes(user_dict.storage_path());
+  for (const auto& [name, copy] :
+       {std::pair{"learning", WithSuffix(kana_file, ".corrupt-1")},
+        std::pair{"user_dict", WithSuffix(user_dict_path, ".corrupt.1")}}) {
+    SCOPED_TRACE(name);
+    WriteAllBytes(copy, "locked copy");
+    const HANDLE handle = CreateFileW(copy.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+    const auto result = ResetStore(name);
+    CloseHandle(handle);
+
+    ASSERT_TRUE(result);
+    EXPECT_FALSE(result->ok);
+    EXPECT_EQ(result->error, std::optional<std::string>("save_failed"));
+    EXPECT_EQ(ReadAllBytes(copy), "locked copy");
+    EXPECT_EQ(store.SerializeText(), kana_before);
+    EXPECT_EQ(user_dict.Serialize(), dict_before);
+    EXPECT_EQ(ReadAllBytes(kana_file), kana_bytes);
+    EXPECT_EQ(ReadAllBytes(user_dict.storage_path()), dict_bytes);
+  }
+}
+#endif
 
 // learning-data-management-spec section 4.6 step 1: a store whose file could
 // not be read cannot be emptied on disk, so the reset refuses before changing
@@ -6768,6 +7000,8 @@ TEST_F(DispatcherTest, ResetLearningStoreRefusesAStoreWhoseFileCouldNotBeRead) {
   const auto v2_file = azookey::learning::EncryptedPathFor(
       azookey::learning::LearningStoreV2PathFor(std::filesystem::path(learning_path)));
   WriteAllBytes(v2_file, "not a protected blob");
+  const auto copy = WithSuffix(v2_file, ".corrupt-1");
+  WriteAllBytes(copy, "corrupt copy");
   ASSERT_FALSE(store.Load());
   ASSERT_TRUE(store.save_blocked());
 
@@ -6781,10 +7015,11 @@ TEST_F(DispatcherTest, ResetLearningStoreRefusesAStoreWhoseFileCouldNotBeRead) {
   EXPECT_FALSE(parsed->ok);
   EXPECT_EQ(parsed->error, std::optional<std::string>("save_failed"));
   EXPECT_EQ(ReadAllBytes(v2_file), "not a protected blob");
+  EXPECT_EQ(ReadAllBytes(copy), "corrupt copy");
   RemoveLearningFiles(learning_path);
 }
 
-// Steps 2 to 4: the v2 file is emptied first; when the M7 file then cannot be
+// Steps 3 to 5: the v2 file is emptied first; when the M7 file then cannot be
 // rewritten, the snapshot goes back into memory and onto the v2 file.
 TEST_F(DispatcherTest, ResetLearningStoreRestoresTheStoreWhenTheM7FileCannotBeRewritten) {
   EnableEventPrivacy(dispatcher);

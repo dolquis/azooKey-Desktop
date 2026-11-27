@@ -648,6 +648,19 @@ void LearningStore::Reset() {
   table_.clear();
 }
 
+void LearningStore::PrepareFullReset() {
+  table_.clear();
+  dirty_ = true;
+  preserve_before_save_ = false;
+}
+
+void LearningStore::RestoreAfterFailedFullReset(LearningStore&& before) {
+  // A successful empty save cleared dirty and removed the malformed rows on disk.
+  preserve_before_save_ = dirty_ && before.preserve_before_save_;
+  table_ = std::move(before.table_);
+  dirty_ = true;
+}
+
 bool LearningStore::dirty() const { return dirty_; }
 
 size_t LearningStore::size() const {

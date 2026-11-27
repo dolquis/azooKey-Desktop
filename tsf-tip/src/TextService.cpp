@@ -1060,7 +1060,7 @@ std::optional<KanaKey> LookupKanaKey(WPARAM key, LPARAM key_data, uint32_t modif
     return std::nullopt;
   const bool shift = (modifiers & azookey::core::kModifierShift) != 0;
   const auto lookup = style == azookey::tsf::TipInputStyle::KanaUs ? azookey::core::LookupKanaUs
-                                                                : azookey::core::LookupKanaJis;
+                                                                   : azookey::core::LookupKanaJis;
   const auto kana = lookup(static_cast<uint8_t>(scan_code), extended, shift);
   if (!kana) return std::nullopt;
   return KanaKey{*kana, scan_code};
@@ -5823,8 +5823,7 @@ bool TextService::HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, L
                            local_settings_.ConvertKeysActionSnapshot()) != OpenCloseKeyAction::None)
     return false;
   // A kana key starts the next input whatever its VK (input-style-spec §4.4).
-  if (LookupKanaKey(key, key_data, modifiers, local_settings_.InputStyleSnapshot()))
-    return true;
+  if (LookupKanaKey(key, key_data, modifiers, local_settings_.InputStyleSnapshot())) return true;
   const auto idle = MapTipKey(key, modifiers, /*has_preedit=*/false, /*cand_visible=*/false,
                               /*unicode_active=*/false);
   if (idle && idle->action == core::UserAction::Input &&

@@ -50,7 +50,7 @@ constexpr std::array<KanaKey, 48> kKanaUsTable = {{
 }};
 
 std::optional<std::string_view> LookupKana(const std::array<KanaKey, 48>& table, uint8_t scan_code,
-                                          bool extended, bool shift) {
+                                           bool extended, bool shift) {
   if (extended) return std::nullopt;
   for (const KanaKey& key : table) {
     if (key.scan_code == scan_code) return shift ? key.shifted : key.plain;

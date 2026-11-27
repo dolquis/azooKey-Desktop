@@ -12,9 +12,9 @@ namespace azookey::core {
 
 // The kana a physical key makes, or std::nullopt when the table has no entry for it
 // (docs/input-style-spec.md sections 4.1, 4.2 and 4.5). `scan_code` is bits 16-23 of the key
-// message's lParam. A key with the extended flag is never looked up, because a numpad `/` shares the
-// scan code of the `/` key. Shift is the only modifier; the caller skips Ctrl, Alt and Win.
-// The voicing-mark keys return U+309B / U+309C (see AsVoicingMark).
+// message's lParam. A key with the extended flag is never looked up, because a numpad `/` shares
+// the scan code of the `/` key. Shift is the only modifier; the caller skips Ctrl, Alt and Win. The
+// voicing-mark keys return U+309B / U+309C (see AsVoicingMark).
 std::optional<std::string_view> LookupKanaJis(uint8_t scan_code, bool extended, bool shift);
 std::optional<std::string_view> LookupKanaUs(uint8_t scan_code, bool extended, bool shift);
 

@@ -435,6 +435,13 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 - **M55 受け入れ**: 補正有効モードでの**実測値**を検証する。
   `typo_correction_top1/5_accuracy` は評価対象モード（M55 既定の `rank` 等）で、
   `typo_overcorrection_rate` は §4.3.1 のとおり `aggressive` モードで測る。
+  採取の構成は次のとおり。
+  - モデル: Zenzai の実モデル（`ggml-model-Q5_K_M.gguf`、`--model`）
+  - 辞書: 同梱辞書（`--dict-dir`）
+  - ラティス: `--lattice off`
+  - 学習ストア: 空（`learning_state = empty`）
+  - モデルなしの構成は受け入れに用いない。補正が無くても clean の正解が top5 を外れる行があり、その行が
+    `typo_overcorrection_rate` の床になるため。
 - 通常変換（`kana_kanji_eval`）は常に `off`（補正非対象）。baseline は
   モードごとに別管理（互換キーに `typo_correction_mode` を含む、§14）。
 - `off` 以外のモードでは、空の打ち間違え学習ストア（`learning_state = empty`）を Host の

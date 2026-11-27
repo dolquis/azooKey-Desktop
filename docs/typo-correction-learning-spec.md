@@ -595,7 +595,7 @@ activate_typo_correction(reading, observed_pattern):
 - 発動しても補正候補が第一候補になるとは限らない。順位は §12.10 のスコアと
   §12.11 の誤補正防止条件で決まる。発動は「補正 hypothesis を **生成する**
   か」だけを決める前段ゲートである。
-- Host は `dict_best` を 2 値で近似し、M52 の校正（§12.16）で見直す。元の読みに辞書（システム辞書・
+- Host は `dict_best` を 2 値で近似し、M52 の校正（§12.16、DEV-2150）で見直す。元の読みに辞書（システム辞書・
   ユーザー辞書・新語）の語があれば 1、無ければ 0 とする。このため `weak` は `no_dict` と同じになる。`observed_pattern` は仮説ごとに決まるので、
   `strong_pat` は仮説ごとに評価する。`weak`・`small_gap`・`no_dict` のどれも立たない読みでは、warm-up（§12.11）を
   満たし confidence が `minConfidenceForRanking` 以上の個人パターン（§12.8）に当たる仮説だけを作る。
@@ -635,6 +635,7 @@ v1 の `auto_replace` モードは v2 の `aggressive` 相当として読み替�
 
 `rank` と `aggressive` は、仮説の語（§12.4.4）を、§12.10 の `typo_score` の順に第一候補の直後へ最大
 `maxReadingHypotheses` 件置く。`aggressive` で §12.11 の全ガードを満たす語は、その前の第一候補に置く。
+このときも `corrected_reading`（§5-3）は返さず、候補の reading を仮説の読みとする。TIP の preedit は打った読みのまま残る。
 warm-up を満たし confidence が `minConfidenceForRanking` 以上の個人パターンの語は通常候補として示し、それ以外の語には
 「もしかして: <読み>」を付ける。v1 の読みの組の候補（§5-2）は、`suggest` と `rank` でこれらより前の先頭に置く。
 
@@ -1059,7 +1060,7 @@ overcorrection_penalty =
 - 係数 `P_*` / `S_STRONG` は初期値であり M52（`typo_overcorrection_rate`）で
   校正する（§12.16）。
 - Host は `dictionary_hit_score` を 1（§12.4.4 で語のある仮説だけが残る）、`s1_strength` を元の top1 が辞書の語なら 1、
-  そうでなければ 0 で近似し、M52 の校正（§12.16）で見直す。`context_score` と `app_factor_typo` は 1.0 とする。
+  そうでなければ 0 で近似し、M52 の校正（§12.16、DEV-2150）で見直す。`context_score` と `app_factor_typo` は 1.0 とする。
   個人パターンの confidence（§12.2）は、照会の時点の §12.9 の値で、app bonus を含めない。
 
 ### 12.11 誤補正防止条件

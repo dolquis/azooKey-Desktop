@@ -59,10 +59,11 @@ struct RuntimeAutoWordSettings {
 
 // M55 typoCorrection.*; docs/typo-correction-learning-spec.md section 12.14.
 // `mode` is the v2 mode after the section 12.14 migration from the v1 root
-// typoCorrectionMode. The engine reads `enabled` and `mode` through
-// ApplyRuntimeSettingsToEngineConfig, the ObserveTypo gate reads them with
-// `learn_personal_patterns` (PrivacyGuard::typo_learning), and the rest waits
-// for the M55 correction engine.
+// typoCorrectionMode. The engine reads `enabled`, `mode`,
+// `max_reading_hypotheses` and the two confidences through
+// ApplyRuntimeSettingsToEngineConfig, and the ObserveTypo gate reads `enabled`
+// and `mode` with `learn_personal_patterns` (PrivacyGuard::typo_learning).
+// `keyboard_layout` holds only auto, the layout the engine uses.
 struct RuntimeTypoCorrectionSettings {
   bool enabled{true};
   std::string mode{"suggest"};
@@ -71,9 +72,9 @@ struct RuntimeTypoCorrectionSettings {
   int32_t max_reading_hypotheses{3};
   double min_confidence_for_ranking{0.70};
   double min_confidence_for_top_candidate{0.90};
-  // Fixed to true for the M55 apply gate (sections 12.11 and 12.12.2). This
-  // Host's candidate requests do not consult it: secure inputs already learn
-  // nothing, and their correction is the TIP's to drop (section 12.12.2).
+  // Fixed to true for the M55 apply gate (sections 12.11 and 12.12.2). The
+  // Host does not consult it: a secure request and privacy_mode_secure stop the
+  // correction whatever it holds (section 12.12.2).
   bool disable_in_secret_apps{true};
 };
 

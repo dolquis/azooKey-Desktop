@@ -1020,7 +1020,7 @@ TEST(SettingsStoreTest, TypoAndAutoWordKeysReachTheEngineConfig) {
   const auto result = store.Load();
   ASSERT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
   // typo-correction-learning-spec section 12.14 reads the v1 auto_replace as
-  // aggressive, and the engine still gets the v1 name for it.
+  // aggressive, and the engine gets aggressive.
   EXPECT_EQ(store.settings().typo_correction.mode, "aggressive");
   EXPECT_EQ(store.settings().typo_min_count, 5);
   EXPECT_FALSE(store.settings().auto_word.mining_enabled);
@@ -1031,7 +1031,7 @@ TEST(SettingsStoreTest, TypoAndAutoWordKeysReachTheEngineConfig) {
 
   const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
       azookey::host::EngineConfig{}, store.settings());
-  EXPECT_EQ(config.typo_correction_mode, "auto_replace");
+  EXPECT_EQ(config.typo_correction_mode, "aggressive");
   EXPECT_EQ(config.typo_min_count, 5u);
   EXPECT_FALSE(config.auto_word_mining_enabled);
   EXPECT_TRUE(config.auto_word_trending_enabled);
@@ -1074,8 +1074,7 @@ TEST(SettingsStoreTest, TypoAndAutoWordDefaultsHoldAndInvalidValuesAreIgnored) {
 
 // typo-correction-learning-spec section 12.14: a valid typoCorrection.mode wins,
 // otherwise the v1 root key is read in v2 terms, otherwise suggest. The engine
-// gets the v1 names until the M55 correction engine (rank as suggest,
-// aggressive as auto_replace), and enabled false is off whatever the mode.
+// gets the v2 mode, and enabled false is off whatever the mode.
 TEST(SettingsStoreTest, TypoCorrectionModeMigratesFromTheV1RootKey) {
   ScopedTempDirectory temp("azookey_settings_typo_correction_migration");
   const auto path = temp.path() / "settings.json";
@@ -1087,10 +1086,10 @@ TEST(SettingsStoreTest, TypoCorrectionModeMigratesFromTheV1RootKey) {
   for (const auto& item : {
            Case{"{}", "suggest", "suggest"},
            Case{R"({"typoCorrectionMode":"off"})", "off", "off"},
-           Case{R"({"typoCorrectionMode":"auto_replace"})", "aggressive", "auto_replace"},
-           Case{R"({"typoCorrection":{"mode":"aggressive"}})", "aggressive", "auto_replace"},
+           Case{R"({"typoCorrectionMode":"auto_replace"})", "aggressive", "aggressive"},
+           Case{R"({"typoCorrection":{"mode":"aggressive"}})", "aggressive", "aggressive"},
            Case{R"({"typoCorrection":{"mode":"rank"},"typoCorrectionMode":"auto_replace"})", "rank",
-                "suggest"},
+                "rank"},
            Case{R"({"typoCorrection":{"mode":"off"},"typoCorrectionMode":"auto_replace"})", "off",
                 "off"},
            Case{R"({"typoCorrection":{"mode":"suggest"},"typoCorrectionMode":"off"})", "suggest",
@@ -1100,9 +1099,9 @@ TEST(SettingsStoreTest, TypoCorrectionModeMigratesFromTheV1RootKey) {
            Case{R"({"typoCorrection":{"mode":"auto_replace"},"typoCorrectionMode":"off"})", "off",
                 "off"},
            Case{R"({"typoCorrection":{"mode":3},"typoCorrectionMode":"auto_replace"})",
-                "aggressive", "auto_replace"},
+                "aggressive", "aggressive"},
            Case{R"({"typoCorrection":{},"typoCorrectionMode":"auto_replace"})", "aggressive",
-                "auto_replace"},
+                "aggressive"},
            Case{R"({"typoCorrection":"aggressive","typoCorrectionMode":"off"})", "off", "off"},
            Case{R"({"typoCorrection":{"enabled":false,"mode":"aggressive"}})", "aggressive", "off"},
        }) {

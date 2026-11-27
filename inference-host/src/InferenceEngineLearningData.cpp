@@ -117,6 +117,7 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
               ? typo_store_->ForgetPattern(entry->reading, entry->surface, stores.now_epoch_sec)
               : typo_store_->ForgetReadingPair(entry->reading, entry->surface,
                                                stores.now_epoch_sec);
+      InvalidateTypoPatternIndexLocked();
       switch (result) {
         case learning::TypoForgetResult::Removed:
           return ForgetOutcome::Forgotten;
@@ -341,7 +342,9 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
       // and changes nothing then; suspended writes do not stop it.
       std::lock_guard typo_lock(typo_store_mutex_);
       if (!typo_store_) return ResetOutcome::Unavailable;
-      if (!typo_store_->ResetAll(WallClockEpochSec())) return ResetOutcome::SaveFailed;
+      const bool reset = typo_store_->ResetAll(WallClockEpochSec());
+      InvalidateTypoPatternIndexLocked();
+      if (!reset) return ResetOutcome::SaveFailed;
       // The unsaved observations went with the rest.
       typo_unsaved_observations_ = 0;
       return ResetOutcome::Reset;
@@ -598,6 +601,7 @@ LearningImportResult InferenceEngine::ImportLearningData(
     const bool typo_merged = typo_store_ && (result.counts.count("typo_patterns") > 0 ||
                                              result.counts.count("typo_corrections") > 0);
     if (typo_merged) {
+      InvalidateTypoPatternIndexLocked();
       typo_unsaved_observations_ = (std::max)(typo_unsaved_observations_, size_t{1});
       typo_last_observation_epoch_sec_ =
           (std::max)(typo_last_observation_epoch_sec_, stores.now_epoch_sec);

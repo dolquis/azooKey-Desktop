@@ -45,6 +45,8 @@
 
 namespace azookey::host {
 
+class TypoPatternIndex;
+
 // Removes candidates whose surface holds a Private Use Area character (U+E000..U+F8FF), the
 // last filter before a candidate list is returned. The rest keep their order.
 void DropPrivateUseCandidates(std::vector<core::Candidate>& candidates);
@@ -73,7 +75,8 @@ struct MixedConversionOptions {
   std::vector<std::pair<size_t, size_t>> english_ranges;
   // Section 10: the conversion ends by the earlier of this and the Zenzai budget.
   std::optional<std::chrono::steady_clock::time_point> deadline;
-  // Section 12: false converts the reading as given, without M35.
+  // Section 12: false converts the reading as given, without typo correction (M35 / M55). A
+  // secure request sets it false (typo-correction-learning-spec section 12.12.2).
   bool typo_correction{true};
   // false skips the NLL rerank (the section 8.3 extra conversions).
   bool nll{true};
@@ -82,6 +85,12 @@ struct MixedConversionOptions {
   // the first segment's surfaces; nothing else reads it. Set it with typo_correction false, so
   // the reading the first segment ends with is the one converted.
   std::string remaining_reading;
+  // M55 (typo-correction-learning-spec section 12.13): the request's raw_keys, which rank and
+  // aggressive make key-edit hypotheses from. Empty makes them from the reading alone.
+  std::string raw_keys;
+  // M55 (typo-correction-learning-spec section 12.7): false makes no reading hypothesis, while the
+  // v1 pairs still apply. QueryAmbiguousCandidatesEx sets it false for the typed reading.
+  bool typo_hypotheses{true};
 };
 
 struct InferenceTelemetry {
@@ -172,9 +181,19 @@ struct EngineConfig {
   double prediction_learning_min_score{0.05};
   // Default score for user-dictionary entries that lack an explicit value.
   double user_word_default_score{1.5};
-  // M35 typo correction; docs/typo-correction-learning-spec.md section 5-2.
+  // M35 / M55 typo correction; docs/typo-correction-learning-spec.md sections 5-2 and 12.6:
+  // off, suggest, rank or aggressive, with the v1 auto_replace read as aggressive.
   std::string typo_correction_mode{"suggest"};
   uint32_t typo_min_count{learning::kTypoCorrectionDefaultMinCount};
+  // M55 rank and aggressive: typoCorrection.maxReadingHypotheses, minConfidenceForRanking and
+  // minConfidenceForTopCandidate (section 12.14).
+  uint32_t typo_max_reading_hypotheses{3};
+  double typo_min_confidence_for_ranking{0.70};
+  double typo_min_confidence_for_top_candidate{0.90};
+  // Section 12.16: rank and aggressive make reading hypotheses only for a reading of at most
+  // this many code points and raw_keys of at most this many keys. Not settings keys.
+  uint32_t typo_hypothesis_max_reading{10};
+  uint32_t typo_hypothesis_max_keys{20};
   // M36 mining and trending; docs/auto-word-registration-spec.md section 8.
   bool auto_word_mining_enabled{true};
   bool auto_word_trending_enabled{false};
@@ -465,8 +484,8 @@ class InferenceEngine {
 
   struct CandidatesResult {
     std::vector<core::Candidate> candidates;
-    // Non-empty only under typo_correction_mode "auto_replace": the reading the
-    // conversion actually ran on, so the TIP can replace its preedit.
+    // Non-empty only under typo_correction_mode aggressive (the v1 auto_replace): the
+    // reading the conversion actually ran on, so the TIP can replace its preedit.
     std::string corrected_reading;
     // The Zenzai conversion stopped at its deadline (the budget or
     // MixedConversionOptions::deadline): its candidates are best-so-far or the
@@ -526,13 +545,13 @@ class InferenceEngine {
   //   alternative's dictionary candidates whose surfaces kana's lack. The
   //   alternative is converted without the lattice (DEV-2101), so these are
   //   the words of its dictionaries only.
-  CandidatesResult QueryAmbiguousCandidatesEx(const std::string& kana,
-                                              const std::vector<std::string>& alternatives,
-                                              const std::string& context, uint64_t now_epoch_sec,
-                                              const std::atomic<bool>* cancel,
-                                              uint32_t max_candidates = 0,
-                                              const InferenceTelemetry* telemetry = nullptr,
-                                              const TagBoosts* tag_boosts = nullptr);
+  // `mixed` (M55 raw_keys) applies to kana's conversion only. The alternative is converted
+  // without it and, like without the lattice, without the M55 reading hypotheses.
+  CandidatesResult QueryAmbiguousCandidatesEx(
+      const std::string& kana, const std::vector<std::string>& alternatives,
+      const std::string& context, uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
+      uint32_t max_candidates = 0, const InferenceTelemetry* telemetry = nullptr,
+      const TagBoosts* tag_boosts = nullptr, const MixedConversionOptions* mixed = nullptr);
   // The normalized model score (ZenzaiModelConverter's 0.3 to 1.4 band) by which
   // another reading must beat the typed one, so a near tie keeps the typed one.
   static constexpr double kAmbiguousReadingModelMargin = 0.05;
@@ -763,6 +782,12 @@ class InferenceEngine {
   // none while writes are suspended or the store is blocked. Expects
   // typo_store_mutex_ held.
   bool TypoSavePendingLocked() const;
+  // DEV-2149 decision 7: the M55 pattern index of `store`, rebuilt from its Patterns() after an
+  // invalidation or for another store. Whatever may change the store's patterns invalidates it
+  // (DEV-2197 with each pattern event). Both expect typo_store_mutex_ held.
+  std::shared_ptr<const TypoPatternIndex> TypoPatternIndexLocked(
+      const learning::TypoLearningStore& store);
+  void InvalidateTypoPatternIndexLocked();
   // Asks the flush worker to save the typo store after
   // learning_flush_interval_sec; takes state_mutex_ alone.
   void ScheduleTypoFlush();
@@ -814,11 +839,16 @@ class InferenceEngine {
   // Nothing takes state_mutex_ while holding it.
   mutable std::mutex typo_store_mutex_;
   // Guarded by typo_store_mutex_: the batching of typo saves (count, burst
-  // start, the epoch the next save stamps) and the secure suspension.
+  // start, the epoch the next save stamps) and the secure suspension, which
+  // stops the correction as well (typo-correction-learning-spec section 12.12.2).
   size_t typo_unsaved_observations_{0};
   uint64_t typo_last_observation_epoch_sec_{0};
   std::optional<std::chrono::steady_clock::time_point> last_successful_typo_save_steady_;
   bool typo_writes_suspended_{false};
+  // Guarded by typo_store_mutex_; a query copies the pointer and reads the index after letting
+  // the lock go.
+  std::shared_ptr<const TypoPatternIndex> typo_pattern_index_;
+  const learning::TypoLearningStore* typo_pattern_index_store_{nullptr};
   mutable std::mutex state_mutex_;
   mutable std::mutex converter_call_mutex_;
   // Serializes commits with erasure across disk writes and the reset's final

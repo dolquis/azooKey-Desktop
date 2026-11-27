@@ -115,13 +115,9 @@ double ReadUnitInterval(const j::Object& object, const char* key, double fallbac
   return std::isfinite(value) && value >= 0.0 && value <= 1.0 ? value : fallback;
 }
 
-// M55 section 12.14: the engine knows the v1 modes until the M55 correction
-// engine arrives, so the v2 ones map back to them. rank has no v1 counterpart
-// and converts like suggest; aggressive is the v1 auto_replace (section 12.6).
+// M55 section 12.14: the engine takes the v2 mode as it is; enabled false is off.
 std::string EngineTypoCorrectionMode(const RuntimeTypoCorrectionSettings& typo) {
-  if (!typo.enabled || typo.mode == "off") return "off";
-  if (typo.mode == "aggressive") return "auto_replace";
-  return "suggest";
+  return typo.enabled ? typo.mode : "off";
 }
 
 const j::Object* ReadObject(const j::Object& object, const char* key) {
@@ -736,6 +732,11 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
   config.max_context_length = static_cast<uint32_t>(settings.max_context_length);
   config.typo_correction_mode = EngineTypoCorrectionMode(settings.typo_correction);
   config.typo_min_count = static_cast<uint32_t>(settings.typo_min_count);
+  config.typo_max_reading_hypotheses =
+      static_cast<uint32_t>(settings.typo_correction.max_reading_hypotheses);
+  config.typo_min_confidence_for_ranking = settings.typo_correction.min_confidence_for_ranking;
+  config.typo_min_confidence_for_top_candidate =
+      settings.typo_correction.min_confidence_for_top_candidate;
   config.auto_word_mining_enabled = settings.auto_word.mining_enabled;
   config.auto_word_trending_enabled = settings.auto_word.trending_enabled && !settings.offline_mode;
   config.auto_word_trending_interval_hours =

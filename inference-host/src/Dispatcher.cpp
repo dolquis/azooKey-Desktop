@@ -1320,11 +1320,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     MixedConversionOptions as_typed;
     as_typed.typo_correction = false;
     // DEV-1734: the candidate window also weighs the other reading of an
-    // ambiguous "nn" + vowel. Per-key queries, a secure request (its TIP drops
-    // corrected_reading) and an M63 split are converted as typed.
-    // M55 (typo-correction-learning-spec section 12.13): raw_keys and
-    // typo_correction_mode wait for the M55 correction engine. The conversion
-    // uses the mode the Host settings resolve to, so a request cannot raise it.
+    // ambiguous "nn" + vowel. Per-key queries, a secure request (which the Host
+    // does not correct, typo-correction-learning-spec section 12.12.2) and an
+    // M63 split are converted as typed.
+    // M55 (typo-correction-learning-spec section 12.13): the request's
+    // typo_correction_mode is not read. The conversion uses the mode the Host
+    // settings resolve to, so a request cannot raise it.
     // M66 (segment-editing-spec section 5.3): a first segment's request is
     // converted as given, without M35 or the DEV-1734 reading, either of which
     // would answer with a corrected_reading.
@@ -1335,13 +1336,19 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // The lattice alone reads the remaining reading (segment-editing-spec section 5.3).
     MixedConversionOptions first_segment_options = as_typed;
     first_segment_options.remaining_reading = parsed->remaining_reading;
+    // Section 12.12.2: a secure request is converted as typed, without M35 or
+    // M55 (DEV-2149; under DEV-1956 the TIP dropped what came back corrected).
+    // privacy_mode_secure stops the correction in the engine.
+    MixedConversionOptions plain;
+    plain.typo_correction = !parsed->secure;
+    if (!parsed->secure) plain.raw_keys = parsed->raw_keys;
     const auto* conversion = first_segment          ? &first_segment_options
                              : IsInlineSplit(split) ? &as_typed
-                                                    : nullptr;
+                                                    : &plain;
     auto queried = weighs_alt_readings
                        ? engine_->QueryAmbiguousCandidatesEx(
                              parsed->reading, parsed->alt_readings, parsed->left_context, NowSec(),
-                             cancel.get(), ordinary_limit, trace.context(), &tag_boosts)
+                             cancel.get(), ordinary_limit, trace.context(), &tag_boosts, &plain)
                        : engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(),
                                                     cancel.get(), ordinary_limit, parsed->live,
                                                     trace.context(), &tag_boosts, conversion);
@@ -1558,8 +1565,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
       return std::nullopt;
     }
   }
+  // typo-correction-learning-spec section 12.12.2: a secure request is converted as typed.
+  MixedConversionOptions as_requested;
+  as_requested.typo_correction = !parsed->secure;
   const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
-                                                      cancel.get(), trace.context());
+                                                      cancel.get(), trace.context(), &as_requested);
   const bool canceled = cancel->load(std::memory_order_acquire);
   completion.Complete();
   if (canceled) {
@@ -2246,10 +2256,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     const bool english = parsed->mode == "neural" && !parsed->secure &&
                          parsed->english_candidates && !parsed->raw_romaji.empty() &&
                          chunks.size() == 1;
+    // typo-correction-learning-spec section 12.12.2: a secure batch is converted as typed.
+    MixedConversionOptions as_requested;
+    as_requested.typo_correction = !parsed->secure;
     for (const auto& reading : chunks) {
       if (cancel->load(std::memory_order_acquire)) break;
-      auto candidates = engine_->QueryCandidates(reading, "", NowSec(), cancel.get(),
-                                                 parsed->max_candidates, false, trace.context());
+      auto candidates =
+          engine_
+              ->QueryCandidatesEx(reading, "", NowSec(), cancel.get(), parsed->max_candidates,
+                                  false, trace.context(), nullptr, &as_requested)
+              .candidates;
       if (parsed->max_candidates > 0 && candidates.size() > parsed->max_candidates) {
         candidates.resize(parsed->max_candidates);
       }

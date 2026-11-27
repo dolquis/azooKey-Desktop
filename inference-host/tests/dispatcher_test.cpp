@@ -5079,6 +5079,7 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
 
   ipc::QueryCandidatesRequest query;
   query.reading = "こんちには";
+  query.secure = false;
   const auto response = dispatcher.Dispatch(
       MakeReq(53, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query)));
   ASSERT_TRUE(response.has_value());
@@ -5263,10 +5264,9 @@ TEST_F(DispatcherTest, RequestedTypoModeLeavesTheHostModeAsItIs) {
       SCOPED_TRACE(secure);
       const auto unspecified = query(secure, "");
       ASSERT_FALSE(unspecified.candidates.empty());
-      // What a secure request gets is the M55 apply gate's to decide (section
-      // 12.12.2); here only the request must not change it.
-      if (!secure)
-        EXPECT_EQ(unspecified.corrected_reading, host_mode == "auto_replace" ? "こんにちは" : "");
+      // A secure request is never corrected (section 12.12.2).
+      EXPECT_EQ(unspecified.corrected_reading,
+                !secure && host_mode == "auto_replace" ? "こんにちは" : "");
       for (const std::string mode : {"off", "suggest", "rank", "aggressive"}) {
         SCOPED_TRACE(mode);
         const auto requested = query(secure, mode);
@@ -5396,6 +5396,253 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsARebuiltTypoStore) {
   const auto parsed = ipc::ParseQueryDiagnostics(response->payload_json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_TRUE(parsed->typo_store_rebuilt);
+}
+
+// typo-correction-learning-spec section 12.12.2 (DEV-2149, replacing the
+// DEV-1956 rule that left it to the TIP): a secure request, per-key or for the
+// window, gets no correction in any mode, and neither does any request while
+// the published privacy_mode_secure is on.
+TEST_F(DispatcherTest, SecureRequestsAndSecurePrivacyAreNeverCorrected) {
+  const auto settings_path = temp_directory.File("azookey_dispatcher_typo_secure_apply.json");
+  const auto write_settings = [&](const char* text) {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << text;
+  };
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  azookey::host::SettingsStore settings_store(settings_path);
+  ASSERT_EQ(settings_store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings_store);
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_secure_apply.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  engine.SetTypoStore(&typo);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+
+  uint64_t id = 7220;
+  const auto query = [&](bool secure, bool live) {
+    ipc::QueryCandidatesRequest request;
+    request.reading = "こんちには";
+    request.secure = secure;
+    request.learning_allowed = !secure;
+    request.live = live;
+    const auto response = target.Dispatch(MakeReq(++id, ipc::MessageType::QueryCandidates,
+                                                  ipc::BuildQueryCandidatesRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  const auto has_corrected_candidate = [](const ipc::QueryCandidatesResponse& response) {
+    return std::any_of(response.candidates.begin(), response.candidates.end(),
+                       [](const ipc::CandidateField& c) { return c.reading == "こんにちは"; });
+  };
+  const auto update = [&](const char* text) {
+    write_settings(text);
+    ASSERT_TRUE(target.Dispatch(MakeReq(++id, ipc::MessageType::UpdateConfig, "{}")).has_value());
+  };
+  for (const char* host_mode : {"suggest", "aggressive"}) {
+    SCOPED_TRACE(host_mode);
+    const std::string settings = std::string(R"({"privacy":{"mode":"normal"},"typoMinCount":2,)") +
+                                 R"("typoCorrection":{"mode":")" + host_mode + R"("}})";
+    update(settings.c_str());
+    ASSERT_EQ(engine.config().typo_correction_mode, host_mode);
+    const bool replaces = std::string(host_mode) == "aggressive";
+    const auto open = query(false, false);
+    EXPECT_EQ(open.corrected_reading, replaces ? "こんにちは" : "");
+    EXPECT_TRUE(has_corrected_candidate(open));
+    EXPECT_EQ(query(false, true).corrected_reading, replaces ? "こんにちは" : "");
+    for (const bool live : {false, true}) {
+      SCOPED_TRACE(live);
+      const auto secure = query(true, live);
+      ASSERT_FALSE(secure.candidates.empty());
+      EXPECT_TRUE(secure.corrected_reading.empty());
+      EXPECT_FALSE(has_corrected_candidate(secure));
+    }
+
+    const std::string secure_settings =
+        std::string(R"({"privacy":{"mode":"secure"},"typoMinCount":2,)") +
+        R"("typoCorrection":{"mode":")" + host_mode + R"("}})";
+    update(secure_settings.c_str());
+    ASSERT_EQ(engine.config().typo_correction_mode, host_mode);
+    for (const bool live : {false, true}) {
+      SCOPED_TRACE(live);
+      const auto held = query(false, live);
+      ASSERT_FALSE(held.candidates.empty());
+      EXPECT_TRUE(held.corrected_reading.empty());
+      EXPECT_FALSE(has_corrected_candidate(held));
+    }
+  }
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+  std::remove(settings_path.c_str());
+}
+
+// Section 12.13 (DEV-2149): QueryCandidates hands an open request's raw_keys to the rank
+// hypotheses, which keep to typoCorrection.maxReadingHypotheses and the section 12.16 key limit,
+// and a secure request, whose raw_keys the decode drops, gets none.
+TEST_F(DispatcherTest, RankHypothesesFollowTheRequestsRawKeysAndSettings) {
+  const auto settings_path = temp_directory.File("azookey_dispatcher_typo_rank_apply.json");
+  const auto write_settings = [&](const char* text) {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << text;
+  };
+  write_settings(
+      R"({"privacy":{"mode":"normal"},"typoCorrection":{"mode":"rank","maxReadingHypotheses":1}})");
+  azookey::host::SettingsStore settings_store(settings_path);
+  ASSERT_EQ(settings_store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings_store);
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_rank_apply.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  engine.SetTypoStore(&typo);
+  for (const auto& [word, ruby] : {std::pair{"電気", "でんき"}, std::pair{"転義", "てんぎ"}}) {
+    azookey::learning::UserWord user_word;
+    user_word.word = word;
+    user_word.ruby = ruby;
+    ASSERT_TRUE(engine.AddUserWord(user_word));
+  }
+
+  uint64_t id = 7240;
+  const auto suggestions = [&](const std::string& raw_keys, bool secure) {
+    ipc::QueryCandidatesRequest request;
+    request.reading = "てんき";
+    request.raw_keys = raw_keys;
+    request.secure = secure;
+    request.learning_allowed = !secure;
+    const auto response = target.Dispatch(MakeReq(++id, ipc::MessageType::QueryCandidates,
+                                                  ipc::BuildQueryCandidatesRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    size_t count = 0;
+    if (parsed)
+      for (const auto& c : parsed->candidates)
+        if (c.description.rfind("もしかして: ", 0) == 0) ++count;
+    return count;
+  };
+  ASSERT_TRUE(target.Dispatch(MakeReq(++id, ipc::MessageType::UpdateConfig, "{}")).has_value());
+  ASSERT_EQ(engine.config().typo_correction_mode, "rank");
+  ASSERT_EQ(engine.config().typo_max_reading_hypotheses, 1u);
+  EXPECT_EQ(suggestions("tenki", false), 1u);
+  EXPECT_EQ(suggestions("tenki", true), 0u);
+  EXPECT_EQ(suggestions(std::string(21, 'k'), false), 0u);
+
+  write_settings(
+      R"({"privacy":{"mode":"normal"},"typoCorrection":{"mode":"rank","maxReadingHypotheses":3}})");
+  ASSERT_TRUE(target.Dispatch(MakeReq(++id, ipc::MessageType::UpdateConfig, "{}")).has_value());
+  ASSERT_EQ(engine.config().typo_max_reading_hypotheses, 3u);
+  EXPECT_EQ(suggestions("tenki", false), 2u);
+  EXPECT_EQ(suggestions("tenki", true), 0u);
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+  std::remove(settings_path.c_str());
+}
+
+// Section 12.12.2 (DEV-2149): QueryLiveConversion and QueryBatchConversion follow the same rule as
+// QueryCandidates: a secure request, and any request while privacy_mode_secure is on, is converted
+// as typed.
+TEST_F(DispatcherTest, SecureLiveAndBatchRequestsAreNeverCorrected) {
+  const auto settings_path = temp_directory.File("azookey_dispatcher_typo_secure_live.json");
+  const auto write_settings = [&](const char* text) {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << text;
+  };
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  azookey::host::SettingsStore settings_store(settings_path);
+  ASSERT_EQ(settings_store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings_store);
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_secure_live.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  engine.SetTypoStore(&typo);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  const auto as_typed = [&](const std::string& reading) {
+    azookey::host::MixedConversionOptions options;
+    options.typo_correction = false;
+    const auto candidate =
+        engine.QueryLiveConversion(reading, "", now_epoch_sec, nullptr, nullptr, &options);
+    return candidate ? candidate->surface : std::string();
+  };
+
+  uint64_t id = 7260;
+  const auto live = [&](bool secure) {
+    ipc::QueryLiveConversionRequest request;
+    request.kana = "こんちには";
+    request.secure = secure;
+    const auto response = target.Dispatch(MakeReq(++id, ipc::MessageType::QueryLiveConversion,
+                                                  ipc::BuildQueryLiveConversionRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryLiveConversionResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->surface : std::string();
+  };
+  const auto batch_corrected = [&](bool secure) {
+    ipc::QueryBatchConversionRequest request;
+    request.reading = "こんちには";
+    request.secure = secure;
+    const auto response = target.Dispatch(MakeReq(++id, ipc::MessageType::QueryBatchConversion,
+                                                  ipc::BuildQueryBatchConversionRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryBatchConversionResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    EXPECT_TRUE(parsed && !parsed->segments.empty() && !parsed->segments[0].candidates.empty());
+    bool corrected = false;
+    if (parsed)
+      for (const auto& segment : parsed->segments)
+        for (const auto& c : segment.candidates) corrected |= c.reading == "こんにちは";
+    return corrected;
+  };
+  const auto update = [&](const std::string& text) {
+    write_settings(text.c_str());
+    ASSERT_TRUE(target.Dispatch(MakeReq(++id, ipc::MessageType::UpdateConfig, "{}")).has_value());
+  };
+  const auto typed = as_typed("こんちには");
+  const auto corrected = as_typed("こんにちは");
+  ASSERT_FALSE(typed.empty());
+  ASSERT_NE(typed, corrected);
+  for (const char* host_mode : {"suggest", "aggressive"}) {
+    SCOPED_TRACE(host_mode);
+    const std::string tail =
+        std::string(R"(,"typoMinCount":2,"typoCorrection":{"mode":")") + host_mode + R"("}})";
+    update(R"({"privacy":{"mode":"normal"})" + tail);
+    ASSERT_EQ(engine.config().typo_correction_mode, host_mode);
+    const bool replaces = std::string(host_mode) == "aggressive";
+    EXPECT_EQ(live(false), replaces ? corrected : typed);
+    EXPECT_TRUE(batch_corrected(false));
+    EXPECT_EQ(live(true), typed);
+    EXPECT_FALSE(batch_corrected(true));
+
+    update(R"({"privacy":{"mode":"secure"})" + tail);
+    ASSERT_EQ(engine.config().typo_correction_mode, host_mode);
+    EXPECT_EQ(live(false), typed);
+    EXPECT_FALSE(batch_corrected(false));
+  }
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+  std::remove(settings_path.c_str());
 }
 
 TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
@@ -8049,6 +8296,54 @@ TEST(AmbiguousReadingDispatchTest, ASwitchKeepsTheTypedReadingsDictionaryWords) 
       std::count_if(window.candidates.begin(), window.candidates.end(),
                     [](const ipc::CandidateField& c) { return c.reading == "せんねん"; }),
       static_cast<std::ptrdiff_t>(azookey::host::InferenceEngine::kAmbiguousReadingTypedKept));
+}
+
+// typo-correction-learning-spec section 12.7 (DEV-2149): under rank the typed reading compared
+// with another one gets no reading hypothesis, so a switch keeps the typed reading's own words
+// and no switch leaves none either. A request without alt_readings still gets them.
+TEST(AmbiguousReadingDispatchTest, AComparedTypedReadingGetsNoHypothesisWords) {
+  ScopedTempDirectory temp;
+  azookey::learning::TypoLearningStore typo(temp.File("typo.tsv"),
+                                            &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  azookey::learning::UserDictionary dictionary(temp.File("user.json"),
+                                               &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dictionary.Load());
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, cfg);
+  engine.SetTypoStore(&typo);
+  engine.SetUserDictionary(&dictionary);
+  // The words of the dakuten hypotheses of せんねん and さんにん.
+  for (const auto& [word, ruby] : {std::pair{"前年", "ぜんねん"}, std::pair{"残忍", "ざんにん"}}) {
+    azookey::learning::UserWord user_word;
+    user_word.word = word;
+    user_word.ruby = ruby;
+    ASSERT_TRUE(engine.AddUserWord(user_word));
+  }
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+  const auto has = [](const ipc::QueryCandidatesResponse& window, const std::string& surface) {
+    return std::any_of(window.candidates.begin(), window.candidates.end(),
+                       [&](const ipc::CandidateField& c) { return c.surface == surface; });
+  };
+
+  const auto plain = DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "さんにん", {}));
+  ASSERT_TRUE(has(plain, "残忍"));
+
+  const auto switched = DispatchAmbiguous(dispatcher, AmbiguousQuery(2, "せんねん", {"せんえん"}));
+  EXPECT_EQ(switched.corrected_reading, "せんえん");
+  EXPECT_FALSE(has(switched, "前年"));
+  EXPECT_TRUE(std::all_of(switched.candidates.begin(), switched.candidates.end(),
+                          [](const ipc::CandidateField& c) {
+                            return c.reading == "せんえん" || c.reading == "せんねん";
+                          }));
+
+  const auto kept = DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "さんにん", {"さんいん"}));
+  EXPECT_TRUE(kept.corrected_reading.empty());
+  EXPECT_FALSE(has(kept, "残忍"));
+  EXPECT_TRUE(std::all_of(kept.candidates.begin(), kept.candidates.end(),
+                          [](const ipc::CandidateField& c) { return c.reading == "さんにん"; }));
 }
 
 // A secure request is converted as typed: its TIP drops corrected_reading, so

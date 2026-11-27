@@ -15,8 +15,10 @@
 #include "azookey/core/SymbolRewriter.h"
 #include "azookey/core/ThreadStackGuarantee.h"
 #include "azookey/core/Utf8.h"
+#include "azookey/correction/TypoCorrectionEngine.h"
 #include "azookey/host/BackendSelector.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
+#include "azookey/host/TypoCorrectionPolicy.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
@@ -362,6 +364,7 @@ void InferenceEngine::SetTypoStore(learning::TypoLearningStore* store) {
   std::scoped_lock lock(state_mutex_, typo_store_mutex_);
   typo_store_ = store;
   if (store) store->SetWritesSuspended(typo_writes_suspended_);
+  InvalidateTypoPatternIndexLocked();
   typo_unsaved_observations_ = 0;
   typo_last_observation_epoch_sec_ = 0;
   last_successful_typo_save_steady_.reset();
@@ -1811,6 +1814,11 @@ void InferenceEngine::ApplyConfigLocked(const EngineConfig& config) {
   config_.user_word_default_score = config.user_word_default_score;
   config_.typo_correction_mode = config.typo_correction_mode;
   config_.typo_min_count = config.typo_min_count;
+  config_.typo_max_reading_hypotheses = config.typo_max_reading_hypotheses;
+  config_.typo_min_confidence_for_ranking = config.typo_min_confidence_for_ranking;
+  config_.typo_min_confidence_for_top_candidate = config.typo_min_confidence_for_top_candidate;
+  config_.typo_hypothesis_max_reading = config.typo_hypothesis_max_reading;
+  config_.typo_hypothesis_max_keys = config.typo_hypothesis_max_keys;
   config_.auto_word_mining_enabled = config.auto_word_mining_enabled;
   config_.auto_word_trending_enabled = config.auto_word_trending_enabled;
   config_.auto_word_trending_interval_hours = config.auto_word_trending_interval_hours;
@@ -1982,13 +1990,20 @@ std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
 InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
     const std::string& kana, const std::vector<std::string>& alternatives,
     const std::string& context, uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
-    uint32_t max_candidates, const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts) {
-  auto typed = QueryCandidatesEx(kana, context, now_epoch_sec, cancel, max_candidates, false,
-                                 telemetry, tag_boosts);
+    uint32_t max_candidates, const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
+    const MixedConversionOptions* mixed) {
   const auto alternative =
       std::find_if(alternatives.begin(), alternatives.end(), [&](const std::string& reading) {
         return !reading.empty() && reading.size() <= kana.size() && reading != kana;
       });
+  // typo-correction-learning-spec section 12.7: a typed reading compared with another one gets no
+  // reading hypothesis, so what a switch keeps of it (DEV-1734) and the learning weighed for it
+  // (DEV-1773) are its own words.
+  MixedConversionOptions compared = mixed ? *mixed : MixedConversionOptions{};
+  compared.typo_hypotheses = false;
+  auto typed =
+      QueryCandidatesEx(kana, context, now_epoch_sec, cancel, max_candidates, false, telemetry,
+                        tag_boosts, alternative == alternatives.end() ? mixed : &compared);
   // An M35 correction replaced the reading the alternatives were made from, and
   // a conversion that already ran out of time leaves none for a second one.
   if (alternative == alternatives.end() || !typed.corrected_reading.empty() ||
@@ -2101,29 +2116,46 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   if (canceled()) return {};
 
   // M35: resolve the typo correction before anything looks the reading up, so
-  // auto_replace runs dictionary lookup, conversion and reranking on the
-  // corrected reading rather than patching the result afterwards.
+  // aggressive (the v1 auto_replace) runs dictionary lookup, conversion and
+  // reranking on the corrected reading rather than patching the result afterwards.
   CandidatesResult out;
   std::string suggest_reading;
+  auto typo_mode = TypoCorrectionMode::Off;
+  // M55 rank and aggressive (sections 12.4 and 12.5): the reading as typed gets reading
+  // hypotheses after its conversion.
+  bool typo_hypotheses = false;
+  // The store's personal patterns (section 12.4.1), read after typo_store_mutex_ is let go.
+  std::shared_ptr<const TypoPatternIndex> pattern_index;
   {
     learning::TypoLearningStore* store = nullptr;
-    std::string mode;
     uint32_t min_count = 0;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       store = typo_store_;
-      mode = config_.typo_correction_mode;
+      typo_mode = ParseTypoCorrectionMode(config_.typo_correction_mode);
       min_count = config_.typo_min_count;
     }
     // typo_store_mutex_ alone, never together with state_mutex_ (see the member
     // declaration): the store has no lock of its own and ObserveTypo mutates it.
-    // M63-B section 12: a mixed reading is converted as typed.
-    if (store && mode != "off" && (!mixed || mixed->typo_correction)) {
+    // M63-B section 12: a mixed reading is converted as typed, and so is a secure
+    // request (typo-correction-learning-spec section 12.12.2).
+    if (store && typo_mode != TypoCorrectionMode::Off && (!mixed || mixed->typo_correction)) {
       std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
-      auto corrected = store->LookupReadingPair(requested_kana, min_count, now_epoch_sec);
+      // Section 12.12.2: privacy_mode_secure, which suspends the writes, stops the correction.
+      std::optional<std::string> corrected;
+      if (!typo_writes_suspended_) {
+        corrected = store->LookupReadingPair(requested_kana, min_count, now_epoch_sec);
+        // Live conversion makes no hypothesis (below), so it does not build the index either.
+        typo_hypotheses =
+            !live && (!mixed || mixed->typo_hypotheses) &&
+            (typo_mode == TypoCorrectionMode::Rank || typo_mode == TypoCorrectionMode::Aggressive);
+        if (typo_hypotheses) pattern_index = TypoPatternIndexLocked(*store);
+      }
       if (corrected && *corrected != requested_kana) {
-        if (mode == "auto_replace") {
+        if (typo_mode == TypoCorrectionMode::Aggressive) {
+          // The v1 pair replaces the reading, and no hypothesis is made for it.
           out.corrected_reading = std::move(*corrected);
+          typo_hypotheses = false;
         } else {
           suggest_reading = std::move(*corrected);
         }
@@ -2217,6 +2249,11 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       merged.push_back(std::move(c));
     }
   }
+  // DEV-2149 interim section 12.5 dict_best and section 12.10 s1_strength: 1 for a word of the
+  // dictionaries, the user dictionary or the mined words, 0 otherwise.
+  std::vector<std::string> typed_words;
+  if (typo_hypotheses)
+    for (const auto& c : merged) typed_words.push_back(c.surface);
 
   if (canceled()) return {};
 
@@ -2481,6 +2518,73 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   if (rerank_start)
     LogTracePhase(runtime_logger_, telemetry, logging::Phase::Rerank, *rerank_start, "ok");
 
+  // M55 rank and aggressive (typo-correction-learning-spec sections 12.4.4 to 12.11): the
+  // dictionary word of each reading hypothesis, after the first candidate. Not for live
+  // conversion, which takes the first candidate alone, nor for another reading (DEV-2101).
+  // Neither the keys nor the readings are logged.
+  if (typo_hypotheses && !live && lattice_allowed && !canceled() && request_time_left()) {
+    const std::string_view raw_keys =
+        mixed ? std::string_view(mixed->raw_keys) : std::string_view();
+    const auto reading_length = CountCodepoints(kana);
+    const auto key_count = CountCodepoints(raw_keys);
+    TypoActivationInput activation;
+    if (!result.empty()) activation.top1_score = result[0].score;
+    if (result.size() > 1) activation.top2_score = result[1].score;
+    activation.dictionary_best = typed_words.empty() ? 0.0 : 1.0;
+    const TypoGuards guards{config.typo_min_count, config.typo_min_confidence_for_ranking,
+                            config.typo_min_confidence_for_top_candidate};
+    const bool activates = TypoCorrectionActivates(activation);
+    // Section 12.5 strong_pat: only a pattern past the warm-up may correct a reading that does
+    // not activate otherwise.
+    const bool may_be_strong =
+        pattern_index && pattern_index->max_accept_count() >= guards.min_count;
+    // Section 12.16: longer input keeps to the v1 pairs.
+    if (reading_length && *reading_length <= config.typo_hypothesis_max_reading && key_count &&
+        *key_count <= config.typo_hypothesis_max_keys && (activates || may_be_strong)) {
+      std::optional<TypoPatternLookup> lookup;
+      correction::TypoCorrectionOptions options;
+      if (pattern_index) {
+        lookup.emplace(*pattern_index, now_epoch_sec, guards);
+        options.personalized = &*lookup;
+      }
+      const auto hypotheses = correction::GenerateReadingHypotheses({kana, raw_keys}, options);
+      const double top1_strength =
+          !result.empty() && std::find(typed_words.begin(), typed_words.end(),
+                                       result.front().surface) != typed_words.end()
+              ? 1.0
+              : 0.0;
+      std::vector<TypoHypothesisWord> words;
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        for (const auto& hypothesis : hypotheses) {
+          if (hypothesis.source != correction::HypothesisSource::TypoCorrection) continue;
+          // The v1 pair's reading already has its suggestion at the front.
+          if (hypothesis.reading == suggest_reading) continue;
+          if (canceled() || !request_time_left()) break;
+          TypoHypothesisWord word;
+          word.evidence.confidence = hypothesis.confidence;
+          if (lookup && hypothesis.personalized)
+            word.evidence.pattern = lookup->History(hypothesis.pattern_id);
+          if (!activates && !IsStrongTypoPattern(word.evidence, guards)) continue;
+          // Section 12.4.4 (DEV-2149 plan a): the reading's best dictionary word, or nothing.
+          auto found = DictionaryCandidates(
+              dictionaries_, hypothesis.reading, learning::LookupMode::Exact, now_epoch_sec, 1,
+              user_dictionary_enabled_, config.user_word_default_score);
+          if (found.empty()) continue;
+          word.candidate = std::move(found.front());
+          word.candidate.debug_info = kTypoCorrectionMark;
+          word.evidence.reading_similarity =
+              TypoReadingSimilarity(hypothesis.edit_distance, *reading_length,
+                                    CountCodepoints(hypothesis.reading).value_or(*reading_length));
+          words.push_back(std::move(word));
+        }
+      }
+      if (!canceled())
+        PlaceTypoHypothesisWords(result, std::move(words), typo_mode, top1_strength, guards,
+                                 config.typo_max_reading_hypotheses);
+    }
+  }
+
   // M35 suggest: convert the corrected reading too and put its best candidate at
   // the front, marked, while the candidates for what the user actually typed
   // stay in place below it. Injecting after reranking keeps the position
@@ -2511,10 +2615,19 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       }
     }
     for (auto& suggestion : suggestions) {
-      const bool already_shown = std::any_of(
-          result.begin(), result.end(),
-          [&](const core::Candidate& existing) { return existing.surface == suggestion.surface; });
+      // DEV-2149 decision 5: a word of the conversion hides the suggestion, while a reading
+      // hypothesis's word of the same surface, read from another reading, gives way to it.
+      const bool already_shown =
+          std::any_of(result.begin(), result.end(), [&](const core::Candidate& existing) {
+            return existing.surface == suggestion.surface &&
+                   existing.debug_info != kTypoCorrectionMark;
+          });
       if (already_shown) continue;
+      result.erase(std::remove_if(result.begin(), result.end(),
+                                  [&](const core::Candidate& existing) {
+                                    return existing.surface == suggestion.surface;
+                                  }),
+                   result.end());
       suggestion.reading = suggest_reading;
       suggestion.debug_info = kTypoCorrectionMark;
       result.insert(result.begin(), std::move(suggestion));
@@ -3026,9 +3139,25 @@ bool InferenceEngine::SaveTypoStoreLocked() {
     }
     return false;
   }
+  // The retention limits may have dropped patterns.
+  InvalidateTypoPatternIndexLocked();
   typo_unsaved_observations_ = 0;
   last_successful_typo_save_steady_ = std::chrono::steady_clock::now();
   return true;
+}
+
+std::shared_ptr<const TypoPatternIndex> InferenceEngine::TypoPatternIndexLocked(
+    const learning::TypoLearningStore& store) {
+  if (!typo_pattern_index_ || typo_pattern_index_store_ != &store) {
+    typo_pattern_index_ = std::make_shared<const TypoPatternIndex>(store.Patterns());
+    typo_pattern_index_store_ = &store;
+  }
+  return typo_pattern_index_;
+}
+
+void InferenceEngine::InvalidateTypoPatternIndexLocked() {
+  typo_pattern_index_.reset();
+  typo_pattern_index_store_ = nullptr;
 }
 
 bool InferenceEngine::FlushTypoStore() {

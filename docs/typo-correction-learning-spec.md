@@ -422,6 +422,11 @@ cost =
 256 件より先に上限（§12.4.6 の 20,000 状態）に達し、そこまでに見つかった読みだけを返す。このときは同じコストの
 読みが揃わず、かなの順で切ったものにならない。
 
+Host の注入点は、§12.8 の `typo_patterns` を `typo_type` と 2 つのパターン（§12.12.1）で引く。`keyboard_layout` だけが
+違う行は、件数を足し合わせて 1 つとして数える。warm-up（§12.11）を満たし confidence が `minConfidenceForRanking` 以上の
+パターンは、`personal_cost_reduction`（§12.16）× confidence を減額として返す。ほかの当たったパターンは減額 0 で返し、
+その confidence と件数は §12.10・§12.11 に渡る。引く表はストアの内容が変わるたびに作り直す。
+
 observed の読みが `LEN_MIN`（§12.16）以下のとき、読みか `raw_keys` が 64 コードポイントを超えるとき（§6）、
 どちらかが §12.12.1 の文字集合の外の文字を含むときは、仮説を作らない。
 
@@ -590,6 +595,11 @@ activate_typo_correction(reading, observed_pattern):
 - 発動しても補正候補が第一候補になるとは限らない。順位は §12.10 のスコアと
   §12.11 の誤補正防止条件で決まる。発動は「補正 hypothesis を **生成する**
   か」だけを決める前段ゲートである。
+- Host は `dict_best` を 2 値で近似し、M52 の校正（§12.16、DEV-2150）で見直す。元の読みに辞書（システム辞書・
+  ユーザー辞書・新語）の語があれば 1、無ければ 0 とする。このため `weak` は `no_dict` と同じになる。`observed_pattern` は仮説ごとに決まるので、
+  `strong_pat` は仮説ごとに評価する。`weak`・`small_gap`・`no_dict` のどれも立たない読みでは、warm-up（§12.11）を
+  満たし confidence が `minConfidenceForRanking` 以上の個人パターン（§12.8）に当たる仮説だけを作る。
+  どの個人パターンも warm-up を満たさなければ、仮説を作らない。
 
 ### 12.6 補正モード（v2）
 
@@ -622,6 +632,17 @@ v1 の `auto_replace` モードは v2 の `aggressive` 相当として読み替�
 2 校章
 3 高尚
 ```
+
+`rank` と `aggressive` は、仮説の語（§12.4.4）を、§12.10 の `typo_score` の順に第一候補の直後へ最大
+`maxReadingHypotheses` 件置く。`aggressive` で §12.11 の全ガードを満たす語は、その前の第一候補に置く。
+このときも `corrected_reading`（§5-3）は返さず、候補の reading を仮説の読みとする。TIP の preedit は打った読みのまま残る。
+warm-up を満たし confidence が `minConfidenceForRanking` 以上の個人パターンの語は通常候補として示し、それ以外の語には
+「もしかして: <読み>」を付ける。v1 の読みの組の候補（§5-2）は、`suggest` と `rank` でこれらより前の先頭に置き、
+それと同じ表層の仮説の語は置かない。
+`rank` と `aggressive` では、secure でない `QueryBatchConversion` の各 chunk にも同じ規則で仮説の語を置く。
+一括変換の要求は `raw_keys` を持たないので、仮説は読みの経路（§12.4.1）だけから作る。
+`alt_readings` でもう一つの読みと比べる `QueryCandidates`（`docs/legacy-parity-spec.md` §5.4）では、打った読みに
+仮説の語を置かない。切り替えても後ろに残す打った読みの上位の候補を、その読みの語に保つためである。v1 の読みの組は使う。
 
 ### 12.8 TypoLearningStore（v2）
 
@@ -1043,6 +1064,9 @@ overcorrection_penalty =
   `context_score = 1.0` フォールバック。
 - 係数 `P_*` / `S_STRONG` は初期値であり M52（`typo_overcorrection_rate`）で
   校正する（§12.16）。
+- Host は `dictionary_hit_score` を 1（§12.4.4 で語のある仮説だけが残る）、`s1_strength` を元の top1 が辞書の語なら 1、
+  そうでなければ 0 で近似し、M52 の校正（§12.16、DEV-2150）で見直す。`context_score` と `app_factor_typo` は 1.0 とする。
+  個人パターンの confidence（§12.2）は、照会の時点の §12.9 の値で、app bonus を含めない。
 
 ### 12.11 誤補正防止条件
 
@@ -1155,9 +1179,12 @@ Host は `ObserveTypo` / `CommitObservation` / `CommitSegmentsObservation` ご�
 **M55 の補正適用に関する設計契約**: 補正候補の `Lookup` は学習と別軸とし、
 private の学習停止を理由に予測を停止しない。secure 中は検出スナップショット、
 `raw_keys` 送信、補正適用を停止する。M55 の適用ゲートは当該要求の secure 判定を
-消費する経路として定義する。protocol v1 の Host 候補要求処理は
-`QueryCandidates.secure` / `learning_allowed` を補正適用の判定に用いず、
-両フィールドの伝達だけでは M55 の補正停止を保証しない。
+消費する経路として定義する。Host の候補要求処理は、`QueryCandidates.secure` が true の要求（欠落・型不正を
+含む。§12.13）を、v1 の読みの組も含めて補正せず、その `raw_keys` も使わない。Host の `privacy_mode_secure` が
+立っている間は、どの要求も補正しない。`QueryLiveConversion` と `QueryBatchConversion` も、それぞれの要求の `secure` で
+同じに扱う。`learning_allowed` は補正適用の判定に用いない。要求の secure で補正を止める
+この規則は、Host が要求の secure を補正の判定に用いず TIP が補正読みを捨てるとした DEV-1956 の決定を、
+DEV-2149 で改めたものである。
 
 privacy 対応 TIP は handshake に `secure_flag` を広告し、毎 `QueryCandidates` /
 `ObserveTypo` / `CommitObservation` / `CommitSegmentsObservation` に
@@ -1224,18 +1251,18 @@ optional フィールドを追加する（エンベロープ schema 自体は変
   超えるときは送らない。TIP は `raw_keys` をログに出さない。
 - **`typo_correction_mode` の値**: 4 値以外（v1 の `auto_replace` を含む）と文字列以外は未指定として parse する。
   TIP は設定を参照しない（§3）ので、TIP の要求はこのフィールドを持たない。
-- **要求値は Host の実効値を上回らない**: protocol v1 の Host は、`typo_correction_mode` と `raw_keys` を
-  補正の判定に使わず、Host 設定から決まる実効値（§12.14）で変換する。M55 の補正エンジンが要求値を
-  使うときも、要求値で補正を強めない。Host の実効値が `off`（設定または SafeMode）のとき、
-  secure の要求のとき、`rank` のように engine が持たない値のときも、要求値は Host の実効値を変えない。
+- **要求値は Host の実効値を上回らない**: Host は `typo_correction_mode` を補正の判定に使わず、Host 設定から
+  決まる実効値（§12.14）で変換する。`raw_keys` は、実効値が `rank` か `aggressive` の要求で §12.4.1 の打鍵の
+  経路にだけ使い、補正のモードを変えない。要求値を使う経路を足すときも、要求値で補正を強めない。Host の
+  実効値が `off`（設定または SafeMode）のときと secure の要求のときは、要求値は Host の実効値を変えない。
 - **先頭文節の要求**: 残りの読みを持つ先頭文節の要求は、Host の実効値によらず補正しない（`docs/segment-editing-spec.md` §5.3）。
 - **互換**: protocol version は 1 を維持する。
 
 | 組み合わせ | 挙動 |
 |---|---|
 | 新しい TIP と古い Host | 古い Host は capability `raw_keys` を広告しないので、TIP は `raw_keys` を送らない。古い Host は両フィールドを未知のキーとして読み飛ばす |
-| 古い TIP と新しい Host | 古い TIP は両フィールドを送らない。Host は空として parse し、v1 動作になる |
-| 新しい TIP と新しい Host | TIP は secure でない要求に `raw_keys` を載せる。Host は境界検証を通ったものだけを保持し、補正の判定には使わない |
+| 古い TIP と新しい Host | 古い TIP は両フィールドを送らない。Host は空として parse し、打鍵の経路の仮説を作らずに Host の実効値（§12.14）で変換する。`secure` を載せない要求は secure として parse するので、補正しない（§12.12.2）。`secure` を載せない `QueryLiveConversion` / `QueryBatchConversion` も同じ |
+| 新しい TIP と新しい Host | TIP は secure でない要求に `raw_keys` を載せる。Host は境界検証を通ったものだけを保持し、実効値が `rank` か `aggressive` のとき打鍵の経路の仮説に使う |
 
 > privacy フラグの欠落・型不正は `secure = true` /
 > `learning_allowed = false` として parse する。これは parse エラーではない。
@@ -1243,7 +1270,7 @@ optional フィールドを追加する（エンベロープ schema 自体は変
 > M55 補正適用の責務は §12.12.2 の区別に従う。
 
 - 両フラグは protocol v1 の加算的フィールドである。Host の候補要求処理では
-  どちらも補正適用の判定に使わない。学習イベントでは当該イベントの値を検査する。
+  `secure` だけを補正適用の判定に使う（§12.12.2）。学習イベントでは当該イベントの値を検査する。
 - **フィールド存在規約**: `secure_flag` を広告する TIP は毎 `QueryCandidates` /
   `ObserveTypo` / `CommitObservation` / `CommitSegmentsObservation` に
   `secure` と `learning_allowed` を載せる。
@@ -1304,7 +1331,7 @@ v2 は nested `typoCorrection.*` に集約する。型・既定・範囲の正�
 | `typoCorrection.maxReadingHypotheses` | `3` | 1 つの読みから作る §12.2 の補正 hypothesis の上限（1〜8）。§12.4.4 の辞書の制約の後に数える | 既定 |
 | `typoCorrection.minConfidenceForRanking` | `0.70` | §12.5・§12.11 のしきい値（0〜1） | 既定。2 つの大小が逆（等しいを含む）なら両方を既定 |
 | `typoCorrection.minConfidenceForTopCandidate` | `0.90` | §12.11 のしきい値（0〜1） | 同上 |
-| `typoCorrection.disableInSecretApps` | `true` | M55 の適用ゲートが secure の入力で補正を止める（§12.11・§12.12.2）。schema は `false` を拒否する。protocol v1 の Host の候補要求処理はこのキーを読まない（secure の入力の学習は学習ゲートが止め、補正読みは TIP が捨てる） | Host は `false` を読んでも `true` として扱う |
+| `typoCorrection.disableInSecretApps` | `true` | M55 の適用ゲートが secure の入力で補正を止める（§12.11・§12.12.2）。schema は `false` を拒否する。Host の候補要求処理はこのキーを読まず、secure の要求と `privacy_mode_secure` の間は常に補正を止める（§12.12.2） | Host は `false` を読んでも `true` として扱う |
 
 信頼度の 2 キーを除き、各キーは単独で既定へ戻り、不正な値が他のキーを巻き込まない。`typoCorrection` が
 オブジェクトでなければ全体を無いものとして扱う。
@@ -1321,9 +1348,10 @@ v2 は nested `typoCorrection.*` に集約する。型・既定・範囲の正�
 （`docs/host-availability-spec.md` §8.5.3）は migration の後で `enabled` / `mode` / `learnPersonalPatterns` を
 止める側へ上書きするので、どちらのキーからも補正は戻らない。
 
-**engine への反映**: engine（`EngineConfig::typo_correction_mode`）は v1 の 3 値を受ける。Host の
-`ApplyRuntimeSettingsToEngineConfig` は実効値を `off` → `off`、`suggest` / `rank` → `suggest`、
-`aggressive` → `auto_replace` に写す。`rank` は v1 に対応が無く、`suggest` と同じに変換する。
+**engine への反映**: Host の `ApplyRuntimeSettingsToEngineConfig` は、実効値の 4 値をそのまま
+`EngineConfig::typo_correction_mode` に渡し、`maxReadingHypotheses` と信頼度の 2 キーも渡す。engine は v1 の
+`auto_replace` を `aggressive` と読む。v1 の読みの組を、`rank` は `suggest` と、`aggressive` は `auto_replace` と
+同じに当てる。`rank` と `aggressive` は、v1 の読みの組が読みを置き換えないとき、§12.4 の仮説も作る（§12.7）。
 
 **書き出し**: migration は読み取りだけで、Host は settings.json を書き戻さない。v1 key を残したまま
 （破壊的削除はしない）両方を書くのは設定アプリである。「辞書」ペインはファイルが解決する実効値を
@@ -1339,8 +1367,7 @@ v1 の 3 モードで示し（`rank` は `suggest`、`aggressive` は `auto_repl
 `learnPersonalPatterns` は Host の `ObserveTypo` の蓄積を今すぐ変える（`SettingsStore` が `typo_learning` を決め、
 `HandleObserveTypo` が止める）。
 `typoCorrection.enabled` はペインに専用のスイッチを持たず、false は `off` として示す。`rank` / `aggressive`、
-`maxReadingHypotheses`、`minConfidenceForRanking` / `minConfidenceForTopCandidate` は、補正エンジンが変換に
-反映するまでペインに出さず、保存で残す。
+`maxReadingHypotheses`、`minConfidenceForRanking` / `minConfidenceForTopCandidate` は、ペインに出さず、保存で残す。
 v1 root key は M55 を含むリリースから 3 マイナーバージョンの間は読み込み、
 その後のリリースで削除する（deprecation warning を CHANGELOG に記載）。
 M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
@@ -1376,6 +1403,8 @@ M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
 | `P_lowconf`（§12.10） | 0.50 | — | overcorrection 率（aggressive） |
 | `minConfidenceForRanking`（§12.14） | 0.70 | `< minConfidenceForTopCandidate` | FP 率（rank） |
 | `minConfidenceForTopCandidate`（§12.14） | 0.90 | `> minConfidenceForRanking` | overcorrection 率（aggressive） |
+| `personal_cost_reduction`（§12.4.1） | 0.5 | `0 <= personal_cost_reduction <= 1` | top5 accuracy（rank） |
+| `HYP_MAX_READING` / `HYP_MAX_KEYS`（§12.4） | 10 / 20 | `HYP_MAX_READING > LEN_MIN`。読みがこのコードポイント数を、または `raw_keys` がこのキー数を超えると、`rank` / `aggressive` でも仮説を作らず v1 の読みの組だけを引く。設定キーではない | 候補表示の p95 と top5 accuracy（rank） |
 
 - **受け入れ判定に用いる指標**: `typo_correction_top5_accuracy`（rank）/
   `typo_false_positive_rate`（rank）/ `typo_overcorrection_rate`（aggressive）。

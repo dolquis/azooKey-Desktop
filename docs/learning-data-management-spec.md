@@ -218,7 +218,7 @@ Response:
 | `auto_word` | 状態を `rejected` にする。削除すると同じ語を再び候補として提案するため、行は残す |
 
 `typo` は、Host の `privacy_mode_secure` が立っている間は書込みを止める（`docs/typo-correction-learning-spec.md` §12.12.2）。
-その間の忘却は、何も変えずに `save_failed` を返す。
+止めるのは観測の学習と保存、import の保存で、忘却は入力を記録しないので止めず、その間も通常どおり成功・失敗を返す。
 
 `learning` の 0 化した行を保存で除くのは、忘れた語をディスクに残さないためである。
 `learning_min_weight` の GC（`user-learning-enhancement-spec.md` §3.1.1）が無効でも除く。
@@ -409,8 +409,7 @@ counts のキーは archive の item 名（§5.1）である。
 このため `save_failed` の後も Host が提示する学習の内容は変わらない。
 `learning` のリセット成功時は、変換器がメモリに持つ確定履歴も全て消す。
 保存に失敗したリセットでは、変換器の履歴を保つ。
-`typo` は、Host の `privacy_mode_secure` が立っている間は書込みを止めるので（§4.2）、全削除は何も変えずに
-`save_failed` を返す。
+`typo` の全削除は、Host の `privacy_mode_secure` で書込みを止めている間（§4.2）も止めず、通常どおり成功・失敗を返す。
 `auto_word` の忘却・全削除と新語の承認・却下は、writer の mutex を保持してメモリ上の写しを変更・保存する。
 保存成功時だけ表を公開する。同時操作はその後に進むため、失敗時に承認・却下を上書きしない。
 `auto_word` の全削除は、表を空にして保存した後、writer の mutex を放してから英単語辞書の追加語を消す
@@ -629,9 +628,10 @@ privacy のロックを archive の読み書きの間は持たない（確定の
 本節の対象は Host が書く `learning.tsv` であり、`user_dict.json` のように操作のたびに保存するストアは含まない。
 M55 の typo v2 ストア（`docs/typo-correction-learning-spec.md` §12.8）も、未保存の観測を別に数えて `learning.tsv` と同じ契機
 （burst 先頭、件数、時間、明示呼び出し、モデルロード境界、終了時）で保存するので、本節に含む。違いは次の 3 点である。
-typo の保存は契機を問わず下記の一時的な競合の再試行を行い、その間は状態ロックではなく typo ストアのロックを持つ。
-補正の照会もこのロックを取るので、保存が終わるまで待つ。保存の失敗は stderr ではなく構造化ログ（`typo_store_save_failed`）に出す。
-書込みを止めている間（同 §12.12.2）は保存しないので、止めたまま終了すると未保存の観測は失われる。
+typo の保存は契機を問わず下記の一時的な競合の再試行を行う。観測と flush の契機（モデルロード境界と書込みの停止の解除を含む）では、
+その間に状態ロックではなく typo ストアのロックを持つ。import は状態ロックの中で保存する（§4.5）。
+補正の照会も typo ストアのロックを取るので、保存が終わるまで待つ。保存の失敗は stderr ではなく構造化ログ（`typo_store_save_failed`）に出す。
+書込みを止めている間（同 §12.12.2）は保存しないので、止めたまま終了すると未保存の観測と import の内容は失われる。
 本節は終了経路ごとの flush の保証、burst 先頭の同期 flush、失われうる量の正典であり、
 `docs/user-learning-enhancement-spec.md` §3.1.1 と `docs/windows-tsf-host-architecture.md`「学習」から参照される。
 

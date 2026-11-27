@@ -3996,9 +3996,10 @@ TEST(EngineTypoCorrectionTest, TheFlushWorkerSavesObservationsAfterTheInterval) 
 }
 
 // typo-correction-learning-spec section 12.12.2: while writes are suspended
-// the store neither learns nor writes, and forgetting or resetting fails with
-// the files as they were. What was observed before waits for the lift.
-TEST(EngineTypoCorrectionTest, SuspendedWritesRefuseLearningAndDeletionUntilLifted) {
+// the store neither learns nor saves what it learned, and what was observed
+// before waits for the lift. Forgetting and resetting record no input and
+// still write.
+TEST(EngineTypoCorrectionTest, SuspendedWritesRefuseLearningButNotDeletion) {
   ScopedTempDirectory temp;
   azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
@@ -4021,22 +4022,167 @@ TEST(EngineTypoCorrectionTest, SuspendedWritesRefuseLearningAndDeletionUntilLift
   // The refused write is not a failure, and nothing reaches the disk.
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_EQ(SavedTypoPairs(typo_path), 1u);
-  const auto listed =
-      engine->ListLearningEntries(azookey::host::LearningDataStore::Typo, "", 0, 10);
-  ASSERT_EQ(listed.entries.size(), 2u);
-  EXPECT_EQ(engine->ForgetLearningEntry(azookey::host::LearningDataStore::Typo,
-                                        listed.entries.front().id),
-            azookey::host::InferenceEngine::ForgetOutcome::SaveFailed);
-  EXPECT_EQ(engine->ResetLearningStore(azookey::host::LearningDataStore::Typo),
-            azookey::host::InferenceEngine::ResetOutcome::SaveFailed);
   EXPECT_EQ(typo.ReadingPairs().size(), 2u);
-  EXPECT_EQ(SavedTypoPairs(typo_path), 1u);
 
   engine->SetTypoWritesSuspended(false);
   EXPECT_FALSE(typo.writes_suspended());
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_EQ(SavedTypoPairs(typo_path), 2u);
   EXPECT_TRUE(engine->ObserveTypo("おはよお", "おはよう", kNowBase));
+  ASSERT_TRUE(engine->FlushLearningStore());
+  ASSERT_EQ(SavedTypoPairs(typo_path), 3u);
+
+  engine->SetTypoWritesSuspended(true);
+  const auto listed =
+      engine->ListLearningEntries(azookey::host::LearningDataStore::Typo, "", 0, 10);
+  ASSERT_EQ(listed.entries.size(), 3u);
+  EXPECT_EQ(engine->ForgetLearningEntry(azookey::host::LearningDataStore::Typo,
+                                        listed.entries.front().id),
+            azookey::host::InferenceEngine::ForgetOutcome::Forgotten);
+  EXPECT_EQ(SavedTypoPairs(typo_path), 2u);
+  EXPECT_EQ(engine->ResetLearningStore(azookey::host::LearningDataStore::Typo),
+            azookey::host::InferenceEngine::ResetOutcome::Reset);
+  EXPECT_TRUE(typo.ReadingPairs().empty());
+  EXPECT_EQ(SavedTypoPairs(typo_path), 0u);
+  EXPECT_TRUE(typo.writes_suspended());
+}
+
+// main.cpp suspends writes before it hands the store over, so a store attached
+// while the Host's secure setting is on starts suspended (section 12.12.2).
+TEST(EngineTypoCorrectionTest, ASuspensionSetBeforeTheStoreIsAttachedAppliesToIt) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  const auto typo_path = temp.File("typo.tsv");
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  cfg.learning_flush_interval_sec = 3600;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetTypoWritesSuspended(true);
+  engine->SetTypoStore(&typo);
+  EXPECT_TRUE(typo.writes_suspended());
+  EXPECT_FALSE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_TRUE(typo.ReadingPairs().empty());
+  EXPECT_EQ(SavedTypoPairs(typo_path), 0u);
+}
+
+namespace {
+
+uint64_t WallClockEpochSecForTest() {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count());
+}
+
+// Leaves one reading pair that an import merged into memory while writes are
+// suspended, with nothing on disk. Observed at the wall clock, as the import
+// saves at the wall clock and the retention limits would drop a kNowBase row.
+void ImportATypoPairWhileSuspended(azookey::host::InferenceEngine& engine,
+                                   const azookey::learning::TypoLearningStore& typo,
+                                   const std::string& typo_path,
+                                   const std::filesystem::path& archive) {
+  const std::vector<azookey::host::LearningDataStore> selected{
+      azookey::host::LearningDataStore::Typo};
+  engine.SetBackupCrypto(&azookey::learning::test::Crypto());
+  ASSERT_TRUE(engine.ObserveTypo("こんちには", "こんにちは", WallClockEpochSecForTest()));
+  ASSERT_EQ(engine.ExportLearningData(selected, archive, true, {}).error,
+            azookey::host::BackupError::None);
+  ASSERT_EQ(engine.ResetLearningStore(azookey::host::LearningDataStore::Typo),
+            azookey::host::InferenceEngine::ResetOutcome::Reset);
+  ASSERT_EQ(SavedTypoPairs(typo_path), 0u);
+
+  engine.SetTypoWritesSuspended(true);
+  EXPECT_EQ(
+      engine.ImportLearningData(selected, archive, azookey::learning::ImportConflictPolicy::Merge)
+          .error,
+      azookey::host::BackupError::Io);
+  EXPECT_EQ(typo.ReadingPairs().size(), 1u);
+  EXPECT_EQ(SavedTypoPairs(typo_path), 0u);
+}
+
+}  // namespace
+
+// learning-data-management-spec section 4.5 and section 12.12.2: an import
+// while writes are suspended stays in memory and answers io; once the
+// suspension lifts, the next flush saves it.
+TEST(EngineTypoCorrectionTest, AnImportWhileSuspendedIsSavedAfterTheLift) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  const auto typo_path = temp.File("typo.tsv");
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  cfg.learning_flush_interval_sec = 3600;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetTypoStore(&typo);
+  ASSERT_NO_FATAL_FAILURE(
+      ImportATypoPairWhileSuspended(*engine, typo, typo_path, temp.File("typo.zip")));
+  EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_EQ(SavedTypoPairs(typo_path), 0u);
+
+  engine->SetTypoWritesSuspended(false);
+  EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_EQ(SavedTypoPairs(typo_path), 1u);
+}
+
+// The lift hands what waited to the flush worker, which saves it once the
+// interval passes, with no flush call.
+TEST(EngineTypoCorrectionTest, TheFlushWorkerSavesWhatWaitedForTheLift) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  const auto typo_path = temp.File("typo.tsv");
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  cfg.learning_flush_interval_sec = 1;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetTypoStore(&typo);
+  ASSERT_NO_FATAL_FAILURE(
+      ImportATypoPairWhileSuspended(*engine, typo, typo_path, temp.File("typo.zip")));
+
+  const auto saved_file = azookey::learning::EncryptedPathFor(typo.paths().v2_store);
+  std::error_code ec;
+  const auto before = std::filesystem::last_write_time(saved_file, ec);
+  ASSERT_FALSE(ec);
+  engine->SetTypoWritesSuspended(false);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto written = std::filesystem::last_write_time(saved_file, ec);
+    if (!ec && written != before) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  EXPECT_EQ(SavedTypoPairs(typo_path), 1u);
+}
+
+// The worker never schedules interval 0, so the lift itself saves what waited.
+TEST(EngineTypoCorrectionTest, WithIntervalZeroTheLiftSavesWhatWaited) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  const auto typo_path = temp.File("typo.tsv");
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  cfg.learning_flush_interval_sec = 0;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetTypoStore(&typo);
+  ASSERT_NO_FATAL_FAILURE(
+      ImportATypoPairWhileSuspended(*engine, typo, typo_path, temp.File("typo.zip")));
+
+  engine->SetTypoWritesSuspended(false);
+  EXPECT_EQ(SavedTypoPairs(typo_path), 1u);
 }
 
 // learning-data-management-spec section 11: the model load boundary saves the

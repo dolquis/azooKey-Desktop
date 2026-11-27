@@ -369,12 +369,22 @@ void InferenceEngine::SetTypoStore(learning::TypoLearningStore* store) {
 }
 
 void InferenceEngine::SetTypoWritesSuspended(bool suspended) {
+  uint64_t flush_interval_sec = 0;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    flush_interval_sec = config_.learning_flush_interval_sec;
+  }
   bool pending = false;
   {
     std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+    const bool lifted = typo_writes_suspended_ && !suspended;
     typo_writes_suspended_ = suspended;
     if (typo_store_) typo_store_->SetWritesSuspended(suspended);
-    // What was observed before the suspension waits for it to lift.
+    // What was observed before the suspension waits for it to lift. The flush
+    // worker saves it after the interval; with interval 0, which the worker
+    // never schedules, the lift saves it at once. Only the lift does: every
+    // UpdateConfig calls this, and a failed save waits for the next trigger.
+    if (lifted && flush_interval_sec == 0) (void)SaveTypoStoreLocked();
     pending = TypoSavePendingLocked();
   }
   if (pending) ScheduleTypoFlush();

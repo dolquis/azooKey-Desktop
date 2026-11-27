@@ -156,9 +156,10 @@ class TypoLearningStore {
   TypoStoreOrigin origin() const;
   const TypoLearningPaths& paths() const { return paths_; }
 
-  // While suspended (secure input), the store neither learns nor writes:
-  // observations and pattern events are refused, Save writes nothing, and
-  // forgetting or resetting fails without touching any file.
+  // While suspended (secure input), the store neither learns nor saves what it
+  // learned: observations and pattern events are refused and Save writes
+  // nothing. Forgetting and resetting record no input and still write; the
+  // database they save holds what memory holds (section 12.12.2).
   void SetWritesSuspended(bool suspended) { writes_suspended_ = suspended; }
   bool writes_suspended() const { return writes_suspended_; }
 
@@ -188,7 +189,8 @@ class TypoLearningStore {
                                      uint64_t now_epoch_sec);
   TypoForgetResult ForgetPattern(const std::string& observed_pattern,
                                  const std::string& intended_pattern, uint64_t now_epoch_sec);
-  // Removes every learned row and the v1 files; typo_settings is kept.
+  // Removes every learned row, the v1 files and the v2 store's .corrupt-*
+  // copies; typo_settings is kept.
   bool ResetAll(uint64_t now_epoch_sec);
 
   // Backup items (docs/learning-data-management-spec.md section 5): the

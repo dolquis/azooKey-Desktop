@@ -312,8 +312,8 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
     case LearningDataStore::Learning:
       break;  // Handled above, including the converter history reset.
     case LearningDataStore::Typo: {
-      // As in the forget above. ResetAll refuses a store that failed to load
-      // or whose writes are suspended, and changes nothing then.
+      // As in the forget above. ResetAll refuses a store that failed to load,
+      // and changes nothing then; suspended writes do not stop it.
       std::lock_guard typo_lock(typo_store_mutex_);
       if (!typo_store_) return ResetOutcome::Unavailable;
       if (!typo_store_->ResetAll(WallClockEpochSec())) return ResetOutcome::SaveFailed;

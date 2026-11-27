@@ -316,7 +316,8 @@ class InferenceEngine {
   // 12.8), already loaded; the engine applies the writes suspension to it.
   void SetTypoStore(learning::TypoLearningStore* store);
   // Section 12.12.2: while the Host's secure setting is on, the typo store
-  // neither learns nor writes. The caller passes the published
+  // neither learns nor saves what it learned; forgetting and resetting still
+  // write. The lift saves or schedules what waits. The caller passes the published
   // privacy_mode_secure at startup and after every settings reload,
   // including one that failed (which publishes secure).
   void SetTypoWritesSuspended(bool suspended);

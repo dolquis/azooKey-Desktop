@@ -272,6 +272,39 @@ bool HasCorruptCopyWithBytes(const std::filesystem::path& stored, const std::str
   return false;
 }
 
+// Section 12.8 "学習の削除" step 2: removes every "<name>.corrupt-<epoch>" copy
+// of the v2 store, under its logical name and under its encrypted name (a copy
+// takes the name the store had then). Other stores' copies in the directory
+// stay. False when the directory cannot be read or a copy cannot be removed.
+bool RemoveCorruptCopies(const std::filesystem::path& v2_store) {
+  std::vector<std::filesystem::path::string_type> prefixes;
+  for (const auto& stored : {v2_store, EncryptedPathFor(v2_store)}) {
+    auto prefix = stored.filename();
+    prefix += ".corrupt-";
+    prefixes.push_back(prefix.native());
+  }
+  const auto directory =
+      v2_store.has_parent_path() ? v2_store.parent_path() : std::filesystem::path(".");
+  std::vector<std::filesystem::path> copies;
+  std::error_code ec;
+  for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end;
+       it.increment(ec)) {
+    const auto name = it->path().filename().native();
+    for (const auto& prefix : prefixes) {
+      if (name.compare(0, prefix.size(), prefix) == 0) {
+        copies.push_back(it->path());
+        break;
+      }
+    }
+  }
+  if (ec) return false;
+  for (const auto& copy : copies) {
+    std::filesystem::remove(copy, ec);
+    if (ec) return false;
+  }
+  return true;
+}
+
 // Section 12.8 "パス": the state of a logical path from ReadProtectedText. For
 // the v1 store, a lone M34 plaintext backup counts as missing.
 FileState ReadState(const std::filesystem::path& logical, const ByteCrypto& crypto,
@@ -1489,7 +1522,7 @@ bool TypoLearningStore::CommitDeletion(uint64_t now, bool always_save, bool& cha
 TypoForgetResult TypoLearningStore::ForgetReadingPair(const std::string& wrong,
                                                       const std::string& correct,
                                                       uint64_t now_epoch_sec) {
-  if (writes_suspended_ || mode_ == TypoLearningMode::Blocked) return TypoForgetResult::Failed;
+  if (mode_ == TypoLearningMode::Blocked) return TypoForgetResult::Failed;
   bool removed_side = false;
   if (mode_ == TypoLearningMode::V1Fallback) {
     // The backup first, then the v1 store (section 12.8 "v1 のまま読む").
@@ -1539,7 +1572,7 @@ TypoForgetResult TypoLearningStore::ForgetReadingPair(const std::string& wrong,
 TypoForgetResult TypoLearningStore::ForgetPattern(const std::string& observed_pattern,
                                                   const std::string& intended_pattern,
                                                   uint64_t now_epoch_sec) {
-  if (writes_suspended_ || mode_ == TypoLearningMode::Blocked) return TypoForgetResult::Failed;
+  if (mode_ == TypoLearningMode::Blocked) return TypoForgetResult::Failed;
   // "v1 のまま読む" keeps no patterns.
   if (mode_ == TypoLearningMode::V1Fallback) return TypoForgetResult::NotFound;
   bool changed = false;
@@ -1563,11 +1596,14 @@ TypoForgetResult TypoLearningStore::ForgetPattern(const std::string& observed_pa
 }
 
 bool TypoLearningStore::ResetAll(uint64_t now_epoch_sec) {
-  // 1. A store that refuses to save cannot be emptied.
-  if (writes_suspended_ || mode_ == TypoLearningMode::Blocked) return false;
+  // 1. A store that could not be loaded cannot be emptied. Suspended writes do
+  // not stop a reset, which records no input (section 12.12.2).
+  if (mode_ == TypoLearningMode::Blocked) return false;
   if (mode_ == TypoLearningMode::V1Fallback) {
-    // The backup first, then the v1 store emptied and saved.
-    if (!RemoveProtectedFile(paths_.v1_backup)) return false;
+    // The backup and the v2 copies first, then the v1 store emptied and saved.
+    if (!RemoveProtectedFile(paths_.v1_backup) || !RemoveCorruptCopies(paths_.v2_store)) {
+      return false;
+    }
     const auto before = v1_->All();
     v1_->Reset();
     if (!v1_->Save()) {
@@ -1576,8 +1612,9 @@ bool TypoLearningStore::ResetAll(uint64_t now_epoch_sec) {
     }
     return true;
   }
-  // 2. The v1 files go first, so a later rebuild cannot bring the rows back.
-  if (!RemoveV1Files()) return false;
+  // 2. The v1 files go first, so a later rebuild cannot bring the rows back,
+  // and the corrupt copies with them.
+  if (!RemoveV1Files() || !RemoveCorruptCopies(paths_.v2_store)) return false;
   // 3. Empty a copy of the learned tables (typo_settings is not learning) and
   // save it; the published contents stay until the save succeeds.
   bool changed = false;

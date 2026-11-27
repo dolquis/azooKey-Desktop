@@ -6773,7 +6773,7 @@ std::filesystem::path WithSuffix(std::filesystem::path path, const char* suffix)
 }
 
 std::vector<std::filesystem::path> CorruptCopiesOf(const std::filesystem::path& path,
-                                                  const char* suffix) {
+                                                   const char* suffix) {
   const auto prefix = WithSuffix(path.filename(), suffix).native();
   std::vector<std::filesystem::path> copies;
   for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {

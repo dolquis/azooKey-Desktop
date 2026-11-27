@@ -638,6 +638,8 @@ v1 の `auto_replace` モードは v2 の `aggressive` 相当として読み替�
 このときも `corrected_reading`（§5-3）は返さず、候補の reading を仮説の読みとする。TIP の preedit は打った読みのまま残る。
 warm-up を満たし confidence が `minConfidenceForRanking` 以上の個人パターンの語は通常候補として示し、それ以外の語には
 「もしかして: <読み>」を付ける。v1 の読みの組の候補（§5-2）は、`suggest` と `rank` でこれらより前の先頭に置く。
+`rank` と `aggressive` では、secure でない `QueryBatchConversion` の各 chunk にも同じ規則で仮説の語を置く。
+一括変換の要求は `raw_keys` を持たないので、仮説は読みの経路（§12.4.1）だけから作る。
 
 ### 12.8 TypoLearningStore（v2）
 

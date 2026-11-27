@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -22,6 +24,29 @@ uint64_t WallClockEpochSec() {
   return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
                                    std::chrono::system_clock::now().time_since_epoch())
                                    .count());
+}
+
+bool RemoveCorruptCopies(const std::filesystem::path& store, const char* suffix) {
+  auto prefix = store.filename();
+  prefix += suffix;
+  const auto directory = store.has_parent_path() ? store.parent_path() : std::filesystem::path(".");
+  std::vector<std::filesystem::path> copies;
+  std::error_code ec;
+  std::filesystem::directory_iterator it(directory, ec), end;
+  if (ec == std::errc::no_such_file_or_directory) return true;
+  for (; !ec && it != end; it.increment(ec)) {
+    const auto name = it->path().filename().native();
+    if (!name.starts_with(prefix.native())) continue;
+    const auto status = it->symlink_status(ec);
+    if (ec) return false;
+    if (std::filesystem::is_regular_file(status)) copies.push_back(it->path());
+  }
+  if (ec) return false;
+  for (const auto& copy : copies) {
+    std::filesystem::remove(copy, ec);
+    if (ec) return false;
+  }
+  return true;
 }
 }  // namespace
 
@@ -365,22 +390,23 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
     RefreshDictionaryLocked();
     return ResetOutcome::Unavailable;
   }
-  const auto before = *snapshot;
+  if (snapshot->save_blocked() || !RemoveCorruptCopies(snapshot->path(), ".corrupt.")) {
+    return ResetOutcome::SaveFailed;
+  }
   snapshot->Clear();
-  const bool saved = snapshot->Save();
-  if (!saved) *snapshot = before;
+  if (!snapshot->Save()) return ResetOutcome::SaveFailed;
   std::scoped_lock lock(state_mutex_);
   *user_dict_ = std::move(*snapshot);
   indexed_user_dict_ = nullptr;
   RefreshDictionaryLocked();
-  return saved ? ResetOutcome::Reset : ResetOutcome::SaveFailed;
+  return ResetOutcome::Reset;
 }
 
 // Every learning channel is emptied or none is. A store whose file could not
 // be read refuses to save, so its file would survive an "ok"; it is refused
-// before anything changes. The v2 files are emptied before the M7 file, so the
-// v2 file exists (empty) before its M7 source is touched. A failure at either
-// step puts the snapshot back in memory and saves it again.
+// before anything changes. Remove the corrupt copies before saving, and empty
+// the v2 files before clearing the M7 source. A failed save or M7 clear puts
+// the old rows back in memory and saves them again.
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannels() {
   LearningSnapshots snapshots;
   {
@@ -391,17 +417,25 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannels() {
     if (!store_ && !english_store_) return ResetOutcome::Unavailable;
     snapshots = SnapshotLearningStoresLocked();
   }
-  const auto before = snapshots;
+  bool copies_removed = false;
   bool saved = false;
   try {
-    for (auto& [target, snapshot] : snapshots) snapshot.Reset();
-    saved = SaveLearningSnapshots(snapshots) && (!store_ || store_->ClearLegacyFile());
-    if (!saved) {
-      for (size_t i = 0; i < snapshots.size(); ++i)
-        snapshots[i].second.LoadText(before[i].second.SerializeText());
-      // A channel whose empty snapshot reached disk gets its old rows back;
-      // a failed rollback remains dirty for the next flush.
-      (void)SaveLearningSnapshots(snapshots);
+    copies_removed = std::all_of(snapshots.begin(), snapshots.end(), [](const auto& channel) {
+      const auto v2 = channel.second.v2_path();
+      return RemoveCorruptCopies(v2, ".corrupt-") &&
+             RemoveCorruptCopies(learning::EncryptedPathFor(v2), ".corrupt-");
+    });
+    if (copies_removed) {
+      auto before = snapshots;
+      for (auto& [target, snapshot] : snapshots) snapshot.PrepareFullReset();
+      saved = SaveLearningSnapshots(snapshots) && (!store_ || store_->ClearLegacyFile());
+      if (!saved) {
+        for (size_t i = 0; i < snapshots.size(); ++i) {
+          snapshots[i].second.RestoreAfterFailedFullReset(std::move(before[i].second));
+        }
+        // A failed rollback remains dirty for the next flush.
+        (void)SaveLearningSnapshots(snapshots);
+      }
     }
   } catch (...) {
     std::scoped_lock lock(state_mutex_, english_mutex_);
@@ -410,6 +444,11 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannels() {
     throw;
   }
   std::scoped_lock lock(state_mutex_, english_mutex_, converter_call_mutex_);
+  if (!copies_removed) {
+    learning_erasure_in_progress_ = false;
+    learning_flush_cv_.notify_all();
+    return ResetOutcome::SaveFailed;
+  }
   PublishLearningSnapshotsLocked(snapshots);
   if (saved) {
     fallback_converter_->ResetLearned();

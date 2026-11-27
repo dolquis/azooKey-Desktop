@@ -24,6 +24,7 @@
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/SettingsStore.h"
+#include "azookey/host/TypoCorrectionPolicy.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/learning/AtomicFile.h"
@@ -4327,6 +4328,237 @@ TEST(EngineTypoCorrectionTest, TheSecureSuspensionStopsTheV1Correction) {
   EXPECT_EQ(live->surface, "今日は");
 }
 
+// Section 12.5: no candidate or r1 <= 0 is weak, and so is no dictionary hit; otherwise only a
+// top2 within G_GAP of top1 activates.
+TEST(TypoCorrectionPolicyTest, ActivationFollowsTheTypedReadingsCandidates) {
+  using azookey::host::TypoCorrectionActivates;
+  EXPECT_TRUE(TypoCorrectionActivates({}));
+  EXPECT_TRUE(TypoCorrectionActivates({-1.0, 0.5, 1.0}));
+  EXPECT_TRUE(TypoCorrectionActivates({2.0, 1.0, 0.0}));
+  EXPECT_TRUE(TypoCorrectionActivates({2.0, 1.8, 1.0}));
+  EXPECT_FALSE(TypoCorrectionActivates({2.0, 1.0, 1.0}));
+  EXPECT_FALSE(TypoCorrectionActivates({2.0, std::nullopt, 1.0}));
+}
+
+// Sections 12.10 and 12.11: only a pattern past the warm-up, never rejected on balance and
+// confident enough leads, and only over a weak first candidate.
+TEST(TypoCorrectionPolicyTest, OnlyAWarmedUpConfidentPatternMayLead) {
+  using azookey::host::TypoHypothesisEvidence;
+  const azookey::host::TypoGuards guards;
+  TypoHypothesisEvidence general;
+  general.reading_similarity = azookey::host::TypoReadingSimilarity(1, 3, 3);
+  EXPECT_DOUBLE_EQ(general.reading_similarity, 1.0 - 1.0 / 3.0);
+  EXPECT_DOUBLE_EQ(azookey::host::TypoReadingSimilarity(1, 3, 4), 0.75);
+  EXPECT_FALSE(azookey::host::IsStrongTypoPattern(general, guards));
+  EXPECT_FALSE(azookey::host::TypoHypothesisMayLead(general, 0.0, guards));
+  EXPECT_NEAR(azookey::host::TypoScore(general, 1.0, guards),
+              0.5 * 2.0 / 3.0 - 0.40 * 0.15 - 0.50 * 0.20, 1e-9);
+
+  auto strong = general;
+  strong.confidence = 0.92;
+  strong.pattern = azookey::host::TypoPatternHistory{3, 0};
+  EXPECT_TRUE(azookey::host::IsStrongTypoPattern(strong, guards));
+  EXPECT_TRUE(azookey::host::TypoHypothesisMayLead(strong, 0.0, guards));
+  EXPECT_FALSE(azookey::host::TypoHypothesisMayLead(strong, 1.0, guards));
+  EXPECT_NEAR(azookey::host::TypoScore(strong, 0.0, guards), 0.92 * 2.0 / 3.0, 1e-9);
+
+  auto young = strong;
+  young.pattern->accept_count = 2;
+  EXPECT_FALSE(azookey::host::IsStrongTypoPattern(young, guards));
+  EXPECT_FALSE(azookey::host::TypoHypothesisMayLead(young, 0.0, guards));
+  auto rejected = strong;
+  rejected.pattern->reject_count = 4;
+  EXPECT_FALSE(azookey::host::TypoHypothesisMayLead(rejected, 0.0, guards));
+  EXPECT_NEAR(azookey::host::TypoScore(rejected, 0.0, guards), 0.92 * 2.0 / 3.0 - 0.50, 1e-9);
+  auto ranked_only = strong;
+  ranked_only.confidence = 0.80;
+  EXPECT_TRUE(azookey::host::IsStrongTypoPattern(ranked_only, guards));
+  EXPECT_FALSE(azookey::host::TypoHypothesisMayLead(ranked_only, 0.0, guards));
+}
+
+// Sections 12.7 and 12.11: rank puts the words after the first candidate, best typo_score
+// first and labelled; aggressive lets a word that may lead go first, unlabelled.
+TEST(TypoCorrectionPolicyTest, PlacementFollowsTheModeAndSkipsShownSurfaces) {
+  using azookey::host::TypoCorrectionMode;
+  const auto make = [](const char* surface, const char* reading, double score) {
+    azookey::core::Candidate c;
+    c.surface = surface;
+    c.reading = reading;
+    c.score = score;
+    return c;
+  };
+  const std::vector<azookey::core::Candidate> converted = {make("天気", "てんき", 3.0),
+                                                           make("転機", "てんき", 2.0)};
+  azookey::host::TypoHypothesisEvidence general;
+  general.reading_similarity = 2.0 / 3.0;
+  auto strong = general;
+  strong.confidence = 0.92;
+  strong.pattern = azookey::host::TypoPatternHistory{3, 0};
+  const std::vector<azookey::host::TypoHypothesisWord> words = {
+      {make("電気", "でんき", 1.0), general},
+      {make("転機", "てんぎ", 1.0), general},
+      {make("転義", "てんぎ", 1.0), general},
+      {make("伝記", "でんき", 1.0), strong}};
+  const auto surfaces = [](const std::vector<azookey::core::Candidate>& candidates) {
+    std::vector<std::string> out;
+    for (const auto& c : candidates) out.push_back(c.surface);
+    return out;
+  };
+  const azookey::host::TypoGuards guards;
+
+  auto ranked = converted;
+  azookey::host::PlaceTypoHypothesisWords(ranked, words, TypoCorrectionMode::Rank, 0.0, guards, 3);
+  EXPECT_EQ(surfaces(ranked), (std::vector<std::string>{"天気", "伝記", "電気", "転義", "転機"}));
+  for (size_t i = 1; i <= 3; ++i) {
+    EXPECT_EQ(ranked[i].description, "もしかして: " + ranked[i].reading);
+    EXPECT_DOUBLE_EQ(ranked[i].score, 3.0);
+  }
+  auto one = converted;
+  azookey::host::PlaceTypoHypothesisWords(one, words, TypoCorrectionMode::Rank, 0.0, guards, 1);
+  EXPECT_EQ(surfaces(one), (std::vector<std::string>{"天気", "伝記", "転機"}));
+
+  auto led = converted;
+  azookey::host::PlaceTypoHypothesisWords(led, words, TypoCorrectionMode::Aggressive, 0.0, guards,
+                                          3);
+  EXPECT_EQ(surfaces(led), (std::vector<std::string>{"伝記", "天気", "電気", "転義", "転機"}));
+  EXPECT_TRUE(led[0].description.empty());
+  EXPECT_DOUBLE_EQ(led[0].score, 3.0);
+  // A strong first candidate keeps its place under aggressive too.
+  auto held = converted;
+  azookey::host::PlaceTypoHypothesisWords(held, words, TypoCorrectionMode::Aggressive, 1.0, guards,
+                                          3);
+  EXPECT_EQ(surfaces(held).front(), "天気");
+
+  for (const auto mode : {TypoCorrectionMode::Off, TypoCorrectionMode::Suggest}) {
+    auto unchanged = converted;
+    azookey::host::PlaceTypoHypothesisWords(unchanged, words, mode, 0.0, guards, 3);
+    EXPECT_EQ(surfaces(unchanged), surfaces(converted));
+  }
+  std::vector<azookey::core::Candidate> none;
+  azookey::host::PlaceTypoHypothesisWords(none, words, TypoCorrectionMode::Rank, 0.0, guards, 3);
+  EXPECT_EQ(surfaces(none), (std::vector<std::string>{"伝記", "電気", "転機"}));
+}
+
+// The engine of the M55 rank / aggressive tests: てんき converts to 天気 and has no dictionary
+// word, and the user dictionary holds the words of two of its section 12.4 reading hypotheses.
+struct TypoHypothesisEngine {
+  explicit TypoHypothesisEngine(const azookey::host::EngineConfig& cfg)
+      : store(temp.File("learning.tsv"), &azookey::learning::test::Crypto()),
+        typo(temp.File("typo.tsv"), &azookey::learning::test::Crypto()),
+        dictionary(temp.File("user.json"), &azookey::learning::test::Crypto()),
+        engine(MakeEngineWithConverter(MakeConverterWithDictionary({{"てんき", "天気"}}), store,
+                                       cfg)) {
+    EXPECT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
+    EXPECT_TRUE(dictionary.Load());
+    engine->SetUserDictionary(&dictionary);
+    engine->SetTypoStore(&typo);
+    for (const auto& [word, ruby] : {std::pair{"電気", "でんき"}, std::pair{"転義", "てんぎ"}}) {
+      azookey::learning::UserWord user_word;
+      user_word.word = word;
+      user_word.ruby = ruby;
+      EXPECT_TRUE(engine->AddUserWord(user_word));
+    }
+  }
+
+  // The surfaces labelled as section 12.7 suggestions, in order.
+  std::vector<std::string> Suggested(const std::string& kana,
+                                     const azookey::host::MixedConversionOptions* mixed = nullptr,
+                                     bool live = false) {
+    const auto result =
+        engine->QueryCandidatesEx(kana, "", kNowBase, nullptr, 0, live, nullptr, nullptr, mixed);
+    EXPECT_TRUE(result.corrected_reading.empty());
+    std::vector<std::string> out;
+    for (const auto& c : result.candidates)
+      if (c.debug_info == "typo-correction") out.push_back(c.surface);
+    return out;
+  }
+
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store;
+  azookey::learning::TypoLearningStore typo;
+  azookey::learning::UserDictionary dictionary;
+  std::unique_ptr<azookey::host::InferenceEngine> engine;
+};
+
+// Sections 12.4.4 and 12.7 (DEV-2149 decisions 4 and 5): rank and aggressive put the dictionary
+// word of each reading hypothesis right after the first candidate, with its own reading and the
+// "もしかして" label; suggest and off convert as v1 does.
+TEST(EngineTypoCorrectionTest, RankAndAggressivePutHypothesisWordsAfterTheFirstCandidate) {
+  azookey::host::EngineConfig cfg;
+  for (const std::string mode : {"rank", "aggressive"}) {
+    SCOPED_TRACE(mode);
+    cfg.typo_correction_mode = mode;
+    TypoHypothesisEngine f(cfg);
+    const auto result = f.engine->QueryCandidatesEx("てんき", "", kNowBase, nullptr);
+    EXPECT_TRUE(result.corrected_reading.empty());
+    ASSERT_GE(result.candidates.size(), 3u);
+    EXPECT_EQ(result.candidates[0].surface, "天気");
+    std::vector<std::string> readings;
+    for (size_t i = 1; i <= 2; ++i) {
+      const auto& word = result.candidates[i];
+      EXPECT_EQ(word.debug_info, "typo-correction");
+      EXPECT_EQ(word.description, "もしかして: " + word.reading);
+      EXPECT_EQ(word.surface, word.reading == "でんき" ? "電気" : "転義");
+      readings.push_back(word.reading);
+    }
+    std::sort(readings.begin(), readings.end());
+    EXPECT_EQ(readings, (std::vector<std::string>{"てんぎ", "でんき"}));
+  }
+  for (const std::string mode : {"off", "suggest"}) {
+    SCOPED_TRACE(mode);
+    cfg.typo_correction_mode = mode;
+    TypoHypothesisEngine f(cfg);
+    EXPECT_TRUE(f.Suggested("てんき").empty());
+  }
+}
+
+// maxReadingHypotheses bounds the words, and the section 12.16 limits on the reading and on
+// raw_keys leave longer input to the v1 pairs alone.
+TEST(EngineTypoCorrectionTest, HypothesisWordsKeepToTheConfiguredLimits) {
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  cfg.typo_max_reading_hypotheses = 1;
+  {
+    TypoHypothesisEngine f(cfg);
+    EXPECT_EQ(f.Suggested("てんき").size(), 1u);
+  }
+  cfg.typo_max_reading_hypotheses = 3;
+  cfg.typo_hypothesis_max_reading = 2;
+  {
+    TypoHypothesisEngine f(cfg);
+    EXPECT_TRUE(f.Suggested("てんき").empty());
+  }
+  cfg.typo_hypothesis_max_reading = 10;
+  cfg.typo_hypothesis_max_keys = 5;
+  TypoHypothesisEngine f(cfg);
+  azookey::host::MixedConversionOptions keys;
+  keys.raw_keys = "tenki";
+  EXPECT_EQ(f.Suggested("てんき", &keys).size(), 2u);
+  keys.raw_keys = "tennki";
+  EXPECT_TRUE(f.Suggested("てんき", &keys).empty());
+}
+
+// Section 12.12.2: privacy_mode_secure and a secure request (typo_correction false) make no
+// hypothesis; nor do live conversion, which shows the first candidate alone, or an engine
+// without a typo store.
+TEST(EngineTypoCorrectionTest, SecureLiveAndStorelessQueriesMakeNoHypotheses) {
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  cfg.learning_flush_interval_sec = 3600;
+  TypoHypothesisEngine f(cfg);
+  ASSERT_EQ(f.Suggested("てんき").size(), 2u);
+
+  f.engine->SetTypoWritesSuspended(true);
+  EXPECT_TRUE(f.Suggested("てんき").empty());
+  f.engine->SetTypoWritesSuspended(false);
+  azookey::host::MixedConversionOptions secure;
+  secure.typo_correction = false;
+  EXPECT_TRUE(f.Suggested("てんき", &secure).empty());
+  EXPECT_TRUE(f.Suggested("てんき", nullptr, true).empty());
+  f.engine->SetTypoStore(nullptr);
+  EXPECT_TRUE(f.Suggested("てんき").empty());
+}
+
 // ---- M36-A: new word mining ----
 
 TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending) {
@@ -5261,6 +5493,11 @@ TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
   auto updated = engine->config();
   updated.typo_correction_mode = "off";
   updated.typo_min_count = 9;
+  updated.typo_max_reading_hypotheses = 5;
+  updated.typo_min_confidence_for_ranking = 0.6;
+  updated.typo_min_confidence_for_top_candidate = 0.8;
+  updated.typo_hypothesis_max_reading = 7;
+  updated.typo_hypothesis_max_keys = 14;
   updated.auto_word_mining_enabled = false;
   updated.auto_word_auto_register = true;
   updated.auto_word_min_count = 11;
@@ -5269,6 +5506,11 @@ TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
   const auto applied = engine->config();
   EXPECT_EQ(applied.typo_correction_mode, "off");
   EXPECT_EQ(applied.typo_min_count, 9u);
+  EXPECT_EQ(applied.typo_max_reading_hypotheses, 5u);
+  EXPECT_DOUBLE_EQ(applied.typo_min_confidence_for_ranking, 0.6);
+  EXPECT_DOUBLE_EQ(applied.typo_min_confidence_for_top_candidate, 0.8);
+  EXPECT_EQ(applied.typo_hypothesis_max_reading, 7u);
+  EXPECT_EQ(applied.typo_hypothesis_max_keys, 14u);
   EXPECT_FALSE(applied.auto_word_mining_enabled);
   EXPECT_TRUE(applied.auto_word_auto_register);
   EXPECT_EQ(applied.auto_word_min_count, 11u);

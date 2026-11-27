@@ -59,10 +59,11 @@ struct RuntimeAutoWordSettings {
 
 // M55 typoCorrection.*; docs/typo-correction-learning-spec.md section 12.14.
 // `mode` is the v2 mode after the section 12.14 migration from the v1 root
-// typoCorrectionMode. The engine reads `enabled` and `mode` through
-// ApplyRuntimeSettingsToEngineConfig, the ObserveTypo gate reads them with
-// `learn_personal_patterns` (PrivacyGuard::typo_learning), and the rest waits
-// for the M55 correction engine.
+// typoCorrectionMode. The engine reads `enabled`, `mode`,
+// `max_reading_hypotheses` and the two confidences through
+// ApplyRuntimeSettingsToEngineConfig, and the ObserveTypo gate reads `enabled`
+// and `mode` with `learn_personal_patterns` (PrivacyGuard::typo_learning).
+// `keyboard_layout` holds only auto, the layout the engine uses.
 struct RuntimeTypoCorrectionSettings {
   bool enabled{true};
   std::string mode{"suggest"};

@@ -1340,13 +1340,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // privacy_mode_secure stops the correction in the engine.
     MixedConversionOptions plain;
     plain.typo_correction = !parsed->secure;
+    if (!parsed->secure) plain.raw_keys = parsed->raw_keys;
     const auto* conversion = first_segment          ? &first_segment_options
                              : IsInlineSplit(split) ? &as_typed
                                                     : &plain;
     auto queried = weighs_alt_readings
                        ? engine_->QueryAmbiguousCandidatesEx(
                              parsed->reading, parsed->alt_readings, parsed->left_context, NowSec(),
-                             cancel.get(), ordinary_limit, trace.context(), &tag_boosts)
+                             cancel.get(), ordinary_limit, trace.context(), &tag_boosts, &plain)
                        : engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(),
                                                     cancel.get(), ordinary_limit, parsed->live,
                                                     trace.context(), &tag_boosts, conversion);

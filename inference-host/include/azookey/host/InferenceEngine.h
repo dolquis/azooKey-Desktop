@@ -83,6 +83,9 @@ struct MixedConversionOptions {
   // the first segment's surfaces; nothing else reads it. Set it with typo_correction false, so
   // the reading the first segment ends with is the one converted.
   std::string remaining_reading;
+  // M55 (typo-correction-learning-spec section 12.13): the request's raw_keys, which rank and
+  // aggressive make key-edit hypotheses from. Empty makes them from the reading alone.
+  std::string raw_keys;
 };
 
 struct InferenceTelemetry {
@@ -177,6 +180,15 @@ struct EngineConfig {
   // off, suggest, rank or aggressive, with the v1 auto_replace read as aggressive.
   std::string typo_correction_mode{"suggest"};
   uint32_t typo_min_count{learning::kTypoCorrectionDefaultMinCount};
+  // M55 rank and aggressive: typoCorrection.maxReadingHypotheses, minConfidenceForRanking and
+  // minConfidenceForTopCandidate (section 12.14).
+  uint32_t typo_max_reading_hypotheses{3};
+  double typo_min_confidence_for_ranking{0.70};
+  double typo_min_confidence_for_top_candidate{0.90};
+  // Section 12.16: rank and aggressive make reading hypotheses only for a reading of at most
+  // this many code points and raw_keys of at most this many keys. Not settings keys.
+  uint32_t typo_hypothesis_max_reading{10};
+  uint32_t typo_hypothesis_max_keys{20};
   // M36 mining and trending; docs/auto-word-registration-spec.md section 8.
   bool auto_word_mining_enabled{true};
   bool auto_word_trending_enabled{false};
@@ -528,13 +540,13 @@ class InferenceEngine {
   //   alternative's dictionary candidates whose surfaces kana's lack. The
   //   alternative is converted without the lattice (DEV-2101), so these are
   //   the words of its dictionaries only.
-  CandidatesResult QueryAmbiguousCandidatesEx(const std::string& kana,
-                                              const std::vector<std::string>& alternatives,
-                                              const std::string& context, uint64_t now_epoch_sec,
-                                              const std::atomic<bool>* cancel,
-                                              uint32_t max_candidates = 0,
-                                              const InferenceTelemetry* telemetry = nullptr,
-                                              const TagBoosts* tag_boosts = nullptr);
+  // `mixed` (M55 raw_keys) applies to kana's conversion only. The alternative is converted
+  // without it and, like without the lattice, without the M55 reading hypotheses.
+  CandidatesResult QueryAmbiguousCandidatesEx(
+      const std::string& kana, const std::vector<std::string>& alternatives,
+      const std::string& context, uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
+      uint32_t max_candidates = 0, const InferenceTelemetry* telemetry = nullptr,
+      const TagBoosts* tag_boosts = nullptr, const MixedConversionOptions* mixed = nullptr);
   // The normalized model score (ZenzaiModelConverter's 0.3 to 1.4 band) by which
   // another reading must beat the typed one, so a near tie keeps the typed one.
   static constexpr double kAmbiguousReadingModelMargin = 0.05;

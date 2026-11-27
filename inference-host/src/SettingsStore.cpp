@@ -732,6 +732,11 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
   config.max_context_length = static_cast<uint32_t>(settings.max_context_length);
   config.typo_correction_mode = EngineTypoCorrectionMode(settings.typo_correction);
   config.typo_min_count = static_cast<uint32_t>(settings.typo_min_count);
+  config.typo_max_reading_hypotheses =
+      static_cast<uint32_t>(settings.typo_correction.max_reading_hypotheses);
+  config.typo_min_confidence_for_ranking = settings.typo_correction.min_confidence_for_ranking;
+  config.typo_min_confidence_for_top_candidate =
+      settings.typo_correction.min_confidence_for_top_candidate;
   config.auto_word_mining_enabled = settings.auto_word.mining_enabled;
   config.auto_word_trending_enabled = settings.auto_word.trending_enabled && !settings.offline_mode;
   config.auto_word_trending_interval_hours =

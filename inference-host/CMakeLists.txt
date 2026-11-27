@@ -102,6 +102,7 @@ target_include_directories(azookey_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_link_libraries(azookey_host
   PUBLIC
     azookey_core
+    azookey_correction
     azookey_host_paths
     azookey_learning
     azookey_ipc

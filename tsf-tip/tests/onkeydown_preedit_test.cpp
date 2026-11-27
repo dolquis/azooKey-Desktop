@@ -23304,7 +23304,9 @@ TEST(TsfTipKanaInputTest, UsTableUsesPhysicalKeysAndShift) {
 TEST(TsfTipKanaInputTest, UsRoPositionWithAHankakuZenkakuVkDoesNotTypeKana) {
   for (const WPARAM vk : {WPARAM{VK_KANJI}, WPARAM{VK_OEM_AUTO}, WPARAM{VK_OEM_ENLW}}) {
     SCOPED_TRACE(vk);
+    OpenCloseCompartment compartment;  // Outlives the service, which releases it.
     DocumentPreeditHarness h;
+    h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
     StartKana(h, /*legacy=*/false, TipInputStyle::KanaUs);
     EXPECT_FALSE(TypeKanaKey(h, {vk, 0x29}, /*shift=*/true));
     EXPECT_TRUE(h.service.keyboard_open());
@@ -23382,7 +23384,10 @@ TEST(TsfTipKanaInputTest, UsStyleChangeKeepsTheReadingAndRestylesTheKeyOverTheWi
     ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_MINUS, 0x0C}, /*shift=*/true));
     EXPECT_EQ(h.service.preedit_kana_, "かほ");
     ASSERT_TRUE(h.Press(VK_ESCAPE));
-    OpenKanaWindow(h, legacy);
+    ASSERT_TRUE(h.context.document->text.empty());
+    // The fake document keeps the old caret when the composition is emptied.
+    h.context.document->start = h.context.document->end = 0;
+    ASSERT_NO_FATAL_FAILURE(OpenKanaWindow(h, legacy));
     h.service.set_input_style_for_test(TipInputStyle::KanaUs);
     ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_3, 0x29}));
     EXPECT_EQ(h.service.preedit_kana_, "ろ");

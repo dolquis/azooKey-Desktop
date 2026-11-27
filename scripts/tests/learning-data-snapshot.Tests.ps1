@@ -117,7 +117,8 @@ Describe "Learning data snapshot" {
       $snapshot = (Add-LearningSnapshot -SnapshotLabel "a" -DataDirectory $data -OutputPath $output).Snapshot
 
       foreach ($store in @("learning.tsv", "learning.v2.tsv", "user_dict.json", "typo_corrections.tsv", "auto_words.tsv",
-                           "english_learning.tsv", "english_learning.v2.tsv")) {
+                           "english_learning.tsv", "english_learning.v2.tsv", "typo_learning.v2.db",
+                           "typo_corrections.v1.tsv.bak")) {
         @($snapshot.files | Where-Object { $_.path -eq $store }).Count | Should -Be 1
         @($snapshot.files | Where-Object { $_.path -eq "$store.enc" }).Count | Should -Be 1
       }
@@ -150,9 +151,31 @@ Describe "Learning data snapshot" {
         [System.IO.Path]::GetFileNameWithoutExtension($legacyStore) +
           $v2Rule.Groups[1].Value + [System.IO.Path]::GetExtension($legacyStore)
       }
+      # The typo store's v2 file and the v1 file it moves aside
+      # (docs/typo-correction-learning-spec.md section 12.8 "paths").
+      $typoPathField = [regex]::Match($hostMain,
+        'azookey::learning::TypoLearningStore\s+\w+\(user_paths->(\w+)\)').Groups[1].Value
+      $typoPathField | Should -Not -BeNullOrEmpty
+      $typoV1Store = [regex]::Match($hostPaths,
+        ('(?s)paths\.' + [regex]::Escape($typoPathField) + '\s*=.*?(?:paths\.data_dir|data_root)\s*/\s*"([^"/\\]+)"')).Groups[1].Value
+      $typoV1Store | Should -Not -BeNullOrEmpty
+      $typoHeader = [System.IO.File]::ReadAllText(
+        (Join-Path $repoRoot "learning/include/azookey/learning/TypoLearningStore.h"))
+      $typoV2Name = [regex]::Match($typoHeader, 'kTypoLearningV2FileName\s*=\s*"([^"/\\]+)"')
+      $typoV2Name.Success | Should -BeTrue
+      $typoSource = [System.IO.File]::ReadAllText((Join-Path $repoRoot "learning/src/TypoLearningStore.cpp"))
+      $typoBackupRule = [regex]::Match($typoSource,
+        ('(?s)TypoLearningPathsFor\([^)]*\)\s*\{.*?backup\s*\+=\s*"([^"/\\]+)";\s*' +
+          'backup\s*\+=\s*v1_store\.extension\(\);\s*backup\s*\+=\s*"([^"/\\]+)";'))
+      $typoBackupRule.Success | Should -BeTrue
+      $typoStores = @(
+        $typoV2Name.Groups[1].Value,
+        ([System.IO.Path]::GetFileNameWithoutExtension($typoV1Store) + $typoBackupRule.Groups[1].Value +
+          [System.IO.Path]::GetExtension($typoV1Store) + $typoBackupRule.Groups[2].Value)
+      )
 
       ($script:LearningSnapshotKnownStores | Sort-Object) -join "," |
-        Should -BeExactly (($hostStores + @($v2Stores) | Sort-Object -Unique) -join ",")
+        Should -BeExactly (($hostStores + @($v2Stores) + $typoStores | Sort-Object -Unique) -join ",")
     }
 
     It "records a missing data directory as absent stores" {
@@ -292,6 +315,8 @@ Describe "Learning data snapshot" {
       @{ Store = "learning.v2.tsv.enc"; Encrypted = $true }
       @{ Store = "english_learning.v2.tsv"; Encrypted = $false }
       @{ Store = "english_learning.v2.tsv.enc"; Encrypted = $true }
+      @{ Store = "typo_learning.v2.db.enc"; Encrypted = $true }
+      @{ Store = "typo_corrections.v1.tsv.bak.enc"; Encrypted = $true }
     ) {
       $path = Join-Path $script:data $Store
       Write-TestFile -Path $path -Text "$($script:secretMarker)`n"

@@ -133,8 +133,8 @@ TIP 自身の確定に伴う composition 終了は、成功後の観測を消さ
 
 - `EngineConfig` に `typo_correction_mode`、`typo_min_count`（既定 3）、
   編集距離しきい値を追加。
-- `TypoCorrectionStore* typo_store_` を非所有で保持（`SetTypoStore`）。
-- `ObserveTypo(wrong, correct, now)`: `typo_store_->Observe(...)` → `Save()`。
+- typo のストアを非所有で保持（`SetTypoStore`）。M55 からは v2 の `TypoLearningStore`（§12.8）を持つ。
+- `ObserveTypo(wrong, correct, now)`: 読みの組を観測し、件数と時間でまとめて保存する（§12.8）。
 - 候補取得は新オーバーロード `QueryCandidatesEx` で補正後読みも返す:
   - `struct CandidatesResult { std::vector<core::Candidate> candidates;
     std::string corrected_reading; }`
@@ -880,6 +880,8 @@ Host は起動時にストアを読み、次の順に判定する。状態（あ
 - 読みの組: チャネルを空、読みを誤った読み、表記を正しい読みとする（v1 と同じ）。移行の前後で id は変わらない。
 - パターン: チャネルを `pattern`、読みを `observed_pattern`、表記を `intended_pattern` とする。
   一覧の entry の `channel` に `pattern` を出して、読みの組と見分ける。
+  `typo_type` と `keyboard_layout` だけが違う行は 1 entry に畳み、`weight` を採用の回数の合計、metadata の
+  `accept_count` / `reject_count` をそれぞれの合計、最終更新を `updated_at` の最大とする。
 
 忘却（`ForgetLearningEntry`、`store` は `typo`）:
 
@@ -917,9 +919,8 @@ backup の entry は `docs/learning-data-management-spec.md` §5・§5.1 が持�
 `typo_corrections`（v1 の TSV）に、パターンは item `typo_patterns` に書き、`typo_events` は入れない。
 どちらの item もテキストとして解析し、archive のバイト列を SQLite として開かない。
 
-Host を v2 のストアへ切り替えるのは DEV-2149 の組み込みである。それまでの Host は v1 のストアを使い、backup にも
-item `typo_corrections` だけを書く。v2 のストアと、item `typo_patterns` の書き出しと merge は、`learning/` の
-`TypoLearningStore` にだけある。
+「v1 のまま読む」起動では item `typo_corrections` だけを書き、import の item `typo_patterns` は取り込まずに
+skipped に数える。
 
 #### 保持上限
 
@@ -1162,6 +1163,9 @@ v2 のストアは、呼び出し側が secure の間に書き込みを止める
 パターンのイベントを拒み、保存はファイルに触れずに失敗し、忘却と全削除もファイルに触れずに失敗する。
 Host の学習ゲートに重ねる最後の段で、ゲートの代わりにはしない。起動時の読み込み（§12.8 の移行を含む）と
 import の merge は学習ではないので止めない。import の内容は、止めている間は保存されない。
+Host はこの入口を、公開した `privacy_mode_secure`（解析できない `settings.json` で fail-closed に立つものを含む）に
+連動させ、起動時と `UpdateConfig` のたびに当てる。要求ごとの `secure` には連動させない。止める前に観測して
+未保存のままの内容は、解除の後に保存する。
 
 ### 12.13 IPC（protocol v1 の加算的拡張）
 

@@ -432,3 +432,7 @@ ctest --preset windows-debug --no-tests=error
   cleanup は `learning.tsv.enc` だけを対象とし、平文、`.bak`、`.corrupt-*` は保全する。
   削除後は旧版 Host が移行前の学習を引き継げない。条件の正典は
   `docs/user-learning-enhancement-spec.md` §3.1 を参照する。
+- **D-010 の typo ストアの作り直し**: `details.typo_store_rebuilt=true` は、その起動で typo の v2 ストアを
+  破損から作り直したことを表す。壊れたファイルは `typo_learning.v2.db.enc.corrupt-<epoch>` として残り、
+  学習は残っている v1 のファイルから移し直すか、空から始め直す（`docs/typo-correction-learning-spec.md` §12.8）。
+  `azookey_diag --repair` が行う修復は無い。

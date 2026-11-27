@@ -1097,6 +1097,22 @@ TEST(PayloadsTest, QueryDiagnosticsPromptFormatIsOptionalAndIgnoresUnknownValues
   EXPECT_FALSE(parsed->prompt_format);
 }
 
+// DEV-2149 (D-010): typo_store_rebuilt is sent only when true, and a payload
+// without it reads as false.
+TEST(PayloadsTest, QueryDiagnosticsTypoStoreRebuiltIsSentOnlyWhenTrue) {
+  using namespace azookey::ipc;
+  QueryDiagnosticsPayload payload;
+  payload.engine = "mock";
+  payload.backend = "cpu";
+  payload.fallback_state = "healthy";
+  EXPECT_FALSE(json::Parse(BuildQueryDiagnostics(payload))->Find("typo_store_rebuilt"));
+  EXPECT_FALSE(ParseQueryDiagnostics(BuildQueryDiagnostics(payload))->typo_store_rebuilt);
+  payload.typo_store_rebuilt = true;
+  const auto parsed = ParseQueryDiagnostics(BuildQueryDiagnostics(payload));
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->typo_store_rebuilt);
+}
+
 TEST(PayloadsTest, QueryDiagnosticsBackendSelectionRoundTripsWithoutChangingLoadedBackend) {
   using namespace azookey::ipc;
   QueryDiagnosticsPayload payload;

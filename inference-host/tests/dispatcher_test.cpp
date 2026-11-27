@@ -44,7 +44,7 @@
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/ContextHash.h"
 #include "azookey/learning/LearningStore.h"
-#include "azookey/learning/TypoCorrectionStore.h"
+#include "azookey/learning/TypoLearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/logging/RuntimeLogger.h"
 
@@ -1425,7 +1425,8 @@ TEST_F(MixedEnglishDispatchTest, OffSecureAndOutOfBoundsKeepTheM60Order) {
 TEST_F(MixedEnglishDispatchTest, CorrectedReadingStaysWithTheJapaneseCandidates) {
   const auto typo_path = temp_directory.File("azookey_dispatcher_mixed_english_typo.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
   auto config = engine.config();
   config.typo_correction_mode = "auto_replace";
@@ -1435,8 +1436,8 @@ TEST_F(MixedEnglishDispatchTest, CorrectedReadingStaysWithTheJapaneseCandidates)
       static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count());
-  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
-  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
 
   const auto response = [&](uint64_t id, bool mixed) {
     const auto resp = dispatcher.Dispatch(
@@ -1905,7 +1906,8 @@ TEST_F(MixedInlineDispatchTest, PassedDeadlineLeavesTheListAsWithM63Off) {
 TEST_F(MixedInlineDispatchTest, TypoCorrectionStaysOffForAMixedComposition) {
   const auto typo_path = temp_directory.File("azookey_dispatcher_mixed_inline_typo.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
   auto config = engine.config();
   config.typo_correction_mode = "auto_replace";
@@ -1916,8 +1918,8 @@ TEST_F(MixedInlineDispatchTest, TypoCorrectionStaysOffForAMixedComposition) {
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count());
   const std::string corrected = "きょうはぎてゅbにぷsした";
-  ASSERT_TRUE(typo.Observe(kSentenceKana, corrected, now_epoch_sec));
-  ASSERT_TRUE(typo.Observe(kSentenceKana, corrected, now_epoch_sec));
+  ASSERT_TRUE(typo.ObserveReadingPair(kSentenceKana, corrected, now_epoch_sec));
+  ASSERT_TRUE(typo.ObserveReadingPair(kSentenceKana, corrected, now_epoch_sec));
   const auto response = [&](uint64_t id, bool mixed) {
     const auto resp = patient.Dispatch(
         MakeReq(id, ipc::MessageType::QueryCandidates,
@@ -2043,7 +2045,8 @@ TEST_F(MixedInlineDispatchTest, ReadableWordsShareTheThreeConversionsWithLowSegm
 TEST_F(MixedInlineDispatchTest, CorrectedReadingHasNoReadableWordCandidate) {
   const auto typo_path = temp_directory.File("azookey_dispatcher_mixed_readable_typo.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
   auto config = engine.config();
   config.typo_correction_mode = "auto_replace";
@@ -2055,8 +2058,8 @@ TEST_F(MixedInlineDispatchTest, CorrectedReadingHasNoReadableWordCandidate) {
                                 .count());
   const std::string kana = "あしたきてくだしあ";
   const std::string corrected = "あしたきてください";
-  ASSERT_TRUE(typo.Observe(kana, corrected, now_epoch_sec));
-  ASSERT_TRUE(typo.Observe(kana, corrected, now_epoch_sec));
+  ASSERT_TRUE(typo.ObserveReadingPair(kana, corrected, now_epoch_sec));
+  ASSERT_TRUE(typo.ObserveReadingPair(kana, corrected, now_epoch_sec));
   const auto response = [&](uint64_t id, bool mixed) {
     const auto resp = patient.Dispatch(
         MakeReq(id, ipc::MessageType::QueryCandidates,
@@ -5022,7 +5025,8 @@ TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
   EnableEventPrivacy(dispatcher);
   const auto typo_path = temp_directory.File("azookey_dispatcher_typo.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
 
   ipc::ObserveTypoRequest request;
@@ -5036,11 +5040,11 @@ TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
       MakeReq(51, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(request)));
   // Spec section 7: no reply at all, so a blocking client must not wait on one.
   EXPECT_FALSE(response.has_value());
-  EXPECT_EQ(typo.size(), 1u);
+  EXPECT_EQ(typo.ReadingPairs().size(), 1u);
 
   // A malformed payload is dropped just as silently.
   EXPECT_FALSE(dispatcher.Dispatch(MakeReq(52, ipc::MessageType::ObserveTypo, "{}")).has_value());
-  EXPECT_EQ(typo.size(), 1u);
+  EXPECT_EQ(typo.ReadingPairs().size(), 1u);
 
   engine.SetTypoStore(nullptr);
   std::remove(typo_path.c_str());
@@ -5049,7 +5053,8 @@ TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
 TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace) {
   const auto typo_path = temp_directory.File("azookey_dispatcher_typo_auto.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
   auto config = engine.config();
   config.typo_correction_mode = "auto_replace";
@@ -5062,8 +5067,8 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
       static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count());
-  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
-  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
 
   ipc::QueryCandidatesRequest query;
   query.reading = "こんちには";
@@ -5084,14 +5089,15 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
 TEST_F(DispatcherTest, FirstSegmentRequestIsNeverCorrected) {
   const auto typo_path = temp_directory.File("azookey_dispatcher_typo_first_segment.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
   const auto now_epoch_sec =
       static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count());
-  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
-  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
 
   uint64_t id = 7100;
   const auto query = [&](const std::string& remaining) {
@@ -5209,14 +5215,15 @@ TEST(FirstSegmentDispatchTest, TheRemainingReadingReachesTheEngine) {
 TEST_F(DispatcherTest, RequestedTypoModeLeavesTheHostModeAsItIs) {
   const auto typo_path = temp_directory.File("azookey_dispatcher_typo_requested_mode.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
   const auto now_epoch_sec =
       static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count());
-  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
-  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
 
   uint64_t id = 7000;
   const auto query = [&](bool secure, const std::string& mode) {
@@ -5283,7 +5290,8 @@ TEST_F(DispatcherTest, ObserveTypoFollowsLearnPersonalPatterns) {
   EnableEventPrivacy(learning);
   const auto typo_path = temp_directory.File("azookey_dispatcher_typo_learning.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
 
   ipc::ObserveTypoRequest request;
@@ -5299,7 +5307,7 @@ TEST_F(DispatcherTest, ObserveTypoFollowsLearnPersonalPatterns) {
                      .has_value());
   };
   observe(7101);
-  EXPECT_EQ(typo.size(), 0u);
+  EXPECT_EQ(typo.ReadingPairs().size(), 0u);
 
   // Typo correction off stops it as well, through the same reload, before the
   // engine config (still suggest here) follows.
@@ -5312,17 +5320,75 @@ TEST_F(DispatcherTest, ObserveTypoFollowsLearnPersonalPatterns) {
     ASSERT_EQ(settings_store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
     ASSERT_EQ(engine.config().typo_correction_mode, "suggest");
     observe(id++);
-    EXPECT_EQ(typo.size(), 0u);
+    EXPECT_EQ(typo.ReadingPairs().size(), 0u);
   }
 
   write_settings(R"({"privacy":{"mode":"normal"}})");
   ASSERT_EQ(settings_store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
   observe(id++);
-  EXPECT_EQ(typo.size(), 1u);
+  EXPECT_EQ(typo.ReadingPairs().size(), 1u);
 
   engine.SetTypoStore(nullptr);
   std::remove(typo_path.c_str());
   std::remove(settings_path.c_str());
+}
+
+// typo-correction-learning-spec section 12.12.2: every UpdateConfig carries
+// the published privacy_mode_secure to the typo store, including the secure an
+// unreadable settings.json publishes (fail closed).
+TEST_F(DispatcherTest, UpdateConfigSuspendsTypoWritesWhilePrivacyIsSecure) {
+  const auto settings_path = temp_directory.File("azookey_dispatcher_typo_secure.json");
+  const auto write_settings = [&](const char* text) {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << text;
+  };
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  azookey::host::SettingsStore settings_store(settings_path);
+  ASSERT_EQ(settings_store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings_store);
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_secure.tsv");
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  engine.SetTypoStore(&typo);
+  uint64_t id = 7201;
+  const auto update = [&](const char* text) {
+    write_settings(text);
+    EXPECT_TRUE(target.Dispatch(MakeReq(id++, ipc::MessageType::UpdateConfig, "{}")).has_value());
+  };
+
+  update(R"({"privacy":{"mode":"secure"}})");
+  EXPECT_TRUE(typo.writes_suspended());
+  update(R"({"privacy":{"mode":"normal"}})");
+  EXPECT_FALSE(typo.writes_suspended());
+  update("{ not json");
+  EXPECT_TRUE(typo.writes_suspended());
+  update(R"({"privacy":{"mode":"normal"}})");
+  EXPECT_FALSE(typo.writes_suspended());
+
+  engine.SetTypoStore(nullptr);
+  std::remove(settings_path.c_str());
+}
+
+// D-010 (typo-correction-learning-spec section 12.8): the Host reports a typo
+// store its start rebuilt from a corrupt file, and leaves the field out
+// otherwise.
+TEST_F(DispatcherTest, QueryDiagnosticsReportsARebuiltTypoStore) {
+  const auto plain = dispatcher.Dispatch(MakeReq(7210, ipc::MessageType::QueryDiagnostics, "{}"));
+  ASSERT_TRUE(plain.has_value());
+  EXPECT_EQ(plain->payload_json.find("typo_store_rebuilt"), std::string::npos);
+  const auto plain_parsed = ipc::ParseQueryDiagnostics(plain->payload_json);
+  ASSERT_TRUE(plain_parsed.has_value());
+  EXPECT_FALSE(plain_parsed->typo_store_rebuilt);
+
+  auto config = DefaultDispatcherConfig();
+  config.typo_store_rebuilt = true;
+  azookey::host::Dispatcher rebuilt(&engine, &scheduler, &user_dict, config);
+  const auto response = rebuilt.Dispatch(MakeReq(7211, ipc::MessageType::QueryDiagnostics, "{}"));
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseQueryDiagnostics(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->typo_store_rebuilt);
 }
 
 TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
@@ -5543,7 +5609,8 @@ TEST_F(DispatcherTest, LearningEventsDenyUnknownAndDoNotConsumeObservationIds) {
   EnableEventPrivacy(dispatcher);
   const auto typo_path = temp_directory.File("azookey_event_privacy_typo.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetTypoStore(&typo);
   ipc::QueryCandidatesRequest query;
   query.reading = "normal";
@@ -5585,13 +5652,13 @@ TEST_F(DispatcherTest, LearningEventsDenyUnknownAndDoNotConsumeObservationIds) {
         EXPECT_FALSE(parsed->ok);
       }
       EXPECT_EQ(store.size(), before);
-      EXPECT_EQ(typo.size(), 0u);
+      EXPECT_EQ(typo.ReadingPairs().size(), 0u);
     }
     const auto allowed = dispatcher.Dispatch(
         MakeReq(9102, type, base + R"(,"secure":false,"learning_allowed":true})"));
     if (type == ipc::MessageType::ObserveTypo) {
       EXPECT_FALSE(allowed);
-      EXPECT_EQ(typo.size(), 1u);
+      EXPECT_EQ(typo.ReadingPairs().size(), 1u);
     } else {
       ASSERT_TRUE(allowed);
       EXPECT_TRUE(ipc::ParseCommitObservationResponse(allowed->payload_json)->ok);
@@ -5659,7 +5726,8 @@ TEST_F(DispatcherTest, HostPrivacySettingsRejectAllLearningAndMining) {
     azookey::host::SettingsStore settings(settings_path);
     settings.Load();
     azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
-    azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+    azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+    ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
     engine.SetAutoWordStore(&mining);
     engine.SetTypoStore(&typo);
     azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
@@ -5705,9 +5773,10 @@ TEST_F(DispatcherTest, HostPrivacySettingsRejectAllLearningAndMining) {
         MakeReq(9301, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(observation))));
     EXPECT_EQ(store.size(), before);
     EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
-    EXPECT_EQ(typo.size(), 0u);
+    EXPECT_EQ(typo.ReadingPairs().size(), 0u);
     EXPECT_FALSE(std::filesystem::exists(mining_path));
-    EXPECT_FALSE(std::filesystem::exists(typo_path));
+    EXPECT_FALSE(
+        std::filesystem::exists(azookey::learning::EncryptedPathFor(typo.paths().v2_store)));
     engine.SetAutoWordStore(nullptr);
     engine.SetTypoStore(nullptr);
     std::remove(settings_path.c_str());
@@ -5757,7 +5826,8 @@ TEST_F(DispatcherTest, EngineSafeModeStopsLearningWithoutTheSettingsOverride) {
   azookey::host::SettingsStore settings(settings_path);
   ASSERT_EQ(settings.Load().status, azookey::host::SettingsLoadStatus::Loaded);
   azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   engine.SetAutoWordStore(&mining);
   engine.SetTypoStore(&typo);
   // Detach the stores even when an ASSERT below returns early, before they go.
@@ -5824,9 +5894,10 @@ TEST_F(DispatcherTest, EngineSafeModeStopsLearningWithoutTheSettingsOverride) {
   commit_all(false);
   EXPECT_EQ(store.size(), before);
   EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
-  EXPECT_EQ(typo.size(), 0u);
+  EXPECT_EQ(typo.ReadingPairs().size(), 0u);
   EXPECT_FALSE(std::filesystem::exists(mining_path));
-  EXPECT_FALSE(std::filesystem::exists(typo_path));
+  EXPECT_FALSE(
+      std::filesystem::exists(azookey::learning::EncryptedPathFor(typo.paths().v2_store)));
 
   // The same requests write once SafeMode ends, so the stop above is SafeMode's.
   (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::SafeModeCleared);
@@ -5834,7 +5905,7 @@ TEST_F(DispatcherTest, EngineSafeModeStopsLearningWithoutTheSettingsOverride) {
   commit_all(true);
   EXPECT_GT(store.size(), before);
   EXPECT_FALSE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
-  EXPECT_EQ(typo.size(), 1u);
+  EXPECT_EQ(typo.ReadingPairs().size(), 1u);
 
   std::remove(mining_path.c_str());
   std::remove(typo_path.c_str());
@@ -6749,11 +6820,12 @@ TEST_F(DispatcherTest, ResetLearningStoreRestoresTheStoreWhenTheM7FileCannotBeRe
 TEST_F(DispatcherTest, ResetLearningStoreEmptiesTheTypoAndAutoWordStores) {
   const auto typo_path = temp_directory.File("azookey_dispatcher_reset_typo.tsv");
   const auto mining_path = temp_directory.File("azookey_dispatcher_reset_mining.tsv");
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
   azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
-  ASSERT_TRUE(typo.Observe("こんちには", "こんにちは", 1700000000));
+  ASSERT_TRUE(typo.ObserveReadingPair("こんちには", "こんにちは", 1700000000));
   mining.Observe("azooKey社", "あずきーしゃ", 1700000000, 3, false);
-  ASSERT_EQ(typo.size(), 1u);
+  ASSERT_EQ(typo.ReadingPairs().size(), 1u);
   ASSERT_FALSE(mining.All().empty());
   engine.SetTypoStore(&typo);
   engine.SetAutoWordStore(&mining);
@@ -6768,12 +6840,11 @@ TEST_F(DispatcherTest, ResetLearningStoreEmptiesTheTypoAndAutoWordStores) {
     ASSERT_TRUE(parsed.has_value()) << name;
     EXPECT_TRUE(parsed->ok) << name;
   }
-  EXPECT_EQ(typo.size(), 0u);
+  EXPECT_EQ(typo.ReadingPairs().size(), 0u);
   EXPECT_TRUE(mining.All().empty());
-  azookey::learning::TypoCorrectionStore typo_reloaded(typo_path,
-                                                       &azookey::learning::test::Crypto());
-  ASSERT_TRUE(typo_reloaded.Load());
-  EXPECT_EQ(typo_reloaded.size(), 0u);
+  azookey::learning::TypoLearningStore typo_reloaded(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo_reloaded.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  EXPECT_TRUE(typo_reloaded.ReadingPairs().empty());
 
   engine.SetTypoStore(nullptr);
   engine.SetAutoWordStore(nullptr);
@@ -6790,9 +6861,9 @@ TEST_F(DispatcherTest, ResetLearningStoreRefusesUnreadableTypoAndAutoWordFiles) 
   for (const auto& path : {typo_path, mining_path}) {
     WriteAllBytes(azookey::learning::EncryptedPathFor(path), "not a protected blob");
   }
-  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
   azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
-  ASSERT_FALSE(typo.Load());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::Blocked);
   ASSERT_FALSE(mining.Load());
   ASSERT_TRUE(typo.save_blocked());
   ASSERT_TRUE(mining.save_blocked());

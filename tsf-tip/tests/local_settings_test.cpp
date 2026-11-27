@@ -343,8 +343,8 @@ TEST_F(LocalSettingsTest, CustomRomajiPathOverrideRebindsWhenSettingsChange) {
   }));
 }
 
-// M70 (docs/input-style-spec.md §2): azik and kanaJis are read; any other value
-// is default. AZIK carries its built-in table and kana input none.
+// docs/input-style-spec.md §2: unrecognized, missing and invalid values are
+// default. AZIK carries its built-in table and kana input none.
 TEST_F(LocalSettingsTest, InputStyleReadsAzikAndKanaJisAndDefaultsOtherValues) {
   using azookey::tsf::TipInputStyle;
   for (const auto& [json, style] : {
@@ -352,7 +352,7 @@ TEST_F(LocalSettingsTest, InputStyleReadsAzikAndKanaJisAndDefaultsOtherValues) {
            std::pair{R"({"inputStyle":"kanaJis"})", TipInputStyle::KanaJis},
            std::pair{R"({"inputStyle":"default"})", TipInputStyle::Default},
            std::pair{R"({"inputStyle":"AZIK"})", TipInputStyle::Default},
-           std::pair{R"({"inputStyle":"kanaUs"})", TipInputStyle::Default},
+           std::pair{R"({"inputStyle":"kanaIso"})", TipInputStyle::Default},
            std::pair{R"({"inputStyle":1})", TipInputStyle::Default},
            std::pair{R"({})", TipInputStyle::Default},
        }) {
@@ -366,6 +366,13 @@ TEST_F(LocalSettingsTest, InputStyleReadsAzikAndKanaJisAndDefaultsOtherValues) {
     else
       EXPECT_FALSE(reader.RomajiSnapshot());
   }
+}
+
+TEST_F(LocalSettingsTest, InputStyleReadsKanaUsWithoutARomajiTable) {
+  Write(R"({"inputStyle":"kanaUs"})");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_EQ(reader.InputStyleSnapshot(), azookey::tsf::TipInputStyle::KanaUs);
+  EXPECT_FALSE(reader.RomajiSnapshot());
 }
 
 // legacy-parity-spec §5.1: the TIP reads the custom table with letter case kept.

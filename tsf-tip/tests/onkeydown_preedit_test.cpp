@@ -23205,14 +23205,16 @@ BOOL TypeKanaKey(DocumentPreeditHarness& h, JisKey key, bool shift = false) {
   return eaten;
 }
 
-void StartKana(DocumentPreeditHarness& h, bool legacy = false) {
+void StartKana(DocumentPreeditHarness& h, bool legacy = false,
+               TipInputStyle style = TipInputStyle::KanaJis) {
   ConfigureTypoHarness(h, legacy);
-  h.service.set_input_style_for_test(TipInputStyle::KanaJis);
+  h.service.set_input_style_for_test(style);
 }
 
 // Types か and opens the window of 蚊 下 課.
-void OpenKanaWindow(DocumentPreeditHarness& h, bool legacy) {
-  StartKana(h, legacy);
+void OpenKanaWindow(DocumentPreeditHarness& h, bool legacy,
+                    TipInputStyle style = TipInputStyle::KanaJis) {
+  StartKana(h, legacy, style);
   ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
   ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.Press(VK_SPACE));
@@ -23277,6 +23279,202 @@ TEST(TsfTipKanaInputTest, TableKeysTypeTheirKanaByThePhysicalKey) {
     EXPECT_EQ(h.service.preedit_kana_, "かにをろーろ");
     EXPECT_EQ(h.context.document->text, L"かにをろーろ");
   }
+}
+
+TEST(TsfTipKanaInputTest, UsTableUsesPhysicalKeysAndShift) {
+  JisScanCodeGuard scan_codes;
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartKana(h, legacy, TipInputStyle::KanaUs);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaNu));
+    ASSERT_EQ(h.service.preedit_kana_, "ぬ");
+    ASSERT_EQ(h.service.core_input_active_for_test(), !legacy);
+    ASSERT_TRUE(TypeKanaKey(h, {'A', 0}));  // VK-only injection falls back to 0x1E.
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_3, 0x29}));
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_3, 0x29}, /*shift=*/true));
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_MINUS, 0x0C}, /*shift=*/true));
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_5, 0x2B}, /*shift=*/true));
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_102, 0x56}));
+    EXPECT_EQ(h.service.preedit_kana_, "ぬちろろーむむ");
+    EXPECT_EQ(h.context.document->text, L"ぬちろろーむむ");
+  }
+}
+
+TEST(TsfTipKanaInputTest, UsRoPositionWithAHankakuZenkakuVkDoesNotTypeKana) {
+  for (const WPARAM vk : {WPARAM{VK_KANJI}, WPARAM{VK_OEM_AUTO}, WPARAM{VK_OEM_ENLW}}) {
+    SCOPED_TRACE(vk);
+    DocumentPreeditHarness h;
+    StartKana(h, /*legacy=*/false, TipInputStyle::KanaUs);
+    EXPECT_FALSE(TypeKanaKey(h, {vk, 0x29}, /*shift=*/true));
+    EXPECT_TRUE(h.service.keyboard_open());
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    ASSERT_TRUE(TypeKanaKey(h, {vk, 0x29}));
+    EXPECT_FALSE(h.service.keyboard_open());
+    ASSERT_TRUE(TypeKanaKey(h, {vk, 0x29}));
+    EXPECT_TRUE(h.service.keyboard_open());
+    EXPECT_TRUE(h.context.document->text.empty());
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_3, 0x29}));
+    EXPECT_EQ(h.context.document->text, L"ろ");
+  }
+}
+
+TEST(TsfTipKanaInputTest, UsGraveWithSystemModifiersPassesThrough) {
+  DocumentPreeditHarness h;
+  StartKana(h, /*legacy=*/false, TipInputStyle::KanaUs);
+  for (const auto& [modifier, vk] :
+       {std::pair{VK_MENU, VK_KANJI}, std::pair{VK_CONTROL, VK_OEM_AUTO},
+        std::pair{VK_CONTROL, VK_OEM_ENLW}, std::pair{VK_MENU, VK_OEM_3},
+        std::pair{VK_CONTROL, VK_OEM_3}, std::pair{VK_LWIN, VK_OEM_3}}) {
+    SCOPED_TRACE(::testing::Message() << "modifier " << modifier << " vk " << vk);
+    h.keyboard_state.SetDown(modifier, true);
+    EXPECT_FALSE(TypeKanaKey(h, {static_cast<WPARAM>(vk), 0x29}));
+    h.keyboard_state.SetDown(modifier, false);
+    EXPECT_TRUE(h.service.keyboard_open());
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+  }
+  EXPECT_TRUE(h.context.document->text.empty());
+  ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_3, 0x29}));
+  EXPECT_EQ(h.context.document->text, L"ろ");
+}
+
+TEST(TsfTipKanaInputTest, UsKeysPassThroughInAlphanumericModeAndWithImeOff) {
+  DocumentPreeditHarness h;
+  StartKana(h, /*legacy=*/false, TipInputStyle::KanaUs);
+  h.service.set_alnum_mode_for_test(true);
+  EXPECT_FALSE(TypeKanaKey(h, {VK_OEM_3, 0x29}));
+  h.service.set_alnum_mode_for_test(false);
+  h.service.set_keyboard_open_for_test(false);
+  EXPECT_FALSE(TypeKanaKey(h, kKanaNu));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_TRUE(h.context.document->text.empty());
+  h.service.set_keyboard_open_for_test(true);
+  EXPECT_TRUE(TypeKanaKey(h, kKanaNu));
+  EXPECT_EQ(h.context.document->text, L"ぬ");
+}
+
+TEST(TsfTipKanaInputTest, UsVoicingMarksCombineAndBackspaceErasesOneKana) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartKana(h, legacy, TipInputStyle::KanaUs);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_4, 0x1A}));
+    ASSERT_TRUE(TypeKanaKey(h, kKanaHa));
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_6, 0x1B}));
+    ASSERT_EQ(h.service.preedit_kana_, "がぱ");
+    ASSERT_TRUE(h.Press(VK_BACK));
+    EXPECT_EQ(h.context.document->text, L"が");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_4, 0x1A}));
+    EXPECT_EQ(h.service.preedit_kana_, "゛");
+    EXPECT_EQ(h.context.document->text, L"が゛");
+  }
+}
+
+TEST(TsfTipKanaInputTest, UsStyleChangeKeepsTheReadingAndRestylesTheKeyOverTheWindow) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartKana(h, legacy);
+    ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+    h.service.set_input_style_for_test(TipInputStyle::KanaUs);
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_MINUS, 0x0C}, /*shift=*/true));
+    EXPECT_EQ(h.service.preedit_kana_, "かほ");
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    OpenKanaWindow(h, legacy);
+    h.service.set_input_style_for_test(TipInputStyle::KanaUs);
+    ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_3, 0x29}));
+    EXPECT_EQ(h.service.preedit_kana_, "ろ");
+    EXPECT_EQ(h.context.document->text, L"蚊ろ");
+  }
+}
+
+TEST(TsfTipKanaInputTest, UsWindowKeepsCandidateNumbersAndReplaysKana) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    {
+      DocumentPreeditHarness h;
+      OpenKanaWindow(h, legacy, TipInputStyle::KanaUs);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaFu));
+      EXPECT_EQ(h.context.document->text, L"下");
+      EXPECT_TRUE(h.service.preedit_kana_.empty());
+    }
+    {
+      DocumentPreeditHarness h;
+      StartKana(h, legacy, TipInputStyle::KanaUs);
+      ASSERT_TRUE(TypeKanaKey(h, kKanaKa));
+      ASSERT_TRUE(h.Press(VK_SPACE));
+      ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_3, 0x29}));
+      ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+      AnswerWindow(h);
+      EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+      EXPECT_EQ(h.service.preedit_kana_, "ろ");
+      EXPECT_EQ(h.context.document->text, L"蚊ろ");
+    }
+  }
+}
+
+TEST(TsfTipKanaInputTest, OnlyShiftedUsBracketKeysPair) {
+  BracketHarness h;
+  h.service.set_input_style_for_test(TipInputStyle::KanaUs);
+  auto type = [&](JisKey key, bool shift) {
+    h.keyboard.SetDown(VK_SHIFT, shift);
+    const BOOL probed = SendKanaKey(h.service, &h.context, h.keyboard, key, true);
+    const BOOL eaten = SendKanaKey(h.service, &h.context, h.keyboard, key, false);
+    h.keyboard.SetDown(VK_SHIFT, false);
+    EXPECT_EQ(probed, eaten);
+    return eaten;
+  };
+  ASSERT_TRUE(type({VK_OEM_4, 0x1A}, true));
+  ASSERT_EQ(h.context.document->text, L"「」");
+  ASSERT_EQ(h.context.document->start, 1);
+  ASSERT_TRUE(type({VK_OEM_6, 0x1B}, true));
+  ASSERT_EQ(h.context.document->text, L"「」");
+  ASSERT_EQ(h.context.document->start, 2);
+  ASSERT_TRUE(type({'9', 0x0A}, true));
+  ASSERT_TRUE(type({'0', 0x0B}, true));
+  ASSERT_TRUE(type({VK_OEM_4, 0x1A}, false));
+  ASSERT_TRUE(type({VK_OEM_6, 0x1B}, false));
+  EXPECT_EQ(h.service.preedit_kana_, "ょを゛゜");
+  EXPECT_EQ(h.context.document->text, L"「」ょを゛゜");
+}
+
+TEST(TsfTipKanaInputTest, UsKanaSkipsBatchEmojiEntryAndRomajiPayloads) {
+  EmojiTranslationGuard emoji_translation;
+  DocumentPreeditHarness h;
+  StartKana(h, /*legacy=*/false, TipInputStyle::KanaUs);
+  h.service.set_batch_romaji_options_for_test(true);
+  h.service.set_emoji_rewriter_for_test(true);
+  h.service.set_english_candidates_for_test(true);
+  h.service.set_mixed_english_for_test(true);
+  ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_1, 0x27}, /*shift=*/true));
+  ASSERT_EQ(h.service.preedit_kana_, "れ");
+  EXPECT_TRUE(h.service.pending_emoji_trigger_for_test().empty());
+  EXPECT_TRUE(h.service.batch_raw_romaji_for_test().empty());
+  EXPECT_TRUE(h.service.english_raw_romaji_for_test().empty());
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "れ");
+  EXPECT_FALSE(h.service.pending_ipc_query_is_batch_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+  EXPECT_TRUE(h.service.alt_readings_for_test("れ", 3).empty());
+  EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
+  EXPECT_FALSE(h.service.pending_ipc_english_candidates_for_test());
+  EXPECT_FALSE(h.service.pending_ipc_mixed_english_for_test());
+}
+
+TEST(TsfTipKanaInputTest, UsKanaUsesHepburnAndLeavesUnicodeHexDigitsAlone) {
+  DocumentPreeditHarness h;
+  StartKana(h, /*legacy=*/false, TipInputStyle::KanaUs);
+  ASSERT_TRUE(TypeKanaKey(h, kKanaU));
+  ASSERT_TRUE(TypeKanaKey(h, {VK_OEM_4, 0x1A}));
+  PressForm(h, VK_F10);
+  ExpectCommitted(h, L"vu");
+  PressCtrlShift(h, 'U');
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::UnicodeInput);
+  for (const JisKey key : {kKanaA, kKanaWa, kKanaU, kKanaFu}) ASSERT_TRUE(TypeKanaKey(h, key));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"vuあ");
 }
 
 TEST(TsfTipKanaInputTest, VkOnlyKeysMapTheVkAndOtherKeysAreNotLookedUp) {

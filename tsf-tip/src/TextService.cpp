@@ -1038,18 +1038,30 @@ struct KanaKey {
   UINT scan_code;
 };
 
-// A key of the kana table and the kana it types (input-style-spec §4.1,
-// §4.2), by the physical key and Shift, never by the VK or the layout's
-// character. Ctrl, Alt and Win keys, numpad keys (told apart by the VK first)
-// and keys with the extended flag are not in the table. VK_PACKET's scan code
-// bits carry an injected character, not a physical key.
-std::optional<KanaKey> LookupKanaKey(WPARAM key, LPARAM key_data, uint32_t modifiers) {
-  if (HasSystemModifier(modifiers) || IsNumpadKey(key) || key == VK_PACKET) return std::nullopt;
+bool IsKanaInputStyle(azookey::tsf::TipInputStyle style) {
+  using azookey::tsf::TipInputStyle;
+  return style == TipInputStyle::KanaJis || style == TipInputStyle::KanaUs;
+}
+
+// The selected kana table uses the physical key and Shift (input-style-spec
+// §4.1, §4.5). Ctrl, Alt, Win, numpad and extended keys are excluded.
+// VK_PACKET's scan code bits carry an injected character.
+std::optional<KanaKey> LookupKanaKey(WPARAM key, LPARAM key_data, uint32_t modifiers,
+                                     azookey::tsf::TipInputStyle style) {
+  if (!IsKanaInputStyle(style) || HasSystemModifier(modifiers) || IsNumpadKey(key) ||
+      key == VK_PACKET)
+    return std::nullopt;
   const bool extended = ((static_cast<ULONG_PTR>(key_data) >> 24) & 1) != 0;
   const UINT scan_code = KeyScanCode(key, key_data);
   if (scan_code == 0 || scan_code > 0xff) return std::nullopt;
-  const auto kana = azookey::core::LookupKanaJis(static_cast<uint8_t>(scan_code), extended,
-                                                 (modifiers & azookey::core::kModifierShift) != 0);
+  // The Japanese driver can give the US ろ position a half/full-width VK,
+  // including with Shift when ClassifyOpenCloseKey returns None.
+  if (scan_code == 0x29 && (key == VK_KANJI || key == VK_OEM_AUTO || key == VK_OEM_ENLW))
+    return std::nullopt;
+  const bool shift = (modifiers & azookey::core::kModifierShift) != 0;
+  const auto lookup = style == azookey::tsf::TipInputStyle::KanaUs ? azookey::core::LookupKanaUs
+                                                                : azookey::core::LookupKanaJis;
+  const auto kana = lookup(static_cast<uint8_t>(scan_code), extended, shift);
   if (!kana) return std::nullopt;
   return KanaKey{*kana, scan_code};
 }
@@ -3355,9 +3367,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     // Input-style-spec §4.1: a key of the kana table is decided here, ahead of
     // the key map, the emoji entry, bracket pairing and the symbol table. Over
     // the candidate window the key starts the next input (spec §2).
-    const auto kana_key = TypesKana(candidate_ui_.IsShowing())
-                              ? LookupKanaKey(wParam, lParam, modifiers)
-                              : std::optional<KanaKey>{};
+    const auto kana_key =
+        LookupKanaKey(wParam, lParam, modifiers, KanaInputStyleForKey(candidate_ui_.IsShowing()));
     const auto kana = kana_key ? std::optional(kana_key->kana) : std::nullopt;
     if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
@@ -3880,9 +3891,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // probe decides it, ahead of the key map, the emoji entry, bracket pairing
     // and the symbol table. Over the candidate window the key starts the next
     // input (spec §2).
-    const auto kana_key = TypesKana(candidate_ui_.IsShowing())
-                              ? LookupKanaKey(wParam, lParam, modifiers)
-                              : std::optional<KanaKey>{};
+    const auto kana_key =
+        LookupKanaKey(wParam, lParam, modifiers, KanaInputStyleForKey(candidate_ui_.IsShowing()));
     const auto kana = kana_key ? std::optional(kana_key->kana) : std::nullopt;
     if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
@@ -4099,7 +4109,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     }
     // The typed romaji belongs to the composition the key types into.
     const bool kana_style =
-        (next_input_restyles ? next_input_style : InputStyleForKey()) == TipInputStyle::KanaJis;
+        IsKanaInputStyle(next_input_restyles ? next_input_style : InputStyleForKey());
     if (is_input && !has_preedit && batch_raw_romaji_.empty()) {
       // Capture the latest immutable table only when a new input begins.
       // A watcher reload must not rewrite an existing preedit.
@@ -5644,7 +5654,7 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
   // A kana key types its kana, or chooses a candidate, whatever the layout
   // makes of it (input-style-spec §4.4). It is replayed over the window, where
   // it starts the next input (spec §2).
-  if (TypesKana(/*next_input=*/true) && LookupKanaKey(key, key_data, modifiers))
+  if (LookupKanaKey(key, key_data, modifiers, KanaInputStyleForKey(/*next_input=*/true)))
     return WindowWaitKey::Hold;
   // Segment-editing-spec §5.2: the first segment's wait also holds ← → Ctrl+B
   // Ctrl+F, which a resized segment takes. A resize runs at once unless keys
@@ -5813,8 +5823,7 @@ bool TextService::HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, L
                            local_settings_.ConvertKeysActionSnapshot()) != OpenCloseKeyAction::None)
     return false;
   // A kana key starts the next input whatever its VK (input-style-spec §4.4).
-  if (local_settings_.InputStyleSnapshot() == TipInputStyle::KanaJis &&
-      LookupKanaKey(key, key_data, modifiers))
+  if (LookupKanaKey(key, key_data, modifiers, local_settings_.InputStyleSnapshot()))
     return true;
   const auto idle = MapTipKey(key, modifiers, /*has_preedit=*/false, /*cand_visible=*/false,
                               /*unicode_active=*/false);
@@ -12710,7 +12719,7 @@ void TextService::stop_ipc_worker_for_test() { StopIpcWorker(); }
 
 bool TextService::BatchRomajiEnabled() const {
   return batch_romaji_conversion_.load(std::memory_order_relaxed) &&
-         InputStyleForKey() != TipInputStyle::KanaJis;
+         !IsKanaInputStyle(InputStyleForKey());
 }
 
 bool TextService::HasCompositionInput() const {
@@ -12721,11 +12730,9 @@ TipInputStyle TextService::InputStyleForKey() const {
   return HasCompositionInput() ? composition_input_style_ : local_settings_.InputStyleSnapshot();
 }
 
-bool TextService::TypesKana(bool next_input) const {
-  const TipInputStyle style =
-      next_input ? local_settings_.InputStyleSnapshot() : InputStyleForKey();
-  return emoji_mode_ == EmojiMode::Inactive && !UnicodeInputActive() &&
-         style == TipInputStyle::KanaJis;
+TipInputStyle TextService::KanaInputStyleForKey(bool next_input) const {
+  if (emoji_mode_ != EmojiMode::Inactive || UnicodeInputActive()) return TipInputStyle::Default;
+  return next_input ? local_settings_.InputStyleSnapshot() : InputStyleForKey();
 }
 
 std::string TextService::MixedEnglishRawRomajiFor(const std::string& reading, bool secure) const {
@@ -12751,8 +12758,7 @@ bool TextService::EnglishCandidatesEnabled() const {
 std::string TextService::EnglishRawRomajiFor(const std::string& reading) const {
   // Kana input sends no typed romaji (input-style-spec §6), also when a commit
   // undo brought back the romaji of an earlier input.
-  if (english_raw_romaji_.empty() || reading.empty() ||
-      InputStyleForKey() == TipInputStyle::KanaJis)
+  if (english_raw_romaji_.empty() || reading.empty() || IsKanaInputStyle(InputStyleForKey()))
     return {};
   const auto& table = batch_romaji_table_;
   // The reading is either the preview (pending romaji shown as typed) or, once

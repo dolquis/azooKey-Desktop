@@ -8,21 +8,22 @@
 
 namespace azookey::core {
 
-// Kana input (JIS layout) for `inputStyle=kanaJis`: docs/input-style-spec.md section 4.
+// Kana input (JIS and US layouts): docs/input-style-spec.md section 4.
 
 // The kana a physical key makes, or std::nullopt when the table has no entry for it
-// (docs/input-style-spec.md section 4.1, 4.2). `scan_code` is bits 16-23 of the key message's
-// lParam. A key with the extended flag is never looked up, because a numpad `/` shares the
+// (docs/input-style-spec.md sections 4.1, 4.2 and 4.5). `scan_code` is bits 16-23 of the key
+// message's lParam. A key with the extended flag is never looked up, because a numpad `/` shares the
 // scan code of the `/` key. Shift is the only modifier; the caller skips Ctrl, Alt and Win.
 // The voicing-mark keys return U+309B / U+309C (see AsVoicingMark).
 std::optional<std::string_view> LookupKanaJis(uint8_t scan_code, bool extended, bool shift);
+std::optional<std::string_view> LookupKanaUs(uint8_t scan_code, bool extended, bool shift);
 
 enum class VoicingMark {
   kDakuten,     // ゛ (U+309B)
   kHandakuten,  // ゜ (U+309C)
 };
 
-// The voicing mark a LookupKanaJis result stands for, or std::nullopt for any other kana.
+// The voicing mark a kana lookup result stands for, or std::nullopt for any other kana.
 std::optional<VoicingMark> AsVoicingMark(std::string_view kana);
 
 struct VoicingResult {

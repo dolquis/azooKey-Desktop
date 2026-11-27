@@ -53,7 +53,7 @@ struct TipPredictionSetting {
 };
 // inputStyle (docs/input-style-spec.md §2). Absent, not a string or another
 // value: Default.
-enum class TipInputStyle { Default, Azik, KanaJis, Custom };
+enum class TipInputStyle { Default, Azik, KanaJis, Custom, KanaUs };
 
 // Owns a cancellable directory watch. The worker never touches TSF/COM objects.
 class TipLocalSettings final {
@@ -113,7 +113,7 @@ class TipLocalSettings final {
   void SetInlineEnglishCandidatesForTest(bool enabled);
   void SetMixedEnglishAutoConversionForTest(bool enabled);
   void SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table);
-  // Azik also sets the AZIK table and KanaJis and Default clear the table;
+  // Azik also sets the AZIK table. KanaJis, KanaUs and Default clear the table;
   // Custom keeps the table SetRomajiTableForTest set.
   void SetInputStyleForTest(TipInputStyle style);
   bool WaitForEnabledForTest(bool enabled);

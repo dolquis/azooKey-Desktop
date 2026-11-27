@@ -1998,7 +1998,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // outside Unicode input and the emoji search. `next_input`: the key starts
   // the next input (typed over the candidate window), so the current setting
   // decides, not the composition's style (spec §2).
-  bool TypesKana(bool next_input = false) const;
+  TipInputStyle KanaInputStyleForKey(bool next_input) const;
   // M60: inlineEnglishCandidates is on and the Host advertised
   // "english_candidates" (docs/inline-english-candidate-spec.md §6.2, §7).
   bool EnglishCandidatesEnabled() const;

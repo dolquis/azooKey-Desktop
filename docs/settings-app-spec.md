@@ -312,7 +312,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `convertKeysAction` | enum `default`/`imeOnOff` | `default` | 入力 | DEV-1736 | 即時 | `tsf-deep-integration-spec.md` §3.1.1 |
 | `fullWidthSpace` | bool | `true` | 入力 | DEV-1814 | 即時 | `tsf-deep-integration-spec.md` §3.7 |
 | `inputScopeSwitching` | bool | `true` | 入力（`profilesByApp` の各プロファイルにも同名のフィールド。アプリ別の編集ダイアログで「指定しない（継承）」を選べる） | M67 | 即時 | `app-profile-spec.md` §13.6 |
-| `inputStyle` | enum `default`/`azik`/`kanaJis`/`custom` | `default` | 入力 | M17・M70 | 即時 | `input-style-spec.md` §2（表示名「ローマ字・かな入力」） |
+| `inputStyle` | enum `default`/`azik`/`kanaJis`/`kanaUs`/`custom` | `default` | 入力 | M17・M70・M75 | 即時 | `input-style-spec.md` §2（表示名「ローマ字・かな入力」） |
 | `customRomajiTablePath` | string（パス） | `…\custom-romaji.tsv` | 入力 | M17 | 即時（ホットリロード） | roadmap M17 |
 | `liveConversion` | bool | `false` | 入力 | M14 | 即時 | roadmap M14 |
 | `punctuationConversion` | enum `off`/`commit` | `off` | 入力 | DEV-1638 | 即時 | `tsf-deep-integration-spec.md` §3.5.1 |

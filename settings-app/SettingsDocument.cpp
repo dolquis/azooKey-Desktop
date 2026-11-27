@@ -270,7 +270,7 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
     } else if (key == "logLevel") {
       valid = IsStringEnum(value, {"error", "warn", "info", "debug"});
     } else if (key == "inputStyle") {
-      valid = IsStringEnum(value, {"default", "azik", "kanaJis", "custom"});
+      valid = IsStringEnum(value, {"default", "azik", "kanaJis", "kanaUs", "custom"});
     } else if (key == "customRomajiTablePath" || key == "openAiApiKey" ||
                key == "openAiApiEndpoint" || key == "openAiModel" || key == "bracketPairsPath" ||
                key == "symbolDataPath" || key == "emojiDataPath" || key == "punctuationRulesPath" ||

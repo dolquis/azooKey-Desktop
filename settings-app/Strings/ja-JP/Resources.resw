@@ -307,6 +307,7 @@
   <data name="SettingOption_inputStyle_default" xml:space="preserve"><value>ローマ字（標準）</value></data>
   <data name="SettingOption_inputStyle_azik" xml:space="preserve"><value>AZIK</value></data>
   <data name="SettingOption_inputStyle_kanaJis" xml:space="preserve"><value>かな入力（JIS 配列）</value></data>
+  <data name="SettingOption_inputStyle_kanaUs" xml:space="preserve"><value>かな入力（US 配列）</value></data>
   <data name="SettingOption_inputStyle_custom" xml:space="preserve"><value>カスタム</value></data>
   <data name="SettingOption_punctuationConversion_off" xml:space="preserve"><value>読みに句読点を足す</value></data>
   <data name="SettingOption_punctuationConversion_commit" xml:space="preserve"><value>変換して確定する</value></data>

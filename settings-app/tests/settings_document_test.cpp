@@ -537,12 +537,12 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   std::filesystem::remove_all(dir);
 }
 
-// M70 (docs/input-style-spec.md §2): an input style survives an unrelated save;
-// a value outside the four is dropped, which reads as default.
-TEST(SettingsDocumentTest, InputStylesSurviveAnUnrelatedSaveAndOtherValuesAreDropped) {
+// M70 and M75 (docs/input-style-spec.md §2): an input style survives an unrelated save;
+// a value outside the five is dropped, which reads as default.
+TEST(SettingsDocumentTest, FiveInputStylesSurviveAnUnrelatedSaveAndOtherValuesAreDropped) {
   for (const auto& [style, kept] :
-       {std::pair{"azik", true}, std::pair{"kanaJis", true}, std::pair{"custom", true},
-        std::pair{"default", true}, std::pair{"kanaUs", false}}) {
+       {std::pair{"default", true}, std::pair{"azik", true}, std::pair{"kanaJis", true},
+        std::pair{"kanaUs", true}, std::pair{"custom", true}, std::pair{"unknown", false}}) {
     SCOPED_TRACE(style);
     const auto dir = TestDir("azookey_settings_document_input_style");
     const auto path = dir / "settings.json";

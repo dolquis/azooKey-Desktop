@@ -4736,6 +4736,30 @@ TEST(EngineTypoCorrectionTest, TheV1PairsReadingAndAResetPatternMakeNoHypothesis
   EXPECT_EQ(denki_label(), "もしかして: でんき");
 }
 
+TEST(EngineTypoCorrectionTest, AForgottenPatternLeavesTheIndex) {
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  cfg.typo_min_count = 3;
+  TypoHypothesisEngine f(cfg);
+  LearnDenki(f, 3);
+  const auto denki_label = [&f] {
+    const auto result = f.engine->QueryCandidatesEx("てんき", "", kNowBase, nullptr);
+    for (const auto& c : result.candidates)
+      if (c.surface == "電気") return std::optional<std::string>(c.description);
+    return std::optional<std::string>();
+  };
+  EXPECT_EQ(denki_label(), "");
+  const auto listed =
+      f.engine->ListLearningEntries(azookey::host::LearningDataStore::Typo, "", 0, 10);
+  const auto pattern = std::find_if(
+      listed.entries.begin(), listed.entries.end(),
+      [](const auto& entry) { return entry.channel == azookey::host::kTypoPatternChannel; });
+  ASSERT_NE(pattern, listed.entries.end());
+  EXPECT_EQ(f.engine->ForgetLearningEntry(azookey::host::LearningDataStore::Typo, pattern->id),
+            azookey::host::InferenceEngine::ForgetOutcome::Forgotten);
+  EXPECT_EQ(denki_label(), "もしかして: でんき");
+}
+
 // ---- M36-A: new word mining ----
 
 TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending) {

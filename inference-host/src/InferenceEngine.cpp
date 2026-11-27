@@ -2139,8 +2139,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       std::optional<std::string> corrected;
       if (!typo_writes_suspended_) {
         corrected = store->LookupReadingPair(requested_kana, min_count, now_epoch_sec);
-        typo_hypotheses =
-            typo_mode == TypoCorrectionMode::Rank || typo_mode == TypoCorrectionMode::Aggressive;
+        // Live conversion makes no hypothesis (below), so it does not build the index either.
+        typo_hypotheses = !live && (typo_mode == TypoCorrectionMode::Rank ||
+                                    typo_mode == TypoCorrectionMode::Aggressive);
         if (typo_hypotheses) pattern_index = TypoPatternIndexLocked(*store);
       }
       if (corrected && *corrected != requested_kana) {

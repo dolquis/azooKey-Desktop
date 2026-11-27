@@ -7,6 +7,7 @@
 #include <future>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "TestByteCrypto.h"
 #include "azookey/learning/AutoWordStore.h"
@@ -368,6 +369,37 @@ TEST(AutoWordStoreTest, ConfirmRejectAndLookupConfirmed) {
   const auto confirmed = store.LookupConfirmed("あずきー");
   ASSERT_EQ(confirmed.size(), 1u);
   EXPECT_EQ(confirmed[0].surface, "あずきー");
+}
+
+TEST(AutoWordStoreTest, LookupConfirmedPrefixesReturnsAllMatchingLengths) {
+  AutoWordStore store(TempPath("azookey_auto_word_prefixes.tsv"),
+                      &azookey::learning::test::Crypto());
+  store.Observe("阿頭", "あず", kNow, 1, true);
+  store.Observe("阿頭季", "アズキ", kNow, 1, true);
+  store.Observe("小豆", "あずき", kNow, 1, true);
+  store.Observe("小豆期", "あずき", kNow, 1, false);
+  store.Observe("小豆木", "あずき", kNow, 1, true);
+  ASSERT_TRUE(store.Reject("小豆木", "あずき"));
+  ASSERT_TRUE(store.LoadText(store.SerializeText()));
+
+  EXPECT_TRUE(store.LookupConfirmedPrefixes("").empty());
+  EXPECT_TRUE(store.LookupConfirmedPrefixes("あ").empty());
+  const auto short_matches = store.LookupConfirmedPrefixes("あず");
+  ASSERT_EQ(short_matches.size(), 1u);
+  EXPECT_EQ(short_matches.front().surface, "阿頭");
+  EXPECT_EQ(short_matches.front().key_bytes, std::string_view("あず").size());
+
+  const auto matches = store.LookupConfirmedPrefixes("あずきです");
+  ASSERT_EQ(matches.size(), 3u);
+  EXPECT_EQ(matches[0].surface, "阿頭");
+  EXPECT_EQ(matches[1].surface, "小豆");
+  EXPECT_EQ(matches[2].surface, "阿頭季");
+  EXPECT_EQ(matches[1].key_bytes, std::string_view("あずき").size());
+  EXPECT_EQ(matches[2].key_bytes, std::string_view("あずき").size());
+  // Normalization is for the lattice lookup. Exact lookup still uses the original key.
+  ASSERT_EQ(store.LookupConfirmed("あずき").size(), 1u);
+  ASSERT_EQ(store.LookupConfirmed("アズキ").size(), 1u);
+  EXPECT_TRUE(store.LookupConfirmed("あずきです").empty());
 }
 
 TEST(AutoWordStoreTest, IngestTrendingSkipsRejectedAndKeepsMiningSource) {

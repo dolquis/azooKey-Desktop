@@ -1054,7 +1054,8 @@ std::vector<core::Candidate> InferenceEngine::LatticeCandidatesLocked(
     query.constraints.word_boundaries = {*head_length};
     query.head_only = true;
   }
-  const auto result = dictionaries_.ConvertLattice(reading, query);
+  const auto result = dictionaries_.ConvertLattice(
+      reading, query, config_.dictionary.auto_words_enabled ? auto_word_store_ : nullptr);
   status = result.status;
   std::vector<core::Candidate> candidates;
   const double scale = dictionaries_.LatticeScoreScale();

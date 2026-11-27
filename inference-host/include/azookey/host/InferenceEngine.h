@@ -45,6 +45,8 @@
 
 namespace azookey::host {
 
+class TypoPatternIndex;
+
 // Removes candidates whose surface holds a Private Use Area character (U+E000..U+F8FF), the
 // last filter before a candidate list is returned. The rest keep their order.
 void DropPrivateUseCandidates(std::vector<core::Candidate>& candidates);
@@ -777,6 +779,12 @@ class InferenceEngine {
   // none while writes are suspended or the store is blocked. Expects
   // typo_store_mutex_ held.
   bool TypoSavePendingLocked() const;
+  // DEV-2149 decision 7: the M55 pattern index of `store`, rebuilt from its Patterns() after an
+  // invalidation or for another store. Whatever may change the store's patterns invalidates it
+  // (DEV-2197 with each pattern event). Both expect typo_store_mutex_ held.
+  std::shared_ptr<const TypoPatternIndex> TypoPatternIndexLocked(
+      const learning::TypoLearningStore& store);
+  void InvalidateTypoPatternIndexLocked();
   // Asks the flush worker to save the typo store after
   // learning_flush_interval_sec; takes state_mutex_ alone.
   void ScheduleTypoFlush();
@@ -834,6 +842,10 @@ class InferenceEngine {
   uint64_t typo_last_observation_epoch_sec_{0};
   std::optional<std::chrono::steady_clock::time_point> last_successful_typo_save_steady_;
   bool typo_writes_suspended_{false};
+  // Guarded by typo_store_mutex_; a query copies the pointer and reads the index after letting
+  // the lock go.
+  std::shared_ptr<const TypoPatternIndex> typo_pattern_index_;
+  const learning::TypoLearningStore* typo_pattern_index_store_{nullptr};
   mutable std::mutex state_mutex_;
   mutable std::mutex converter_call_mutex_;
   // Serializes commits with erasure across disk writes and the reset's final

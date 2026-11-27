@@ -364,6 +364,7 @@ void InferenceEngine::SetTypoStore(learning::TypoLearningStore* store) {
   std::scoped_lock lock(state_mutex_, typo_store_mutex_);
   typo_store_ = store;
   if (store) store->SetWritesSuspended(typo_writes_suspended_);
+  InvalidateTypoPatternIndexLocked();
   typo_unsaved_observations_ = 0;
   typo_last_observation_epoch_sec_ = 0;
   last_successful_typo_save_steady_.reset();
@@ -2117,6 +2118,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   // M55 rank and aggressive (sections 12.4 and 12.5): the reading as typed gets reading
   // hypotheses after its conversion.
   bool typo_hypotheses = false;
+  // The store's personal patterns (section 12.4.1), read after typo_store_mutex_ is let go.
+  std::shared_ptr<const TypoPatternIndex> pattern_index;
   {
     learning::TypoLearningStore* store = nullptr;
     uint32_t min_count = 0;
@@ -2138,6 +2141,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
         corrected = store->LookupReadingPair(requested_kana, min_count, now_epoch_sec);
         typo_hypotheses =
             typo_mode == TypoCorrectionMode::Rank || typo_mode == TypoCorrectionMode::Aggressive;
+        if (typo_hypotheses) pattern_index = TypoPatternIndexLocked(*store);
       }
       if (corrected && *corrected != requested_kana) {
         if (typo_mode == TypoCorrectionMode::Aggressive) {
@@ -2519,10 +2523,23 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     if (!result.empty()) activation.top1_score = result[0].score;
     if (result.size() > 1) activation.top2_score = result[1].score;
     activation.dictionary_best = typed_words.empty() ? 0.0 : 1.0;
+    const TypoGuards guards{config.typo_min_count, config.typo_min_confidence_for_ranking,
+                            config.typo_min_confidence_for_top_candidate};
+    const bool activates = TypoCorrectionActivates(activation);
+    // Section 12.5 strong_pat: only a pattern past the warm-up may correct a reading that does
+    // not activate otherwise.
+    const bool may_be_strong =
+        pattern_index && pattern_index->max_accept_count() >= guards.min_count;
     // Section 12.16: longer input keeps to the v1 pairs.
     if (reading_length && *reading_length <= config.typo_hypothesis_max_reading && key_count &&
-        *key_count <= config.typo_hypothesis_max_keys && TypoCorrectionActivates(activation)) {
-      const auto hypotheses = correction::GenerateReadingHypotheses({kana, raw_keys});
+        *key_count <= config.typo_hypothesis_max_keys && (activates || may_be_strong)) {
+      std::optional<TypoPatternLookup> lookup;
+      correction::TypoCorrectionOptions options;
+      if (pattern_index) {
+        lookup.emplace(*pattern_index, now_epoch_sec, guards);
+        options.personalized = &*lookup;
+      }
+      const auto hypotheses = correction::GenerateReadingHypotheses({kana, raw_keys}, options);
       const double top1_strength =
           !result.empty() && std::find(typed_words.begin(), typed_words.end(),
                                        result.front().surface) != typed_words.end()
@@ -2533,16 +2550,21 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
         std::lock_guard<std::mutex> lock(state_mutex_);
         for (const auto& hypothesis : hypotheses) {
           if (hypothesis.source != correction::HypothesisSource::TypoCorrection) continue;
+          // The v1 pair's reading already has its suggestion at the front.
+          if (hypothesis.reading == suggest_reading) continue;
           if (canceled() || !request_time_left()) break;
+          TypoHypothesisWord word;
+          word.evidence.confidence = hypothesis.confidence;
+          if (lookup && hypothesis.personalized)
+            word.evidence.pattern = lookup->History(hypothesis.pattern_id);
+          if (!activates && !IsStrongTypoPattern(word.evidence, guards)) continue;
           // Section 12.4.4 (DEV-2149 plan a): the reading's best dictionary word, or nothing.
           auto found = DictionaryCandidates(
               dictionaries_, hypothesis.reading, learning::LookupMode::Exact, now_epoch_sec, 1,
               user_dictionary_enabled_, config.user_word_default_score);
           if (found.empty()) continue;
-          TypoHypothesisWord word;
           word.candidate = std::move(found.front());
           word.candidate.debug_info = kTypoCorrectionMark;
-          word.evidence.confidence = hypothesis.confidence;
           word.evidence.reading_similarity =
               TypoReadingSimilarity(hypothesis.edit_distance, *reading_length,
                                     CountCodepoints(hypothesis.reading).value_or(*reading_length));
@@ -2550,9 +2572,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
         }
       }
       if (!canceled())
-        PlaceTypoHypothesisWords(result, std::move(words), typo_mode, top1_strength,
-                                 {config.typo_min_count, config.typo_min_confidence_for_ranking,
-                                  config.typo_min_confidence_for_top_candidate},
+        PlaceTypoHypothesisWords(result, std::move(words), typo_mode, top1_strength, guards,
                                  config.typo_max_reading_hypotheses);
     }
   }
@@ -3102,9 +3122,25 @@ bool InferenceEngine::SaveTypoStoreLocked() {
     }
     return false;
   }
+  // The retention limits may have dropped patterns.
+  InvalidateTypoPatternIndexLocked();
   typo_unsaved_observations_ = 0;
   last_successful_typo_save_steady_ = std::chrono::steady_clock::now();
   return true;
+}
+
+std::shared_ptr<const TypoPatternIndex> InferenceEngine::TypoPatternIndexLocked(
+    const learning::TypoLearningStore& store) {
+  if (!typo_pattern_index_ || typo_pattern_index_store_ != &store) {
+    typo_pattern_index_ = std::make_shared<const TypoPatternIndex>(store.Patterns());
+    typo_pattern_index_store_ = &store;
+  }
+  return typo_pattern_index_;
+}
+
+void InferenceEngine::InvalidateTypoPatternIndexLocked() {
+  typo_pattern_index_.reset();
+  typo_pattern_index_store_ = nullptr;
 }
 
 bool InferenceEngine::FlushTypoStore() {

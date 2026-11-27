@@ -3,12 +3,50 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <utility>
+
+#include "azookey/learning/TypoPattern.h"
 
 namespace azookey::host {
 
 namespace {
+
+learning::TypoEditKind ToTypoEditKind(correction::CorrectionEditKind kind) {
+  switch (kind) {
+    case correction::CorrectionEditKind::Insertion:
+      return learning::TypoEditKind::Insertion;
+    case correction::CorrectionEditKind::Deletion:
+      return learning::TypoEditKind::Deletion;
+    case correction::CorrectionEditKind::Transposition:
+      return learning::TypoEditKind::Transposition;
+    case correction::CorrectionEditKind::Substitution:
+      break;
+  }
+  return learning::TypoEditKind::Substitution;
+}
+
+std::optional<std::string> AbstractEdits(const std::vector<correction::CorrectionEdit>& edits) {
+  std::vector<learning::TypoEdit> typo_edits;
+  typo_edits.reserve(edits.size());
+  for (const auto& edit : edits)
+    typo_edits.push_back({ToTypoEditKind(edit.kind), edit.first, edit.second, edit.previous});
+  return learning::AbstractTypoEdits(typo_edits);
+}
+
+std::string PatternKey(std::string_view typo_type, std::string_view observed,
+                       std::string_view intended) {
+  // Neither a typo_type nor a section 12.12.1 pattern holds a tab.
+  std::string key(typo_type);
+  key.append(1, '\t').append(observed).append(1, '\t').append(intended);
+  return key;
+}
+
+uint32_t SaturatingAdd(uint32_t a, uint32_t b) {
+  return b > (std::numeric_limits<uint32_t>::max)() - a ? (std::numeric_limits<uint32_t>::max)()
+                                                        : a + b;
+}
 
 // Section 12.10 net_reject.
 uint32_t NetReject(const TypoHypothesisEvidence& evidence) {
@@ -99,7 +137,8 @@ void PlaceTypoHypothesisWords(std::vector<core::Candidate>& candidates,
       lead = std::move(word.candidate);
       continue;
     }
-    word.candidate.description = "もしかして: " + word.candidate.reading;
+    if (!IsStrongTypoPattern(word.evidence, guards))
+      word.candidate.description = "もしかして: " + word.candidate.reading;
     frame.push_back(std::move(word.candidate));
   }
 
@@ -113,6 +152,78 @@ void PlaceTypoHypothesisWords(std::vector<core::Candidate>& candidates,
     for (auto& word : frame) word.score = candidates[at - 1].score;
   candidates.insert(candidates.begin() + static_cast<std::ptrdiff_t>(at),
                     std::make_move_iterator(frame.begin()), std::make_move_iterator(frame.end()));
+}
+
+std::optional<TypoPatternPair> AbstractCorrectionEdits(
+    const std::vector<correction::CorrectionEdit>& edits) {
+  auto observed = AbstractEdits(edits);
+  auto intended = AbstractEdits(correction::InvertEdits(edits));
+  if (!observed || !intended) return std::nullopt;
+  return TypoPatternPair{std::move(*observed), std::move(*intended)};
+}
+
+TypoPatternIndex::TypoPatternIndex(const std::vector<learning::TypoPatternRecord>& patterns) {
+  for (const auto& pattern : patterns) {
+    auto key = PatternKey(pattern.typo_type, pattern.observed_pattern, pattern.intended_pattern);
+    auto [at, added] = by_key_.try_emplace(key, pattern);
+    auto& row = at->second;
+    if (!added) {
+      row.accept_count = SaturatingAdd(row.accept_count, pattern.accept_count);
+      row.reject_count = SaturatingAdd(row.reject_count, pattern.reject_count);
+      if (pattern.last_used_at && (!row.last_used_at || *pattern.last_used_at > *row.last_used_at))
+        row.last_used_at = pattern.last_used_at;
+      if (pattern.id < row.id) {
+        key_by_id_.erase(std::to_string(row.id));
+        row.id = pattern.id;
+      }
+    }
+    key_by_id_.insert_or_assign(std::to_string(row.id), std::move(key));
+    max_accept_count_ = (std::max)(max_accept_count_, row.accept_count);
+  }
+}
+
+const learning::TypoPatternRecord* TypoPatternIndex::Find(std::string_view typo_type,
+                                                          const TypoPatternPair& patterns) const {
+  const auto at = by_key_.find(PatternKey(typo_type, patterns.observed, patterns.intended));
+  return at == by_key_.end() ? nullptr : &at->second;
+}
+
+const learning::TypoPatternRecord* TypoPatternIndex::FindById(std::string_view pattern_id) const {
+  const auto key = key_by_id_.find(pattern_id);
+  if (key == key_by_id_.end()) return nullptr;
+  const auto at = by_key_.find(key->second);
+  return at == by_key_.end() ? nullptr : &at->second;
+}
+
+TypoPatternLookup::TypoPatternLookup(const TypoPatternIndex& index, uint64_t now_epoch_sec,
+                                     const TypoGuards& guards)
+    : index_(index), now_epoch_sec_(now_epoch_sec), guards_(guards) {}
+
+std::optional<correction::PersonalizedPattern> TypoPatternLookup::Find(
+    correction::TypoType type, correction::EditSpace /*space*/,
+    const std::vector<correction::CorrectionEdit>& edits) const {
+  // The key and the reading alphabets of section 12.12.1 do not meet, so the patterns tell the
+  // two spaces apart.
+  const auto patterns = AbstractCorrectionEdits(edits);
+  if (!patterns) return std::nullopt;
+  const auto* row = index_.Find(correction::TypoTypeName(type), *patterns);
+  if (!row) return std::nullopt;
+  correction::PersonalizedPattern found;
+  found.confidence = learning::ComputeTypoConfidence(row->accept_count, row->reject_count,
+                                                     row->last_used_at, now_epoch_sec_, false);
+  found.pattern_id = std::to_string(row->id);
+  TypoHypothesisEvidence evidence;
+  evidence.confidence = found.confidence;
+  evidence.pattern = TypoPatternHistory{row->accept_count, row->reject_count};
+  if (IsStrongTypoPattern(evidence, guards_))
+    found.cost_reduction = kTypoPersonalCostReduction * found.confidence;
+  return found;
+}
+
+std::optional<TypoPatternHistory> TypoPatternLookup::History(std::string_view pattern_id) const {
+  const auto* row = index_.FindById(pattern_id);
+  if (!row) return std::nullopt;
+  return TypoPatternHistory{row->accept_count, row->reject_count};
 }
 
 }  // namespace azookey::host

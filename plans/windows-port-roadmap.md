@@ -2001,8 +2001,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **参照**: `docs/input-style-spec.md`、`docs/legacy-parity-spec.md` §1.5.3・§5、
   `docs/tsf-deep-integration-spec.md` §3.1・§3.5・§3.6
 - **補足**:
-  - **範囲**: US 配列のかな入力（M75）、legacy の表エディタ・プリセット・書き出し、Alt+カタカナひらがな でのローマ字入力と
-    かな入力の切替は含めない（spec §1）。
+  - **範囲**: US 配列のかな入力は M70 には含めない（M75 で扱う）。legacy の表エディタ・プリセット・書き出し、
+    Alt+カタカナひらがな でのローマ字入力とかな入力の切替も含めない（spec §1）。
   - **外部挙動の変化**: カスタム表に大文字で書いた規則は、Shift なしの打鍵に当たらなくなる
     （`docs/legacy-parity-spec.md` §5.1）。小文字だけの表と、既定の `default` の結果は変わらない。
   - **リスク**:
@@ -2090,7 +2090,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   `tsf-tip/src/TextService.cpp`（かな入力の区分の判定）、`inference-host/src/SettingsStore.cpp`、
   `settings/mvp-settings.schema.json`・`settings/default-settings.sample.json`、`settings-app/SettingsFields.cpp`・
   `settings-app/SettingsDocument.cpp`・`settings-app/Strings/ja-JP/Resources.resw`、`docs/settings-app-spec.md`（設定キーの表）、
-  `docs/legacy-parity-spec.md` §1.5.3・§5 と `docs/tsf-deep-integration-spec.md` §3.5（かな入力を `kanaJis` に限って書く箇所）、
+  `docs/legacy-parity-spec.md` §1.5.3・§5、`docs/tsf-deep-integration-spec.md` §3.5、`docs/inline-english-candidate-spec.md` §4.1、
+  `docs/romaji-batch-conversion-spec.md` §4.1（かな入力を `kanaJis` に限って書く箇所）、
   `docs/test-inventory.md`。
 - **受け入れ条件**:
   - TIP・Host・設定アプリが `inputStyle` の `kanaUs` を読み、列挙外の値を `default` として扱う

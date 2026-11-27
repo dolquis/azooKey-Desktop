@@ -6966,7 +6966,7 @@ TEST_F(ResetLearningStoreTest, LockedCorruptCopyMakesResetFailWithoutChangingPub
   ASSERT_TRUE(user_dict.Add({"azooKey", "あずきー"}));
   ASSERT_TRUE(user_dict.Save());
   const auto kana_before = store.SerializeText();
-  const auto dict_before = user_dict.Serialize();
+  const auto dict_before = user_dict.SerializeText();
   const auto kana_file = EncryptedPathFor(kana_v2);
   const auto kana_bytes = ReadAllBytes(kana_file);
   const auto dict_bytes = ReadAllBytes(user_dict.storage_path());
@@ -6986,7 +6986,7 @@ TEST_F(ResetLearningStoreTest, LockedCorruptCopyMakesResetFailWithoutChangingPub
     EXPECT_EQ(result->error, std::optional<std::string>("save_failed"));
     EXPECT_EQ(ReadAllBytes(copy), "locked copy");
     EXPECT_EQ(store.SerializeText(), kana_before);
-    EXPECT_EQ(user_dict.Serialize(), dict_before);
+    EXPECT_EQ(user_dict.SerializeText(), dict_before);
     EXPECT_EQ(ReadAllBytes(kana_file), kana_bytes);
     EXPECT_EQ(ReadAllBytes(user_dict.storage_path()), dict_bytes);
   }

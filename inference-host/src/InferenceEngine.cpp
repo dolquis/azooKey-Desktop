@@ -1992,12 +1992,18 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
     const std::string& context, uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
     uint32_t max_candidates, const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
     const MixedConversionOptions* mixed) {
-  auto typed = QueryCandidatesEx(kana, context, now_epoch_sec, cancel, max_candidates, false,
-                                 telemetry, tag_boosts, mixed);
   const auto alternative =
       std::find_if(alternatives.begin(), alternatives.end(), [&](const std::string& reading) {
         return !reading.empty() && reading.size() <= kana.size() && reading != kana;
       });
+  // typo-correction-learning-spec section 12.7: a typed reading compared with another one gets no
+  // reading hypothesis, so what a switch keeps of it (DEV-1734) and the learning weighed for it
+  // (DEV-1773) are its own words.
+  MixedConversionOptions compared = mixed ? *mixed : MixedConversionOptions{};
+  compared.typo_hypotheses = false;
+  auto typed =
+      QueryCandidatesEx(kana, context, now_epoch_sec, cancel, max_candidates, false, telemetry,
+                        tag_boosts, alternative == alternatives.end() ? mixed : &compared);
   // An M35 correction replaced the reading the alternatives were made from, and
   // a conversion that already ran out of time leaves none for a second one.
   if (alternative == alternatives.end() || !typed.corrected_reading.empty() ||
@@ -2140,8 +2146,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       if (!typo_writes_suspended_) {
         corrected = store->LookupReadingPair(requested_kana, min_count, now_epoch_sec);
         // Live conversion makes no hypothesis (below), so it does not build the index either.
-        typo_hypotheses = !live && (typo_mode == TypoCorrectionMode::Rank ||
-                                    typo_mode == TypoCorrectionMode::Aggressive);
+        typo_hypotheses =
+            !live && (!mixed || mixed->typo_hypotheses) &&
+            (typo_mode == TypoCorrectionMode::Rank || typo_mode == TypoCorrectionMode::Aggressive);
         if (typo_hypotheses) pattern_index = TypoPatternIndexLocked(*store);
       }
       if (corrected && *corrected != requested_kana) {
@@ -2608,10 +2615,19 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       }
     }
     for (auto& suggestion : suggestions) {
-      const bool already_shown = std::any_of(
-          result.begin(), result.end(),
-          [&](const core::Candidate& existing) { return existing.surface == suggestion.surface; });
+      // DEV-2149 decision 5: a word of the conversion hides the suggestion, while a reading
+      // hypothesis's word of the same surface, read from another reading, gives way to it.
+      const bool already_shown =
+          std::any_of(result.begin(), result.end(), [&](const core::Candidate& existing) {
+            return existing.surface == suggestion.surface &&
+                   existing.debug_info != kTypoCorrectionMark;
+          });
       if (already_shown) continue;
+      result.erase(std::remove_if(result.begin(), result.end(),
+                                  [&](const core::Candidate& existing) {
+                                    return existing.surface == suggestion.surface;
+                                  }),
+                   result.end());
       suggestion.reading = suggest_reading;
       suggestion.debug_info = kTypoCorrectionMark;
       result.insert(result.begin(), std::move(suggestion));

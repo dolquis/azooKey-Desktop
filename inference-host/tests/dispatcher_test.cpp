@@ -8063,6 +8063,54 @@ TEST(AmbiguousReadingDispatchTest, ASwitchKeepsTheTypedReadingsDictionaryWords) 
       static_cast<std::ptrdiff_t>(azookey::host::InferenceEngine::kAmbiguousReadingTypedKept));
 }
 
+// typo-correction-learning-spec section 12.7 (DEV-2149): under rank the typed reading compared
+// with another one gets no reading hypothesis, so a switch keeps the typed reading's own words
+// and no switch leaves none either. A request without alt_readings still gets them.
+TEST(AmbiguousReadingDispatchTest, AComparedTypedReadingGetsNoHypothesisWords) {
+  ScopedTempDirectory temp;
+  azookey::learning::TypoLearningStore typo(temp.File("typo.tsv"),
+                                            &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  azookey::learning::UserDictionary dictionary(temp.File("user.json"),
+                                               &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dictionary.Load());
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, cfg);
+  engine.SetTypoStore(&typo);
+  engine.SetUserDictionary(&dictionary);
+  // The words of the dakuten hypotheses of せんねん and さんにん.
+  for (const auto& [word, ruby] : {std::pair{"前年", "ぜんねん"}, std::pair{"残忍", "ざんにん"}}) {
+    azookey::learning::UserWord user_word;
+    user_word.word = word;
+    user_word.ruby = ruby;
+    ASSERT_TRUE(engine.AddUserWord(user_word));
+  }
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+  const auto has = [](const ipc::QueryCandidatesResponse& window, const std::string& surface) {
+    return std::any_of(window.candidates.begin(), window.candidates.end(),
+                       [&](const ipc::CandidateField& c) { return c.surface == surface; });
+  };
+
+  const auto plain = DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "さんにん", {}));
+  ASSERT_TRUE(has(plain, "残忍"));
+
+  const auto switched = DispatchAmbiguous(dispatcher, AmbiguousQuery(2, "せんねん", {"せんえん"}));
+  EXPECT_EQ(switched.corrected_reading, "せんえん");
+  EXPECT_FALSE(has(switched, "前年"));
+  EXPECT_TRUE(std::all_of(switched.candidates.begin(), switched.candidates.end(),
+                          [](const ipc::CandidateField& c) {
+                            return c.reading == "せんえん" || c.reading == "せんねん";
+                          }));
+
+  const auto kept = DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "さんにん", {"さんいん"}));
+  EXPECT_TRUE(kept.corrected_reading.empty());
+  EXPECT_FALSE(has(kept, "残忍"));
+  EXPECT_TRUE(std::all_of(kept.candidates.begin(), kept.candidates.end(),
+                          [](const ipc::CandidateField& c) { return c.reading == "さんにん"; }));
+}
+
 // A secure request is converted as typed: its TIP drops corrected_reading, so
 // the window must not hold another reading's candidates.
 TEST(AmbiguousReadingDispatchTest, SecureRequestsAreNotCompared) {

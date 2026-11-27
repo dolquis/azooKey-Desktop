@@ -4444,12 +4444,14 @@ TEST(TypoCorrectionPolicyTest, PlacementFollowsTheModeAndSkipsShownSurfaces) {
 // The engine of the M55 rank / aggressive tests: てんき converts to 天気 and has no dictionary
 // word, and the user dictionary holds the words of two of its section 12.4 reading hypotheses.
 struct TypoHypothesisEngine {
-  explicit TypoHypothesisEngine(const azookey::host::EngineConfig& cfg)
+  explicit TypoHypothesisEngine(
+      const azookey::host::EngineConfig& cfg,
+      const std::vector<std::pair<std::string, std::string>>& converter_words = {{"てんき",
+                                                                                  "天気"}})
       : store(temp.File("learning.tsv"), &azookey::learning::test::Crypto()),
         typo(temp.File("typo.tsv"), &azookey::learning::test::Crypto()),
         dictionary(temp.File("user.json"), &azookey::learning::test::Crypto()),
-        engine(MakeEngineWithConverter(MakeConverterWithDictionary({{"てんき", "天気"}}), store,
-                                       cfg)) {
+        engine(MakeEngineWithConverter(MakeConverterWithDictionary(converter_words), store, cfg)) {
     EXPECT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
     EXPECT_TRUE(dictionary.Load());
     engine->SetUserDictionary(&dictionary);
@@ -4684,6 +4686,8 @@ TEST(EngineTypoCorrectionTest, AStrongPatternsWordShowsUnlabelledAndMayLead) {
     ASSERT_GE(result.candidates.size(), 2u);
     EXPECT_EQ(result.candidates[accepts == 8 ? 0 : 1].surface, "電気");
     EXPECT_EQ(result.candidates[accepts == 8 ? 1 : 0].surface, "天気");
+    // Decision 4: the word that leads carries the corrected reading as its own.
+    EXPECT_EQ(result.candidates[accepts == 8 ? 0 : 1].reading, "でんき");
   }
 }
 
@@ -4711,7 +4715,8 @@ TEST(EngineTypoCorrectionTest, TheV1PairsReadingAndAResetPatternMakeNoHypothesis
   cfg.typo_correction_mode = "rank";
   cfg.typo_min_count = 1;
   {
-    TypoHypothesisEngine f(cfg);
+    // 転機 is a second candidate of the conversion, after the hypothesis words.
+    TypoHypothesisEngine f(cfg, {{"てんき", "天気"}, {"てんき", "転機"}});
     ASSERT_TRUE(f.engine->ObserveTypo("てんき", "でんき", kNowBase));
     const auto result = f.engine->QueryCandidatesEx("てんき", "", kNowBase, nullptr);
     size_t denki = 0;
@@ -4720,6 +4725,10 @@ TEST(EngineTypoCorrectionTest, TheV1PairsReadingAndAResetPatternMakeNoHypothesis
     EXPECT_EQ(denki, 1u);
     ASSERT_FALSE(result.candidates.empty());
     EXPECT_EQ(result.candidates.front().reading, "でんき");
+    // Decision 5: the v1 suggestion, the first candidate, the hypothesis words, then the rest.
+    std::vector<std::string> surfaces;
+    for (const auto& c : result.candidates) surfaces.push_back(c.surface);
+    EXPECT_EQ(surfaces, (std::vector<std::string>{"でんき", "天気", "転義", "転機"}));
   }
   cfg.typo_min_count = 3;
   TypoHypothesisEngine f(cfg);
@@ -4734,6 +4743,26 @@ TEST(EngineTypoCorrectionTest, TheV1PairsReadingAndAResetPatternMakeNoHypothesis
   ASSERT_EQ(f.engine->ResetLearningStore(azookey::host::LearningDataStore::Typo),
             azookey::host::InferenceEngine::ResetOutcome::Reset);
   EXPECT_EQ(denki_label(), "もしかして: でんき");
+}
+
+// Decision 5: a hypothesis word read from another reading does not hide the v1 suggestion of the
+// same surface (てんきい converts to 電気, the word of the hypothesis でんき); it leaves instead.
+TEST(EngineTypoCorrectionTest, AV1SuggestionTakesTheSurfaceOfAHypothesisWord) {
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  cfg.typo_min_count = 1;
+  TypoHypothesisEngine f(cfg, {{"てんき", "天気"}, {"てんきい", "電気"}});
+  ASSERT_TRUE(f.engine->ObserveTypo("てんき", "てんきい", kNowBase));
+  const auto result = f.engine->QueryCandidatesEx("てんき", "", kNowBase, nullptr);
+  EXPECT_TRUE(result.corrected_reading.empty());
+  ASSERT_GE(result.candidates.size(), 3u);
+  EXPECT_EQ(result.candidates[0].surface, "電気");
+  EXPECT_EQ(result.candidates[0].reading, "てんきい");
+  EXPECT_EQ(result.candidates[1].surface, "天気");
+  EXPECT_EQ(result.candidates[2].surface, "転義");
+  EXPECT_EQ(std::count_if(result.candidates.begin(), result.candidates.end(),
+                          [](const azookey::core::Candidate& c) { return c.surface == "電気"; }),
+            1);
 }
 
 TEST(EngineTypoCorrectionTest, AForgottenPatternLeavesTheIndex) {

@@ -88,6 +88,9 @@ struct MixedConversionOptions {
   // M55 (typo-correction-learning-spec section 12.13): the request's raw_keys, which rank and
   // aggressive make key-edit hypotheses from. Empty makes them from the reading alone.
   std::string raw_keys;
+  // M55 (typo-correction-learning-spec section 12.7): false makes no reading hypothesis, while the
+  // v1 pairs still apply. QueryAmbiguousCandidatesEx sets it false for the typed reading.
+  bool typo_hypotheses{true};
 };
 
 struct InferenceTelemetry {

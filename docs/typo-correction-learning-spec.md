@@ -637,9 +637,12 @@ v1 の `auto_replace` モードは v2 の `aggressive` 相当として読み替�
 `maxReadingHypotheses` 件置く。`aggressive` で §12.11 の全ガードを満たす語は、その前の第一候補に置く。
 このときも `corrected_reading`（§5-3）は返さず、候補の reading を仮説の読みとする。TIP の preedit は打った読みのまま残る。
 warm-up を満たし confidence が `minConfidenceForRanking` 以上の個人パターンの語は通常候補として示し、それ以外の語には
-「もしかして: <読み>」を付ける。v1 の読みの組の候補（§5-2）は、`suggest` と `rank` でこれらより前の先頭に置く。
+「もしかして: <読み>」を付ける。v1 の読みの組の候補（§5-2）は、`suggest` と `rank` でこれらより前の先頭に置き、
+それと同じ表層の仮説の語は置かない。
 `rank` と `aggressive` では、secure でない `QueryBatchConversion` の各 chunk にも同じ規則で仮説の語を置く。
 一括変換の要求は `raw_keys` を持たないので、仮説は読みの経路（§12.4.1）だけから作る。
+`alt_readings` でもう一つの読みと比べる `QueryCandidates`（`docs/legacy-parity-spec.md` §5.4）では、打った読みに
+仮説の語を置かない。切り替えても後ろに残す打った読みの上位の候補を、その読みの語に保つためである。v1 の読みの組は使う。
 
 ### 12.8 TypoLearningStore（v2）
 

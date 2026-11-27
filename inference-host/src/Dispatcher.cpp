@@ -1320,8 +1320,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     MixedConversionOptions as_typed;
     as_typed.typo_correction = false;
     // DEV-1734: the candidate window also weighs the other reading of an
-    // ambiguous "nn" + vowel. Per-key queries, a secure request (its TIP drops
-    // corrected_reading) and an M63 split are converted as typed.
+    // ambiguous "nn" + vowel. Per-key queries, a secure request (which the Host
+    // does not correct, typo-correction-learning-spec section 12.12.2) and an
+    // M63 split are converted as typed.
     // M55 (typo-correction-learning-spec section 12.13): the request's
     // typo_correction_mode is not read. The conversion uses the mode the Host
     // settings resolve to, so a request cannot raise it.

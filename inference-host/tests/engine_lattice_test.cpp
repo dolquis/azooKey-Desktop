@@ -197,7 +197,7 @@ TEST(EngineLattice, ConfirmedAutoWordsAreNodesUntilForgottenOrRejected) {
 TEST(EngineLattice, ConfirmedAutoWordMatchesAReadingAlias) {
   const LatticeDirectory directory("sudachi_lexicon", "lattice_core");
   azookey::learning::AutoWordStore auto_words(directory.Path() / "auto_words.tsv",
-                                             &azookey::learning::test::Crypto());
+                                              &azookey::learning::test::Crypto());
   ASSERT_TRUE(auto_words.Observe("提琴", "ゔぁいおりん", kNow, 1, true));
   EXPECT_TRUE(auto_words.LookupConfirmed("ばいおりん").empty());
   const auto engine = MakeEngine(NoLimitConfig(), directory.Path());
@@ -597,7 +597,7 @@ std::unique_ptr<InferenceEngine> MakeModelEngine(const EngineConfig& config,
 TEST(EngineLattice, DegradedModelFallbackIncludesConfirmedAutoWordNodes) {
   const auto model = UniqueTempPath("azookey_engine_lattice_auto_word_fallback", ".gguf");
   azookey::learning::AutoWordStore auto_words(model.parent_path() / model.stem(),
-                                             &azookey::learning::test::Crypto());
+                                              &azookey::learning::test::Crypto());
   ASSERT_TRUE(auto_words.Observe("古美", "こみ", kNow, 1, true));
   const auto engine = MakeModelEngine(NoLimitConfig(), model);
   engine->SetAutoWordStore(&auto_words);
@@ -616,7 +616,7 @@ TEST(EngineLattice, DegradedModelFallbackIncludesConfirmedAutoWordNodes) {
 TEST(EngineLattice, ConfirmedAutoWordContributesToTheUserWordPathThreshold) {
   const auto model = UniqueTempPath("azookey_engine_lattice_auto_word_threshold", ".gguf");
   azookey::learning::AutoWordStore auto_words(model.parent_path() / model.stem(),
-                                             &azookey::learning::test::Crypto());
+                                              &azookey::learning::test::Crypto());
   const auto dictionary = UserDictionaryWith("ニホむ", "にほむ", "verb_godan_ma");
   const auto engine = MakeModelEngine(NoLimitConfig(), model);
   engine->SetUserDictionary(dictionary.get());

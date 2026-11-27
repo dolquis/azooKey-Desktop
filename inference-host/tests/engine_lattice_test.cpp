@@ -194,6 +194,20 @@ TEST(EngineLattice, ConfirmedAutoWordsAreNodesUntilForgottenOrRejected) {
   EXPECT_FALSE(has_surface(query(), "ぬ湖海"));
 }
 
+TEST(EngineLattice, ConfirmedAutoWordMatchesAReadingAlias) {
+  const LatticeDirectory directory("sudachi_lexicon", "lattice_core");
+  azookey::learning::AutoWordStore auto_words(directory.Path() / "auto_words.tsv",
+                                             &azookey::learning::test::Crypto());
+  ASSERT_TRUE(auto_words.Observe("提琴", "ゔぁいおりん", kNow, 1, true));
+  EXPECT_TRUE(auto_words.LookupConfirmed("ばいおりん").empty());
+  const auto engine = MakeEngine(NoLimitConfig(), directory.Path());
+  engine->SetAutoWordStore(&auto_words);
+
+  const auto lattice = LatticeCandidates(engine->QueryCandidates("ばいおりん", "", kNow));
+  EXPECT_TRUE(std::any_of(lattice.begin(), lattice.end(),
+                          [](const Candidate& c) { return c.surface == "提琴"; }));
+}
+
 TEST(EngineLattice, OffOrWithoutAUsableLatticeCoreTheCandidatesStayAsBefore) {
   // The same layers on both sides: only lattice_core differs.
   const LatticeDirectory good("sudachi_lexicon", "lattice_core");
@@ -578,6 +592,49 @@ std::unique_ptr<InferenceEngine> MakeModelEngine(const EngineConfig& config,
   EXPECT_TRUE(engine->LoadModelWithResult(options).ok);
   engine->SetLatticeFallbackBudgetForTests(std::chrono::hours(1));
   return engine;
+}
+
+TEST(EngineLattice, DegradedModelFallbackIncludesConfirmedAutoWordNodes) {
+  const auto model = UniqueTempPath("azookey_engine_lattice_auto_word_fallback", ".gguf");
+  azookey::learning::AutoWordStore auto_words(model.parent_path() / model.stem(),
+                                             &azookey::learning::test::Crypto());
+  ASSERT_TRUE(auto_words.Observe("古美", "こみ", kNow, 1, true));
+  const auto engine = MakeModelEngine(NoLimitConfig(), model);
+  engine->SetAutoWordStore(&auto_words);
+
+  const auto candidates = engine->QueryCandidates("ぬこみ", "", kNow);
+  EXPECT_TRUE(std::any_of(candidates.begin(), candidates.end(), [](const Candidate& c) {
+    return c.debug_info.find("zenzai-degraded") != std::string::npos;
+  }));
+  const auto lattice = LatticeCandidates(candidates);
+  EXPECT_TRUE(std::any_of(lattice.begin(), lattice.end(),
+                          [](const Candidate& c) { return c.surface == "ぬ古美"; }));
+  std::error_code ec;
+  std::filesystem::remove(model, ec);
+}
+
+TEST(EngineLattice, ConfirmedAutoWordContributesToTheUserWordPathThreshold) {
+  const auto model = UniqueTempPath("azookey_engine_lattice_auto_word_threshold", ".gguf");
+  azookey::learning::AutoWordStore auto_words(model.parent_path() / model.stem(),
+                                             &azookey::learning::test::Crypto());
+  const auto dictionary = UserDictionaryWith("ニホむ", "にほむ", "verb_godan_ma");
+  const auto engine = MakeModelEngine(NoLimitConfig(), model);
+  engine->SetUserDictionary(dictionary.get());
+  engine->SetAutoWordStore(&auto_words);
+  // Remove the fixture's 日本 and 語. The conjugated form can use an unknown ご and is the best
+  // path when there is no auto-word. A single auto-word then beats it by more than T.
+  engine->EnableDictionaryLayer(azookey::learning::LayerId::Sudachi, false);
+  const auto before = engine->QueryCandidates("にほんご", "", kNow);
+  ASSERT_FALSE(before.empty());
+  EXPECT_EQ(before.front().source, CandidateSource::Model);
+  const auto paths = UserWordPaths(before);
+  ASSERT_EQ(paths.size(), 1U);
+  EXPECT_EQ(paths.front().surface, "ニホんご");
+
+  ASSERT_TRUE(auto_words.Observe("日本語候補", "にほんご", kNow, 1, true));
+  EXPECT_TRUE(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).empty());
+  std::error_code ec;
+  std::filesystem::remove(model, ec);
 }
 
 // M71-B (DEV-2137, user-dictionary-pos-spec sections 5.2 and 5.3): a request the model answered

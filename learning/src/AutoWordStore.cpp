@@ -175,26 +175,27 @@ AutoWordStore::AutoWordStore(std::filesystem::path path, const ByteCrypto* crypt
 AutoWordStore::Table::Words& AutoWordStore::Table::GetOrAddReading(const std::string& reading) {
   const auto [it, inserted] = by_reading.try_emplace(reading);
   if (inserted) {
-    const auto normalized = core::NormalizeReading(reading);
-    if (!normalized.empty() && normalized != reading) original_readings[normalized].insert(reading);
+    for (const auto& key : core::ReadingAliases(core::NormalizeReading(reading)))
+      if (key != reading) prefix_readings[key].insert(reading);
   }
   return it->second;
 }
 
 AutoWordStore::Table::Readings::iterator AutoWordStore::Table::EraseReading(
     Readings::iterator reading) {
-  const auto normalized = core::NormalizeReading(reading->first);
-  const auto originals = original_readings.find(normalized);
-  if (originals != original_readings.end()) {
+  for (const auto& key : core::ReadingAliases(core::NormalizeReading(reading->first))) {
+    if (key == reading->first) continue;
+    const auto originals = prefix_readings.find(key);
+    if (originals == prefix_readings.end()) continue;
     originals->second.erase(reading->first);
-    if (originals->second.empty()) original_readings.erase(originals);
+    if (originals->second.empty()) prefix_readings.erase(originals);
   }
   return by_reading.erase(reading);
 }
 
 void AutoWordStore::Table::Swap(Table& other) noexcept {
   by_reading.swap(other.by_reading);
-  original_readings.swap(other.original_readings);
+  prefix_readings.swap(other.prefix_readings);
 }
 
 AutoWord* AutoWordStore::FindLocked(const std::string& surface, const std::string& reading) {
@@ -336,6 +337,8 @@ std::vector<AutoWord> AutoWordStore::LookupConfirmed(const std::string& reading)
 
 std::vector<AutoWordPrefixMatch> AutoWordStore::LookupConfirmedPrefixes(
     std::string_view normalized_reading) const {
+  // Each lattice position reads the published table separately. If a state change races a
+  // conversion, earlier positions may retain the old state. The next conversion sees the change.
   std::lock_guard<std::mutex> lock(table_mutex_);
   std::vector<AutoWordPrefixMatch> result;
   const auto append = [&](std::string_view reading, size_t key_bytes) {
@@ -350,8 +353,8 @@ std::vector<AutoWordPrefixMatch> AutoWordStore::LookupConfirmedPrefixes(
       continue;
     const auto key = normalized_reading.substr(0, length);
     append(key, length);
-    const auto originals = table_.original_readings.find(key);
-    if (originals != table_.original_readings.end())
+    const auto originals = table_.prefix_readings.find(key);
+    if (originals != table_.prefix_readings.end())
       for (const auto& reading : originals->second) append(reading, length);
   }
   return result;

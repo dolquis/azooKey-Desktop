@@ -128,6 +128,7 @@ class AutoWordStore {
 
   // QueryCandidates 用: reading でルックアップし Confirmed のみ返す。
   std::vector<AutoWord> LookupConfirmed(const std::string& reading) const;
+  std::vector<AutoWordPrefixMatch> LookupConfirmedPrefixes(std::string_view normalized_reading) const;
 
   // 古い pending（既定 90 日未昇格）を掃除。host 起動時に 1 回呼ぶ。
   size_t PrunePending(uint64_t now_epoch, uint64_t max_age_sec);
@@ -391,6 +392,7 @@ if (auto_word_store) {  // state_mutex_ の下で auto_word_store_ を写した�
   初めて変換へ反映される。
 - `LookupConfirmed` は `state_mutex_` の外で呼ぶ。表を複写する短い区間だけロックし、
   writer が `Save()` の暗号化・flush を行う間も、公開済みの確定語を読み取れる。
+- ラティスのノードを作るときは `LookupConfirmedPrefixes` で確定語を前方一致で引く（`docs/lattice-conversion-spec.md` §4.2）。
 - `EngineConfig::auto_word_default_score`（既定 1.2）は、スコアを持たない語
   （マイニング由来の語はすべて `score == 0`）に使う。user_dict の既定値
   `user_word_default_score`（1.5）より低いので、同じ surface のユーザー辞書語が

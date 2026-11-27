@@ -104,7 +104,7 @@ class AutoWordStore {
   // Confirmed words for one reading; pending and rejected words never surface.
   std::vector<AutoWord> LookupConfirmed(const std::string& reading) const;
 
-  // Confirmed words whose normalized readings are nonempty prefixes of this key.
+  // Confirmed words whose normalized readings or aliases are nonempty prefixes of this key.
   std::vector<AutoWordPrefixMatch> LookupConfirmedPrefixes(
       std::string_view normalized_reading) const;
 
@@ -132,8 +132,8 @@ class AutoWordStore {
     using Readings = std::map<std::string, Words, std::less<>>;
     // The original reading and surface remain the word's identity.
     Readings by_reading;
-    // Only readings that differ from their normalized key need an index entry.
-    std::map<std::string, std::set<std::string>, std::less<>> original_readings;
+    // Normalized and alias keys that differ from the original reading.
+    std::map<std::string, std::set<std::string>, std::less<>> prefix_readings;
 
     Words& GetOrAddReading(const std::string& reading);
     Readings::iterator EraseReading(Readings::iterator reading);

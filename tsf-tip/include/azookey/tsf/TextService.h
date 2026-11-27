@@ -1994,11 +1994,12 @@ class TextService final : public ITfTextInputProcessorEx,
   // input-style-spec §2: the style the composition started with while one is
   // in progress, otherwise the current setting.
   TipInputStyle InputStyleForKey() const;
-  // Whether a key now is looked up in the kana table (spec §4.1): kana input,
-  // outside Unicode input and the emoji search. `next_input`: the key starts
-  // the next input (typed over the candidate window), so the current setting
-  // decides, not the composition's style (spec §2).
-  bool TypesKana(bool next_input = false) const;
+  // Returns the input style for kana table lookup (spec §4.1). During emoji
+  // search or Unicode input, returns Default to suppress lookup. LookupKanaKey
+  // uses IsKanaInputStyle to accept only KanaJis and KanaUs.
+  // For `next_input` (a key starting the next input over the candidate window),
+  // use the current setting. Otherwise use InputStyleForKey() (spec §2).
+  TipInputStyle KanaInputStyleForKey(bool next_input) const;
   // M60: inlineEnglishCandidates is on and the Host advertised
   // "english_candidates" (docs/inline-english-candidate-spec.md §6.2, §7).
   bool EnglishCandidatesEnabled() const;

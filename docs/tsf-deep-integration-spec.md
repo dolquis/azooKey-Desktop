@@ -655,7 +655,7 @@ JIS 配列と US 配列の違い（`@` `:` `"` `(` などの位置）は表を�
      4 へ譲る。
   3. 表駆動の入力方式（`inputStyle` が `custom` か `azik`。`docs/input-style-spec.md` §5）の表が続けられる文字。
   4. `n` の後のアポストロフィ（下記）。
-- かな入力（`inputStyle = kanaJis`）の表のキーは、上の処理順とこの表より先に、表のかなを読みに足す
+- かな入力（`inputStyle` が `kanaJis` または `kanaUs`）の表のキーは、上の処理順とこの表より先に、表のかなを読みに足す
   （`docs/input-style-spec.md` §4.1）。
 - 一括変換（`docs/romaji-batch-conversion-spec.md`）の raw 入力には打鍵した ASCII の文字を保持し、
   かな preview と変換の読みでは表の全角文字にする（句読点と同じ）。raw romaji preview の表示で全角にするのは

@@ -146,7 +146,7 @@ TIP は、`inlineEnglishCandidates` が true で、Handshake 応答の capabilit
   次の打鍵の前に、残りが preedit と一致するまで生ローマ字を末尾から削る。
 - 照合のローマ字かな変換には、composition が始めたときの TIP の表を使う。`inputStyle` が `default` なら内蔵
   ローマ字表、`azik` なら AZIK の内蔵表、`custom` ならカスタム表である（`docs/input-style-spec.md` §5）。
-  かな入力（`kanaJis`）の composition には生ローマ字が無いので、どちらのフィールドも送らない（同 §6）。
+  かな入力（`kanaJis`・`kanaUs`）の composition には生ローマ字が無いので、どちらのフィールドも送らない（同 §6）。
 - 打鍵ごとの問い合わせは `live = true` のため、そのキャッシュには英単語候補が入らない。
   そのため有効時の Space は、このキャッシュを使わず、`live = false` の問い合わせの応答を
   待って候補ウィンドウを開く。記号・絵文字リライター有効時の Space と同じ経路である。

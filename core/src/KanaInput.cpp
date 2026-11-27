@@ -33,6 +33,31 @@ constexpr std::array<KanaKey, 48> kKanaJisTable = {{
     {0x34, "る", "。"}, {0x35, "め", "・"}, {0x73, "ろ", "ろ"}, {0x7D, "ー", "ー"},
 }};
 
+// docs/input-style-spec.md section 4.5 (kbd101), ordered by scan code.
+constexpr std::array<KanaKey, 48> kKanaUsTable = {{
+    {0x02, "ぬ", "ぬ"}, {0x03, "ふ", "ふ"}, {0x04, "あ", "ぁ"}, {0x05, "う", "ぅ"},
+    {0x06, "え", "ぇ"}, {0x07, "お", "ぉ"}, {0x08, "や", "ゃ"}, {0x09, "ゆ", "ゅ"},
+    {0x0A, "よ", "ょ"}, {0x0B, "わ", "を"}, {0x0C, "ほ", "ー"}, {0x0D, "へ", "へ"},
+    {0x10, "た", "た"}, {0x11, "て", "て"}, {0x12, "い", "ぃ"}, {0x13, "す", "す"},
+    {0x14, "か", "か"}, {0x15, "ん", "ん"}, {0x16, "な", "な"}, {0x17, "に", "に"},
+    {0x18, "ら", "ら"}, {0x19, "せ", "せ"}, {0x1A, "゛", "「"}, {0x1B, "゜", "」"},
+    {0x1E, "ち", "ち"}, {0x1F, "と", "と"}, {0x20, "し", "し"}, {0x21, "は", "は"},
+    {0x22, "き", "き"}, {0x23, "く", "く"}, {0x24, "ま", "ま"}, {0x25, "の", "の"},
+    {0x26, "り", "り"}, {0x27, "れ", "れ"}, {0x28, "け", "け"}, {0x29, "ろ", "ろ"},
+    {0x2B, "む", "む"}, {0x2C, "つ", "っ"}, {0x2D, "さ", "さ"}, {0x2E, "そ", "そ"},
+    {0x2F, "ひ", "ひ"}, {0x30, "こ", "こ"}, {0x31, "み", "み"}, {0x32, "も", "も"},
+    {0x33, "ね", "、"}, {0x34, "る", "。"}, {0x35, "め", "・"}, {0x56, "む", "む"},
+}};
+
+std::optional<std::string_view> LookupKana(const std::array<KanaKey, 48>& table, uint8_t scan_code,
+                                           bool extended, bool shift) {
+  if (extended) return std::nullopt;
+  for (const KanaKey& key : table) {
+    if (key.scan_code == scan_code) return shift ? key.shifted : key.plain;
+  }
+  return std::nullopt;
+}
+
 struct VoicedPair {
   std::string_view base;
   std::string_view dakuten;
@@ -63,11 +88,11 @@ std::string_view LastCodePoint(std::string_view text) {
 }  // namespace
 
 std::optional<std::string_view> LookupKanaJis(uint8_t scan_code, bool extended, bool shift) {
-  if (extended) return std::nullopt;
-  for (const KanaKey& key : kKanaJisTable) {
-    if (key.scan_code == scan_code) return shift ? key.shifted : key.plain;
-  }
-  return std::nullopt;
+  return LookupKana(kKanaJisTable, scan_code, extended, shift);
+}
+
+std::optional<std::string_view> LookupKanaUs(uint8_t scan_code, bool extended, bool shift) {
+  return LookupKana(kKanaUsTable, scan_code, extended, shift);
 }
 
 std::optional<VoicingMark> AsVoicingMark(std::string_view kana) {

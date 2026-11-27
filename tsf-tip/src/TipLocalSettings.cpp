@@ -437,6 +437,7 @@ void TipLocalSettings::Reload() noexcept {
       const std::string style = json->GetString("inputStyle").value_or("default");
       input_style = style == "azik"      ? TipInputStyle::Azik
                     : style == "kanaJis" ? TipInputStyle::KanaJis
+                    : style == "kanaUs"  ? TipInputStyle::KanaUs
                     : style == "custom"  ? TipInputStyle::Custom
                                          : TipInputStyle::Default;
       custom_romaji_path = json->GetString("customRomajiTablePath").value_or("");

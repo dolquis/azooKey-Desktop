@@ -573,8 +573,8 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   `Input` / `InputAlnum` の **codepoint** を、`ToUnicodeEx` + 現在の入力モード
   （ひらがな / カタカナ / 英数）と記号写像（`hiragana` で `[`→`「` 等）から解決し、
   `UserActionEvent.codepoint` に載せる。キーボードレイアウト・IME モードの関心を所有する。
-  かな入力（`inputStyle=kanaJis`）では、TIP がこの写像より前にスキャンコードで表のキーを判定し、表のキーを
-  VK によらず文字の入力にする。第 1 層と同じにするのは状態ごとの扱いだけである（`docs/input-style-spec.md` §4.1）。
+  `inputStyle` が `kanaJis` または `kanaUs` のとき、TIP はこの写像より前にスキャンコードで表のキーを判定する。
+  表のキーは文字の入力として扱い、第 1 層と同じにするのは状態ごとの扱いだけである（`docs/input-style-spec.md` §4.1・§4.5）。
   AZIK（`azik`）の文字は、カスタム表と同じ表駆動の経路で解決する（同 §3.3・§5）。
 - **状態を翻訳境界に含める根拠（無状態 map にしない）**: `Space` は Selecting で次候補・他で変換
   開始、数字は Selecting の `1`〜`9` で候補選択・Selecting の `0` と読み入力中で文字入力・Idle でパススルーと、**同一キーの意味が現在状態に依存する**。
@@ -1289,8 +1289,9 @@ sha	しゃ
 
 `inputStyle == "default"`：内蔵テーブルのみ
 `inputStyle == "custom"`：**内蔵テーブルを差し替え**（マージしない）
-`inputStyle == "azik"` と `"kanaJis"`：`docs/input-style-spec.md` が定める。AZIK はカスタム表と同じ表駆動の経路で
-変換し、本節のカスタム表の規則（`Feed` の特例を通らない、`alt_readings` を送らない）を同じく当てる（同 §5）
+`inputStyle == "azik"`：カスタム表と同じ表駆動の経路で変換し、本節のカスタム表の規則（`Feed` の特例を通らない、
+`alt_readings` を送らない）を同じく当てる（`docs/input-style-spec.md` §5）。
+`inputStyle` が `kanaJis` または `kanaUs` のときは、かな入力の表を使う（同 §4）。
 
 内蔵テーブルは、レガシーが依存する AzooKeyKanaKanjiConverter の `defaultRomanToKanaMap`
 （`legacy/Core/Package.swift` で固定した revision）と同じ表規則を持つ。小書き（`xtu`、`la` など）、

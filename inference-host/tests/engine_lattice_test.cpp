@@ -150,7 +150,7 @@ TEST(EngineLattice, ConfirmedAutoWordsAreNodesUntilForgottenOrRejected) {
 
   const LatticeDirectory directory("sudachi_lexicon", "lattice_core");
   azookey::learning::AutoWordStore auto_words(directory.Path() / "auto_words.tsv",
-                                             &azookey::learning::test::Crypto());
+                                              &azookey::learning::test::Crypto());
   ASSERT_TRUE(auto_words.Observe("古美", "こみ", kNow, 1, true));
   ASSERT_TRUE(auto_words.Observe("湖海", "コミ", kNow, 1, true));
   auto_words.Observe("小実", "こみ", kNow, 1, false);

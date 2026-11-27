@@ -96,8 +96,7 @@ class DictionaryStore {
   // user dictionary is enabled, its conjugated forms (user-dictionary-pos-spec section 4.6).
   // When supplied and enabled, auto_words contributes confirmed words to this search.
   // The paths own their strings. Unavailable without a usable lattice_core.
-  core::LatticeResult ConvertLattice(std::string_view reading,
-                                     const core::LatticeQuery& query,
+  core::LatticeResult ConvertLattice(std::string_view reading, const core::LatticeQuery& query,
                                      const AutoWordStore* auto_words = nullptr) const;
 
   // user-dictionary-pos-spec section 4.6: the forms of the user dictionary's conjugating words

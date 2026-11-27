@@ -62,7 +62,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | Phase 5: レガシー parity 復元 | M13〜M19 |
 | Phase 6: Windows 特化 | M20〜M27 |
 | Phase 7: 配布・パッケージング | M28〜M34 |
-| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M67 / M68 / M69 / M70 / M72 / M73 |
+| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M67 / M68 / M69 / M70 / M72 / M73 / M75 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
 | 変換品質トラック | M52〜M57 / M65 / M71 / M74 |
@@ -488,7 +488,7 @@ M46 / M48 / M21 / M22 / M59 / M61 ─→ M67  （入力 scope の判定 + プロ
 M6 / M13 / M14 ─→ M58-A ─→ M58-B（M20 も前提）
                        └─→ M58-C（M16 / M24 / M46 も前提）
 M13 / M14 ─→ M59
-M13 / M17 / M22 / M30 ─→ M70
+M13 / M17 / M22 / M30 ─→ M70 ─→ M75
 M5 / M6 ─→ M60
 M5 / M6 / M13 ─→ M62-A ─→ M62-B
                        ├─→ M62-C ─→ M62-D
@@ -557,8 +557,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   M61-B（TSV 外部化・per-app 互換）は M61-A + M48 を前提とする。推論
   バックエンド・TSF 深耕・パッケージングに依存しない。詳細は
   `docs/bracket-pairing-spec.md`。
-- **入力方式（M70）** — 前提は M13・M17・M22・M30 で、推論バックエンドと辞書に依存しない。詳細は M70 節と
-  `docs/input-style-spec.md`。
+- **入力方式（M70 / M75）** — M70 の前提は M13・M17・M22・M30 で、推論バックエンドと辞書に依存しない。M75（US 配列の
+  かな入力）は M70 を前提とする。詳細は M70 節・M75 節と `docs/input-style-spec.md`。
 - **入力拡張（M58〜M60 / M62〜M64 / M66 / M67 / M68 / M69 / M72 / M73）** — 前提は各 M 節の「前提」が持つ。M58（一括変換）は M6 / M13 / M14、
   M58-B は M20、M58-C は M16 / M24 / M46 を前提とする。M59（動的句読点）は M13 / M14、M60（インライン英単語候補）は
   M5 / M6、M62（候補リライター）は M5 / M6 / M13 を前提とし、M62-A は辞書・推論・IPC に依存しない。M63（日英混在の自動変換）は
@@ -2001,7 +2001,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **参照**: `docs/input-style-spec.md`、`docs/legacy-parity-spec.md` §1.5.3・§5、
   `docs/tsf-deep-integration-spec.md` §3.1・§3.5・§3.6
 - **補足**:
-  - **範囲**: US 配列のかな入力、legacy の表エディタ・プリセット・書き出し、Alt+カタカナひらがな でのローマ字入力と
+  - **範囲**: US 配列のかな入力（M75）、legacy の表エディタ・プリセット・書き出し、Alt+カタカナひらがな でのローマ字入力と
     かな入力の切替は含めない（spec §1）。
   - **外部挙動の変化**: カスタム表に大文字で書いた規則は、Shift なしの打鍵に当たらなくなる
     （`docs/legacy-parity-spec.md` §5.1）。小文字だけの表と、既定の `default` の結果は変わらない。
@@ -2075,6 +2075,42 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - **リスク**:
     - **語釈の出典**: 出典のデータは、語釈の元を書いていない。spec §2 のとおり未確認として扱う。
     - **窓の幅**: 注記で窓が広がる。データ側では字数で切り詰めず（spec §3.3）、候補窓が末尾を省略する。
+
+### M75: US 配列のかな入力
+
+> 設定 `inputStyle` に、US 配列のかな入力 `kanaUs` を足す。M70 のかな入力は JIS 配列の表だけを持ち、US 配列の機械では
+> ろ と ー を打てない。legacy（macOS 版）は「かな入力（US）」を選べる（parity 監査 P-18）。配置は Windows の
+> 英語キーボード（101/102 キー）の配列 DLL のかなに合わせる。正典仕様は `docs/input-style-spec.md` §4.5 とし、本節は
+> 定義・依存・受け入れ条件・リスクだけを持つ。
+
+- **目的**: US 配列の機械でかな入力を使う利用者が、Windows のかな配置のまま、この IME で全てのかなを打てるようにする。
+- **前提**: M70（かな入力の経路、`inputStyle` の読み込み、設定アプリの選択肢）。
+- **変更対象**: `core/include/azookey/core/KanaInput.h`・`core/src/KanaInput.cpp`（US 配列の表）、
+  `tsf-tip/include/azookey/tsf/TipLocalSettings.h`・`tsf-tip/src/TipLocalSettings.cpp`（`kanaUs` の読み込み）、
+  `tsf-tip/src/TextService.cpp`（かな入力の区分の判定）、`inference-host/src/SettingsStore.cpp`、
+  `settings/mvp-settings.schema.json`・`settings/default-settings.sample.json`、`settings-app/SettingsFields.cpp`・
+  `settings-app/SettingsDocument.cpp`・`settings-app/Strings/ja-JP/Resources.resw`、`docs/settings-app-spec.md`（設定キーの表）、
+  `docs/legacy-parity-spec.md` §1.5.3・§5 と `docs/tsf-deep-integration-spec.md` §3.5（かな入力を `kanaJis` に限って書く箇所）、
+  `docs/test-inventory.md`。
+- **受け入れ条件**:
+  - TIP・Host・設定アプリが `inputStyle` の `kanaUs` を読み、列挙外の値を `default` として扱う
+  - `kanaUs` で、spec §4.5 の全キーが Shift の有無ごとに表どおりのかなを生む。`0x73`・`0x7D` は表を引かない
+  - `0x29` は、VK が半角/全角なら表を引かず（Shift 付きを含む）、修飾キーが無ければ開閉キーとして働く。VK が
+    `VK_OEM_3` なら ろ を生む
+  - spec §4.1・§4.3・§4.4・§6 の規則が `kanaJis` と同じに働き、カッコ補完は表が生む 「 」 にだけ働く
+  - 設定アプリの入力ペインで「かな入力（US 配列）」を選べる
+  - core・TIP・settings の試験に、spec §8 の検証がある
+  - 実機での確認（英語キーボードのドライバでの Microsoft IME のかな入力との照合、日本語キーボードのドライバでの `0x29` の
+    開閉、Alt+`` ` `` がかなを生まないことと開閉の有無、ISO 配列の `0x56`、設定アプリの選択肢、メモ帳・Word・Edge。`gate:human-required`）
+- **参照**: `docs/input-style-spec.md` §2・§4.5・§7・§8、`docs/macos-input-parity-audit-report.md` P-18
+- **補足**:
+  - **外部挙動の変化**: legacy の「かな入力（US）」とは 7 キーで生むかなが違う（spec §7）。legacy から移る利用者は、
+    そのキーで別のかなを打つことになる。
+  - **リスク**:
+    - **Microsoft IME との照合**: 表は配列 DLL のかなの列から起こしたもので、Microsoft IME が US 配列のかな入力で実際に
+      生むかなとの一致は実機で確かめていない。違えば spec §4.5 を直す。
+    - **日本語キーボードのドライバ**: US 配列の機械を日本語キーボード（106/109 キー）のドライバで使うと、`0x29` が
+      半角/全角になり ろ を打てない。spec §4.5 は英語キーボードのドライバを使うよう定める。
 
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 

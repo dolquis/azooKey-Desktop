@@ -556,9 +556,8 @@ LearningImportResult InferenceEngine::ImportLearningData(
     // A typo item with counts merged into the store in memory, also when the
     // other typo item failed with io after it; the next save writes what
     // memory holds. A failed merge changed nothing and leaves no count.
-    const bool typo_merged =
-        typo_store_ && (result.counts.count("typo_patterns") > 0 ||
-                        result.counts.count("typo_corrections") > 0);
+    const bool typo_merged = typo_store_ && (result.counts.count("typo_patterns") > 0 ||
+                                             result.counts.count("typo_corrections") > 0);
     if (typo_merged) {
       typo_unsaved_observations_ = (std::max)(typo_unsaved_observations_, size_t{1});
       typo_last_observation_epoch_sec_ =

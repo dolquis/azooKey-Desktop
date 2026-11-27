@@ -514,18 +514,17 @@ TEST(LearningDataManagerTest, TypoStoreReadingV1AsItIsSkipsPatterns) {
 
   const auto patterns_archive = directory.File("patterns.zip");
   Stores source;
-  ASSERT_TRUE(source.typo
-                  .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u",
-                                                   "extra_char", learning::TypoPatternOutcome::Accept,
-                                                   kNow))
-                  .has_value());
+  ASSERT_TRUE(
+      source.typo
+          .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u", "extra_char",
+                                           learning::TypoPatternOutcome::Accept, kNow))
+          .has_value());
   ASSERT_EQ(host::ExportLearningData(source.View(), {LearningDataStore::Typo}, patterns_archive,
                                      true, kKeyA, host::BackupManifest{})
                 .error,
             host::BackupError::None);
-  const auto imported =
-      host::ImportLearningData(view, {LearningDataStore::Typo}, patterns_archive,
-                               learning::ImportConflictPolicy::Merge, kKeyA);
+  const auto imported = host::ImportLearningData(view, {LearningDataStore::Typo}, patterns_archive,
+                                                 learning::ImportConflictPolicy::Merge, kKeyA);
   ASSERT_EQ(imported.error, host::BackupError::None);
   EXPECT_EQ(imported.counts.at("typo_patterns").imported, 0u);
   EXPECT_EQ(imported.counts.at("typo_patterns").skipped, 1u);

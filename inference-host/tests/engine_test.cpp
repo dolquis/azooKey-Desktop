@@ -3815,6 +3815,12 @@ size_t SavedTypoPairs(const std::string& v1_path) {
   return reloaded.ReadingPairs().size();
 }
 
+uint64_t WallClockEpochSecForTest() {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count());
+}
+
 }  // namespace
 
 TEST(EngineTypoCorrectionTest, SuggestInjectsAMarkedCandidateOnlyOverTheThreshold) {
@@ -4012,13 +4018,16 @@ TEST(EngineTypoCorrectionTest, SuspendedWritesRefuseLearningButNotDeletion) {
   cfg.learning_flush_interval_sec = 3600;
   auto engine = MakeEngine(store, cfg);
   engine->SetTypoStore(&typo);
-  ASSERT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
-  ASSERT_TRUE(engine->ObserveTypo("ありがおう", "ありがとう", kNowBase));
+  // Observed at the wall clock: forgetting saves at the wall clock, and the
+  // retention limits would drop a kNowBase row there.
+  const uint64_t now = WallClockEpochSecForTest();
+  ASSERT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", now));
+  ASSERT_TRUE(engine->ObserveTypo("ありがおう", "ありがとう", now));
   ASSERT_EQ(SavedTypoPairs(typo_path), 1u);
 
   engine->SetTypoWritesSuspended(true);
   EXPECT_TRUE(typo.writes_suspended());
-  EXPECT_FALSE(engine->ObserveTypo("おはよお", "おはよう", kNowBase));
+  EXPECT_FALSE(engine->ObserveTypo("おはよお", "おはよう", now));
   // The refused write is not a failure, and nothing reaches the disk.
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_EQ(SavedTypoPairs(typo_path), 1u);
@@ -4028,7 +4037,7 @@ TEST(EngineTypoCorrectionTest, SuspendedWritesRefuseLearningButNotDeletion) {
   EXPECT_FALSE(typo.writes_suspended());
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_EQ(SavedTypoPairs(typo_path), 2u);
-  EXPECT_TRUE(engine->ObserveTypo("おはよお", "おはよう", kNowBase));
+  EXPECT_TRUE(engine->ObserveTypo("おはよお", "おはよう", now));
   ASSERT_TRUE(engine->FlushLearningStore());
   ASSERT_EQ(SavedTypoPairs(typo_path), 3u);
 
@@ -4071,12 +4080,6 @@ TEST(EngineTypoCorrectionTest, ASuspensionSetBeforeTheStoreIsAttachedAppliesToIt
 }
 
 namespace {
-
-uint64_t WallClockEpochSecForTest() {
-  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
-                                   std::chrono::system_clock::now().time_since_epoch())
-                                   .count());
-}
 
 // Leaves one reading pair that an import merged into memory while writes are
 // suspended, with nothing on disk. Observed at the wall clock, as the import

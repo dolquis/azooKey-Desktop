@@ -1255,7 +1255,7 @@ optional フィールドを追加する（エンベロープ schema 自体は変
 | 組み合わせ | 挙動 |
 |---|---|
 | 新しい TIP と古い Host | 古い Host は capability `raw_keys` を広告しないので、TIP は `raw_keys` を送らない。古い Host は両フィールドを未知のキーとして読み飛ばす |
-| 古い TIP と新しい Host | 古い TIP は両フィールドを送らない。Host は空として parse し、v1 動作になる。`secure` を載せない要求は secure として parse するので、補正しない（§12.12.2） |
+| 古い TIP と新しい Host | 古い TIP は両フィールドを送らない。Host は空として parse し、v1 動作になる。`secure` を載せない要求は secure として parse するので、補正しない（§12.12.2）。`secure` を載せない `QueryLiveConversion` / `QueryBatchConversion` も同じ |
 | 新しい TIP と新しい Host | TIP は secure でない要求に `raw_keys` を載せる。Host は境界検証を通ったものだけを保持し、実効値が `rank` か `aggressive` のとき打鍵の経路の仮説に使う |
 
 > privacy フラグの欠落・型不正は `secure = true` /

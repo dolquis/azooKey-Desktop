@@ -115,13 +115,9 @@ double ReadUnitInterval(const j::Object& object, const char* key, double fallbac
   return std::isfinite(value) && value >= 0.0 && value <= 1.0 ? value : fallback;
 }
 
-// M55 section 12.14: the engine knows the v1 modes until the M55 correction
-// engine arrives, so the v2 ones map back to them. rank has no v1 counterpart
-// and converts like suggest; aggressive is the v1 auto_replace (section 12.6).
+// M55 section 12.14: the engine takes the v2 mode as it is; enabled false is off.
 std::string EngineTypoCorrectionMode(const RuntimeTypoCorrectionSettings& typo) {
-  if (!typo.enabled || typo.mode == "off") return "off";
-  if (typo.mode == "aggressive") return "auto_replace";
-  return "suggest";
+  return typo.enabled ? typo.mode : "off";
 }
 
 const j::Object* ReadObject(const j::Object& object, const char* key) {

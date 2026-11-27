@@ -71,9 +71,9 @@ struct RuntimeTypoCorrectionSettings {
   int32_t max_reading_hypotheses{3};
   double min_confidence_for_ranking{0.70};
   double min_confidence_for_top_candidate{0.90};
-  // Fixed to true for the M55 apply gate (sections 12.11 and 12.12.2). This
-  // Host's candidate requests do not consult it: secure inputs already learn
-  // nothing, and their correction is the TIP's to drop (section 12.12.2).
+  // Fixed to true for the M55 apply gate (sections 12.11 and 12.12.2). The
+  // Host does not consult it: a secure request and privacy_mode_secure stop the
+  // correction whatever it holds (section 12.12.2).
   bool disable_in_secret_apps{true};
 };
 

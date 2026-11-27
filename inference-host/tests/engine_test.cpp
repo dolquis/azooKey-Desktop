@@ -4254,6 +4254,79 @@ TEST(EngineTypoCorrectionTest, ABlockedStoreLearnsInMemoryWithoutSaveWarnings) {
   }
 }
 
+// typo-correction-learning-spec section 12.6: rank applies a v1 pair as suggest
+// does, and aggressive, with the v1 auto_replace read as it, replaces the reading.
+TEST(EngineTypoCorrectionTest, RankSuggestsAndAggressiveReplacesWithAV1Pair) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(temp.File("typo.tsv"),
+                                            &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  cfg.typo_min_count = 1;
+  auto engine =
+      MakeEngineWithConverter(MakeConverterWithDictionary({{"こんにちは", "今日は"}}), store, cfg);
+  engine->SetTypoStore(&typo);
+  ASSERT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+
+  const auto ranked = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+  EXPECT_TRUE(ranked.corrected_reading.empty());
+  ASSERT_FALSE(ranked.candidates.empty());
+  EXPECT_EQ(ranked.candidates.front().debug_info, "typo-correction");
+  EXPECT_EQ(ranked.candidates.front().reading, "こんにちは");
+
+  for (const std::string mode : {"aggressive", "auto_replace"}) {
+    SCOPED_TRACE(mode);
+    cfg.typo_correction_mode = mode;
+    engine->ApplyConfig(cfg);
+    const auto replaced = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+    EXPECT_EQ(replaced.corrected_reading, "こんにちは");
+    EXPECT_FALSE(HasCandidateMarked(replaced.candidates, "typo-correction"));
+  }
+}
+
+// Section 12.12.2: while privacy_mode_secure suspends the writes, no mode applies
+// a v1 pair, in the candidate window or in live conversion.
+TEST(EngineTypoCorrectionTest, TheSecureSuspensionStopsTheV1Correction) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::TypoLearningStore typo(temp.File("typo.tsv"),
+                                            &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_min_count = 1;
+  cfg.learning_flush_interval_sec = 3600;
+  auto engine =
+      MakeEngineWithConverter(MakeConverterWithDictionary({{"こんにちは", "今日は"}}), store, cfg);
+  engine->SetTypoStore(&typo);
+  ASSERT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+
+  engine->SetTypoWritesSuspended(true);
+  for (const std::string mode : {"suggest", "rank", "aggressive"}) {
+    SCOPED_TRACE(mode);
+    cfg.typo_correction_mode = mode;
+    engine->ApplyConfig(cfg);
+    const auto secure = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+    EXPECT_TRUE(secure.corrected_reading.empty());
+    EXPECT_FALSE(HasCandidateMarked(secure.candidates, "typo-correction"));
+    const auto live = engine->QueryLiveConversion("こんちには", "", kNowBase, nullptr);
+    ASSERT_TRUE(live.has_value());
+    EXPECT_NE(live->surface, "今日は");
+  }
+
+  engine->SetTypoWritesSuspended(false);
+  EXPECT_EQ(engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr).corrected_reading,
+            "こんにちは");
+  const auto live = engine->QueryLiveConversion("こんちには", "", kNowBase, nullptr);
+  ASSERT_TRUE(live.has_value());
+  EXPECT_EQ(live->surface, "今日は");
+}
+
 // ---- M36-A: new word mining ----
 
 TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending) {

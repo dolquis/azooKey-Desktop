@@ -5072,6 +5072,7 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
 
   ipc::QueryCandidatesRequest query;
   query.reading = "こんちには";
+  query.secure = false;
   const auto response = dispatcher.Dispatch(
       MakeReq(53, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query)));
   ASSERT_TRUE(response.has_value());
@@ -5256,10 +5257,9 @@ TEST_F(DispatcherTest, RequestedTypoModeLeavesTheHostModeAsItIs) {
       SCOPED_TRACE(secure);
       const auto unspecified = query(secure, "");
       ASSERT_FALSE(unspecified.candidates.empty());
-      // What a secure request gets is the M55 apply gate's to decide (section
-      // 12.12.2); here only the request must not change it.
-      if (!secure)
-        EXPECT_EQ(unspecified.corrected_reading, host_mode == "auto_replace" ? "こんにちは" : "");
+      // A secure request is never corrected (section 12.12.2).
+      EXPECT_EQ(unspecified.corrected_reading,
+                !secure && host_mode == "auto_replace" ? "こんにちは" : "");
       for (const std::string mode : {"off", "suggest", "rank", "aggressive"}) {
         SCOPED_TRACE(mode);
         const auto requested = query(secure, mode);
@@ -5389,6 +5389,94 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsARebuiltTypoStore) {
   const auto parsed = ipc::ParseQueryDiagnostics(response->payload_json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_TRUE(parsed->typo_store_rebuilt);
+}
+
+// typo-correction-learning-spec section 12.12.2 (DEV-2149, replacing the
+// DEV-1956 rule that left it to the TIP): a secure request, per-key or for the
+// window, gets no correction in any mode, and neither does any request while
+// the published privacy_mode_secure is on.
+TEST_F(DispatcherTest, SecureRequestsAndSecurePrivacyAreNeverCorrected) {
+  const auto settings_path = temp_directory.File("azookey_dispatcher_typo_secure_apply.json");
+  const auto write_settings = [&](const char* text) {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << text;
+  };
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  azookey::host::SettingsStore settings_store(settings_path);
+  ASSERT_EQ(settings_store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings_store);
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_secure_apply.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  engine.SetTypoStore(&typo);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+
+  uint64_t id = 7220;
+  const auto query = [&](bool secure, bool live) {
+    ipc::QueryCandidatesRequest request;
+    request.reading = "こんちには";
+    request.secure = secure;
+    request.learning_allowed = !secure;
+    request.live = live;
+    const auto response = target.Dispatch(MakeReq(++id, ipc::MessageType::QueryCandidates,
+                                                  ipc::BuildQueryCandidatesRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  const auto has_corrected_candidate = [](const ipc::QueryCandidatesResponse& response) {
+    return std::any_of(response.candidates.begin(), response.candidates.end(),
+                       [](const ipc::CandidateField& c) { return c.reading == "こんにちは"; });
+  };
+  const auto update = [&](const char* text) {
+    write_settings(text);
+    ASSERT_TRUE(target.Dispatch(MakeReq(++id, ipc::MessageType::UpdateConfig, "{}")).has_value());
+  };
+  for (const char* host_mode : {"suggest", "aggressive"}) {
+    SCOPED_TRACE(host_mode);
+    const std::string settings = std::string(R"({"privacy":{"mode":"normal"},"typoMinCount":2,)") +
+                                 R"("typoCorrection":{"mode":")" + host_mode + R"("}})";
+    update(settings.c_str());
+    ASSERT_EQ(engine.config().typo_correction_mode, host_mode);
+    const bool replaces = std::string(host_mode) == "aggressive";
+    const auto open = query(false, false);
+    EXPECT_EQ(open.corrected_reading, replaces ? "こんにちは" : "");
+    EXPECT_TRUE(has_corrected_candidate(open));
+    EXPECT_EQ(query(false, true).corrected_reading, replaces ? "こんにちは" : "");
+    for (const bool live : {false, true}) {
+      SCOPED_TRACE(live);
+      const auto secure = query(true, live);
+      ASSERT_FALSE(secure.candidates.empty());
+      EXPECT_TRUE(secure.corrected_reading.empty());
+      EXPECT_FALSE(has_corrected_candidate(secure));
+    }
+
+    const std::string secure_settings =
+        std::string(R"({"privacy":{"mode":"secure"},"typoMinCount":2,)") +
+        R"("typoCorrection":{"mode":")" + host_mode + R"("}})";
+    update(secure_settings.c_str());
+    ASSERT_EQ(engine.config().typo_correction_mode, host_mode);
+    for (const bool live : {false, true}) {
+      SCOPED_TRACE(live);
+      const auto held = query(false, live);
+      ASSERT_FALSE(held.candidates.empty());
+      EXPECT_TRUE(held.corrected_reading.empty());
+      EXPECT_FALSE(has_corrected_candidate(held));
+    }
+  }
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+  std::remove(settings_path.c_str());
 }
 
 TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {

@@ -53,6 +53,7 @@ add_library(azookey_host STATIC
   src/RewriterData.cpp
   src/SettingsStore.cpp
   src/StoreOnlyZip.cpp
+  src/TypoCorrectionPolicy.cpp
   src/UserDictCli.cpp
   src/UserLearningScorer.cpp
   src/ZenzaiModelConverter.cpp

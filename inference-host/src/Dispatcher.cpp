@@ -1322,9 +1322,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // DEV-1734: the candidate window also weighs the other reading of an
     // ambiguous "nn" + vowel. Per-key queries, a secure request (its TIP drops
     // corrected_reading) and an M63 split are converted as typed.
-    // M55 (typo-correction-learning-spec section 12.13): raw_keys and
-    // typo_correction_mode wait for the M55 correction engine. The conversion
-    // uses the mode the Host settings resolve to, so a request cannot raise it.
+    // M55 (typo-correction-learning-spec section 12.13): the request's
+    // typo_correction_mode is not read. The conversion uses the mode the Host
+    // settings resolve to, so a request cannot raise it.
     // M66 (segment-editing-spec section 5.3): a first segment's request is
     // converted as given, without M35 or the DEV-1734 reading, either of which
     // would answer with a corrected_reading.
@@ -1335,9 +1335,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // The lattice alone reads the remaining reading (segment-editing-spec section 5.3).
     MixedConversionOptions first_segment_options = as_typed;
     first_segment_options.remaining_reading = parsed->remaining_reading;
+    // Section 12.12.2: a secure request is converted as typed, without M35 or
+    // M55 (DEV-2149; under DEV-1956 the TIP dropped what came back corrected).
+    // privacy_mode_secure stops the correction in the engine.
+    MixedConversionOptions plain;
+    plain.typo_correction = !parsed->secure;
     const auto* conversion = first_segment          ? &first_segment_options
                              : IsInlineSplit(split) ? &as_typed
-                                                    : nullptr;
+                                                    : &plain;
     auto queried = weighs_alt_readings
                        ? engine_->QueryAmbiguousCandidatesEx(
                              parsed->reading, parsed->alt_readings, parsed->left_context, NowSec(),

@@ -73,7 +73,8 @@ struct MixedConversionOptions {
   std::vector<std::pair<size_t, size_t>> english_ranges;
   // Section 10: the conversion ends by the earlier of this and the Zenzai budget.
   std::optional<std::chrono::steady_clock::time_point> deadline;
-  // Section 12: false converts the reading as given, without M35.
+  // Section 12: false converts the reading as given, without typo correction (M35 / M55). A
+  // secure request sets it false (typo-correction-learning-spec section 12.12.2).
   bool typo_correction{true};
   // false skips the NLL rerank (the section 8.3 extra conversions).
   bool nll{true};
@@ -172,7 +173,8 @@ struct EngineConfig {
   double prediction_learning_min_score{0.05};
   // Default score for user-dictionary entries that lack an explicit value.
   double user_word_default_score{1.5};
-  // M35 typo correction; docs/typo-correction-learning-spec.md section 5-2.
+  // M35 / M55 typo correction; docs/typo-correction-learning-spec.md sections 5-2 and 12.6:
+  // off, suggest, rank or aggressive, with the v1 auto_replace read as aggressive.
   std::string typo_correction_mode{"suggest"};
   uint32_t typo_min_count{learning::kTypoCorrectionDefaultMinCount};
   // M36 mining and trending; docs/auto-word-registration-spec.md section 8.
@@ -465,8 +467,8 @@ class InferenceEngine {
 
   struct CandidatesResult {
     std::vector<core::Candidate> candidates;
-    // Non-empty only under typo_correction_mode "auto_replace": the reading the
-    // conversion actually ran on, so the TIP can replace its preedit.
+    // Non-empty only under typo_correction_mode aggressive (the v1 auto_replace): the
+    // reading the conversion actually ran on, so the TIP can replace its preedit.
     std::string corrected_reading;
     // The Zenzai conversion stopped at its deadline (the budget or
     // MixedConversionOptions::deadline): its candidates are best-so-far or the
@@ -814,7 +816,8 @@ class InferenceEngine {
   // Nothing takes state_mutex_ while holding it.
   mutable std::mutex typo_store_mutex_;
   // Guarded by typo_store_mutex_: the batching of typo saves (count, burst
-  // start, the epoch the next save stamps) and the secure suspension.
+  // start, the epoch the next save stamps) and the secure suspension, which
+  // stops the correction as well (typo-correction-learning-spec section 12.12.2).
   size_t typo_unsaved_observations_{0};
   uint64_t typo_last_observation_epoch_sec_{0};
   std::optional<std::chrono::steady_clock::time_point> last_successful_typo_save_steady_;

@@ -17,6 +17,7 @@
 #include "azookey/core/Utf8.h"
 #include "azookey/host/BackendSelector.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
+#include "azookey/host/TypoCorrectionPolicy.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
@@ -2101,28 +2102,32 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   if (canceled()) return {};
 
   // M35: resolve the typo correction before anything looks the reading up, so
-  // auto_replace runs dictionary lookup, conversion and reranking on the
-  // corrected reading rather than patching the result afterwards.
+  // aggressive (the v1 auto_replace) runs dictionary lookup, conversion and
+  // reranking on the corrected reading rather than patching the result afterwards.
   CandidatesResult out;
   std::string suggest_reading;
   {
     learning::TypoLearningStore* store = nullptr;
-    std::string mode;
+    auto mode = TypoCorrectionMode::Off;
     uint32_t min_count = 0;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       store = typo_store_;
-      mode = config_.typo_correction_mode;
+      mode = ParseTypoCorrectionMode(config_.typo_correction_mode);
       min_count = config_.typo_min_count;
     }
     // typo_store_mutex_ alone, never together with state_mutex_ (see the member
     // declaration): the store has no lock of its own and ObserveTypo mutates it.
-    // M63-B section 12: a mixed reading is converted as typed.
-    if (store && mode != "off" && (!mixed || mixed->typo_correction)) {
+    // M63-B section 12: a mixed reading is converted as typed, and so is a secure
+    // request (typo-correction-learning-spec section 12.12.2).
+    if (store && mode != TypoCorrectionMode::Off && (!mixed || mixed->typo_correction)) {
       std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
-      auto corrected = store->LookupReadingPair(requested_kana, min_count, now_epoch_sec);
+      // Section 12.12.2: privacy_mode_secure, which suspends the writes, stops the correction.
+      std::optional<std::string> corrected;
+      if (!typo_writes_suspended_)
+        corrected = store->LookupReadingPair(requested_kana, min_count, now_epoch_sec);
       if (corrected && *corrected != requested_kana) {
-        if (mode == "auto_replace") {
+        if (mode == TypoCorrectionMode::Aggressive) {
           out.corrected_reading = std::move(*corrected);
         } else {
           suggest_reading = std::move(*corrected);

@@ -113,6 +113,7 @@ $exe = (Resolve-Path .\azookey_inference_host.exe).Path
 | `user_dict.json` | 1 |
 
 Host は起動時にこの 4 つを読み、それぞれ `<名前>.enc` と `<名前>.bak` へ移して平文を消す（`docs/sideload-packaging-spec.md` §9.4）。
+`typo_corrections.tsv` は続けて v2 へ移行する。`typo_learning.v2.db.enc` を作り、`typo_corrections.tsv.enc` を `typo_corrections.v1.tsv.bak.enc` へ改名する（`docs/typo-correction-learning-spec.md` §12.8）。
 移行は Host の最初の起動でしか観測できない。
 検証 zip を導入して Host を一度も起動していない状態で配置し、checkpoint を取ってから始める。
 
@@ -132,6 +133,7 @@ powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -From befo
 データディレクトリが空であることを先に確かめる。
 
 比較結果には、4 つのストアそれぞれについて平文の `removed` と、`.enc` と `.bak` の `added` が出る。
+`typo_corrections.tsv` では、`.enc` の代わりに `typo_learning.v2.db.enc` と `typo_corrections.v1.tsv.bak.enc` の `added` が出る。
 `.bak` の SHA-256 は fixture の SHA-256 と一致する。
 件数は次で確かめる。
 

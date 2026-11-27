@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -67,12 +68,16 @@ class ScopedDirectory {
   std::filesystem::path path_;
 };
 
-// In-memory stores; nothing here is saved to disk.
+// In-memory stores; nothing here is saved to disk except the typo store,
+// whose forget writes its file itself, in a directory of its own.
 struct Stores {
+  Stores() { EXPECT_EQ(typo.Load(kNow).mode, learning::TypoLearningMode::V2); }
+
   learning::LearningStore kana{"kana.tsv", &kKeyA};
   learning::LearningStore english{"english.tsv", &kKeyA};
   learning::UserDictionary user_dictionary{"user_dict.json", &kKeyA};
-  learning::TypoCorrectionStore typo{"typo.tsv", &kKeyA};
+  ScopedDirectory typo_directory;
+  learning::TypoLearningStore typo{typo_directory.File("typo.tsv"), &kKeyA};
   learning::AutoWordStore auto_word{"auto_words.tsv", &kKeyA};
 
   host::LearningDataStores View() {
@@ -80,7 +85,8 @@ struct Stores {
                                      {std::string(host::kEnglishLearningChannel), &english}},
                                     &user_dictionary,
                                     &typo,
-                                    &auto_word};
+                                    &auto_word,
+                                    kNow};
   }
 
   void Fill() {
@@ -90,19 +96,39 @@ struct Stores {
                       0.8, kNow);
     english.Observe("helo", "hello", 0.8, kNow);
     user_dictionary.Add({"東京特許", "とうきょうとっきょ", std::nullopt, std::nullopt, 1.5});
-    typo.Observe("こんちには", "こんにちは", kNow);
+    typo.ObserveReadingPair("こんちには", "こんにちは", kNow);
     auto_word.Observe("推し活", "おしかつ", kNow, 3, false);
   }
 
   std::vector<std::string> Texts() const {
-    return {kana.SerializeText(), english.SerializeText(), user_dictionary.SerializeText(),
-            typo.SerializeText(), auto_word.SerializeText()};
+    return {kana.SerializeText(),
+            english.SerializeText(),
+            user_dictionary.SerializeText(),
+            typo.SerializeReadingPairsText(),
+            typo.SerializePatternsText(),
+            auto_word.SerializeText()};
   }
 };
 
 const std::vector<LearningDataStore> kAllStores = {
     LearningDataStore::Learning, LearningDataStore::UserDictionary, LearningDataStore::Typo,
     LearningDataStore::AutoWord};
+
+// A pattern event in the abstraction tokens the typo store accepts
+// (typo-correction-learning-spec section 12.8).
+learning::TypoPatternEvent PatternEvent(std::string observed, std::string intended,
+                                        std::string typo_type, learning::TypoPatternOutcome outcome,
+                                        uint64_t now) {
+  learning::TypoPatternEvent event;
+  event.observed_pattern = std::move(observed);
+  event.intended_pattern = std::move(intended);
+  event.typo_type = std::move(typo_type);
+  event.observed_reading = "こうじしょう";
+  event.corrected_reading = "こうしょう";
+  event.outcome = outcome;
+  event.now_epoch_sec = now;
+  return event;
+}
 
 }  // namespace
 
@@ -257,13 +283,60 @@ TEST(LearningDataManagerTest, ForgetFollowsEachStoreRule) {
   EXPECT_EQ(stores.user_dictionary.Size(), 0u);
   EXPECT_TRUE(
       host::ForgetLearningEntry(view, LearningDataStore::Typo, first(LearningDataStore::Typo)));
-  EXPECT_EQ(stores.typo.size(), 0u);
+  EXPECT_TRUE(stores.typo.ReadingPairs().empty());
   EXPECT_TRUE(host::ForgetLearningEntry(view, LearningDataStore::AutoWord,
                                         first(LearningDataStore::AutoWord)));
   // A rejected word stays recorded so that it is not proposed again.
   EXPECT_EQ(stores.auto_word.ListByState(learning::AutoWordState::Rejected).size(), 1u);
 
   EXPECT_FALSE(host::ForgetLearningEntry(view, LearningDataStore::Learning, "0000000000000000"));
+}
+
+// typo-correction-learning-spec section 12.8: the patterns are listed in
+// channel "pattern", one entry per (observed, intended) over its typo types,
+// and forgetting the entry removes all of them and leaves the reading pairs.
+TEST(LearningDataManagerTest, TypoPatternsAreListedPerPairAndForgottenTogether) {
+  using learning::TypoPatternOutcome;
+  Stores stores;
+  stores.Fill();
+  ASSERT_TRUE(stores.typo
+                  .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u",
+                                                   "extra_char", TypoPatternOutcome::Accept, kNow))
+                  .has_value());
+  ASSERT_TRUE(
+      stores.typo
+          .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u", "adjacent_key",
+                                           TypoPatternOutcome::Reject, kNow + 5))
+          .has_value());
+  ASSERT_TRUE(stores.typo
+                  .RecordPatternEvent(PatternEvent("z_sub_x", "x_sub_z", "adjacent_key",
+                                                   TypoPatternOutcome::Accept, kNow))
+                  .has_value());
+  ASSERT_EQ(stores.typo.Patterns().size(), 3u);
+
+  const auto view = stores.View();
+  const auto listed = host::ListLearningEntries(view, LearningDataStore::Typo, "", 0, 10);
+  // The reading pair and two pattern entries.
+  ASSERT_EQ(listed.total, 3u);
+  const auto folded =
+      std::find_if(listed.entries.begin(), listed.entries.end(),
+                   [](const auto& entry) { return entry.reading == "j_insert_after_u"; });
+  ASSERT_NE(folded, listed.entries.end());
+  EXPECT_EQ(folded->channel, host::kTypoPatternChannel);
+  EXPECT_EQ(folded->surface, "j_delete_after_u");
+  EXPECT_EQ(folded->id, host::LearningEntryId(LearningDataStore::Typo, host::kTypoPatternChannel,
+                                              "j_insert_after_u", "j_delete_after_u"));
+  EXPECT_DOUBLE_EQ(folded->weight, 1.0);
+  EXPECT_EQ(folded->metadata.at("accept_count"), "1");
+  EXPECT_EQ(folded->metadata.at("reject_count"), "1");
+  EXPECT_EQ(folded->last_updated_epoch_sec, kNow + 5);
+
+  EXPECT_TRUE(host::ForgetLearningEntry(view, LearningDataStore::Typo, folded->id));
+  const auto patterns = stores.typo.Patterns();
+  ASSERT_EQ(patterns.size(), 1u);
+  EXPECT_EQ(patterns[0].observed_pattern, "z_sub_x");
+  EXPECT_EQ(stores.typo.ReadingPairs().size(), 1u);
+  EXPECT_FALSE(host::ForgetLearningEntry(view, LearningDataStore::Typo, folded->id));
 }
 
 TEST(LearningDataManagerTest, ForgetLearningPairTargetsTheKanaChannel) {
@@ -284,8 +357,9 @@ TEST(LearningDataManagerTest, ExportImportRoundTripRestoresEveryStore) {
                                                  host::BackupManifest{});
   ASSERT_EQ(exported.error, host::BackupError::None);
   EXPECT_GT(exported.file_size, 0u);
-  // Two learning channels, the user dictionary, typo corrections, auto words.
-  ASSERT_EQ(exported.manifest.items.size(), 5u);
+  // Two learning channels, the user dictionary, typo corrections and
+  // patterns, auto words.
+  ASSERT_EQ(exported.manifest.items.size(), 6u);
   EXPECT_EQ(exported.manifest.items[0].name, "learning");
   EXPECT_EQ(exported.manifest.items[0].file, "learning.tsv.enc");
   EXPECT_EQ(exported.manifest.items[1].name, "learning_english");
@@ -348,16 +422,113 @@ TEST(LearningDataManagerTest, PlaintextExportRoundTrips) {
   const auto exported = host::ExportLearningData(source.View(), {LearningDataStore::Typo}, archive,
                                                  false, kKeyA, host::BackupManifest{});
   ASSERT_EQ(exported.error, host::BackupError::None);
-  ASSERT_EQ(exported.manifest.items.size(), 1u);
+  ASSERT_EQ(exported.manifest.items.size(), 2u);
   EXPECT_EQ(exported.manifest.items[0].file, "typo_corrections.tsv");
+  EXPECT_EQ(exported.manifest.items[1].file, "typo_patterns.tsv");
   EXPECT_FALSE(exported.manifest.encrypted);
 
   Stores restored;
   const auto imported = host::ImportLearningData(restored.View(), kAllStores, archive,
                                                  learning::ImportConflictPolicy::Merge, kKeyB);
   ASSERT_EQ(imported.error, host::BackupError::None);
-  EXPECT_EQ(restored.typo.SerializeText(), source.typo.SerializeText());
+  EXPECT_EQ(restored.typo.SerializeReadingPairsText(), source.typo.SerializeReadingPairsText());
   EXPECT_EQ(restored.kana.size(), 0u);
+}
+
+// learning-data-management-spec section 5: the v2 typo store adds item
+// typo_patterns, which an import merges back.
+TEST(LearningDataManagerTest, TypoPatternsRoundTripThroughTheBackup) {
+  using learning::TypoPatternOutcome;
+  ScopedDirectory directory;
+  const auto archive = directory.File("patterns.zip");
+  Stores source;
+  source.Fill();
+  ASSERT_TRUE(source.typo
+                  .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u",
+                                                   "extra_char", TypoPatternOutcome::Accept, kNow))
+                  .has_value());
+  ASSERT_TRUE(source.typo
+                  .RecordPatternEvent(PatternEvent("z_sub_x", "x_sub_z", "adjacent_key",
+                                                   TypoPatternOutcome::Reject, kNow + 1))
+                  .has_value());
+  const auto exported = host::ExportLearningData(source.View(), {LearningDataStore::Typo}, archive,
+                                                 true, kKeyA, host::BackupManifest{});
+  ASSERT_EQ(exported.error, host::BackupError::None);
+  ASSERT_EQ(exported.manifest.items.size(), 2u);
+  EXPECT_EQ(exported.manifest.items[1].name, "typo_patterns");
+  EXPECT_EQ(exported.manifest.items[1].file, "typo_patterns.tsv.enc");
+  EXPECT_EQ(exported.manifest.items[1].count, 2u);
+
+  Stores restored;
+  const auto imported =
+      host::ImportLearningData(restored.View(), {LearningDataStore::Typo}, archive,
+                               learning::ImportConflictPolicy::Merge, kKeyA);
+  ASSERT_EQ(imported.error, host::BackupError::None);
+  EXPECT_EQ(imported.counts.at("typo_patterns").imported, 2u);
+  EXPECT_EQ(imported.counts.at("typo_corrections").imported, 1u);
+  EXPECT_EQ(restored.typo.SerializePatternsText(), source.typo.SerializePatternsText());
+  EXPECT_EQ(restored.typo.SerializeReadingPairsText(), source.typo.SerializeReadingPairsText());
+}
+
+namespace {
+
+// kKeyA that can refuse to encrypt, so a typo store's v1 migration fails.
+class RefusableCrypto final : public learning::ByteCrypto {
+ public:
+  bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+    return !refuse_encrypt && kKeyA.Encrypt(plain, cipher);
+  }
+  bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+    return kKeyA.Decrypt(cipher, plain);
+  }
+  bool refuse_encrypt{false};
+};
+
+}  // namespace
+
+// A typo store that reads v1 as it is (typo-correction-learning-spec section
+// 12.8) has no patterns: its export writes typo_corrections alone, and an
+// import counts the typo_patterns item as skipped (spec section 5).
+TEST(LearningDataManagerTest, TypoStoreReadingV1AsItIsSkipsPatterns) {
+  ScopedDirectory directory;
+  const auto v1_path = directory.File("typo.tsv");
+  {
+    learning::TypoCorrectionStore v1(v1_path, &kKeyA);
+    ASSERT_TRUE(v1.Observe("こんちには", "こんにちは", kNow));
+    ASSERT_TRUE(v1.Save());
+  }
+  RefusableCrypto crypto;
+  crypto.refuse_encrypt = true;
+  learning::TypoLearningStore typo(v1_path, &crypto);
+  ASSERT_EQ(typo.Load(kNow).mode, learning::TypoLearningMode::V1Fallback);
+  crypto.refuse_encrypt = false;
+  const host::LearningDataStores view{{}, nullptr, &typo, nullptr, kNow};
+
+  const auto exported_archive = directory.File("v1.zip");
+  const auto exported = host::ExportLearningData(view, {LearningDataStore::Typo}, exported_archive,
+                                                 true, kKeyA, host::BackupManifest{});
+  ASSERT_EQ(exported.error, host::BackupError::None);
+  ASSERT_EQ(exported.manifest.items.size(), 1u);
+  EXPECT_EQ(exported.manifest.items[0].name, "typo_corrections");
+  EXPECT_EQ(exported.manifest.items[0].count, 1u);
+
+  const auto patterns_archive = directory.File("patterns.zip");
+  Stores source;
+  ASSERT_TRUE(
+      source.typo
+          .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u", "extra_char",
+                                           learning::TypoPatternOutcome::Accept, kNow))
+          .has_value());
+  ASSERT_EQ(host::ExportLearningData(source.View(), {LearningDataStore::Typo}, patterns_archive,
+                                     true, kKeyA, host::BackupManifest{})
+                .error,
+            host::BackupError::None);
+  const auto imported = host::ImportLearningData(view, {LearningDataStore::Typo}, patterns_archive,
+                                                 learning::ImportConflictPolicy::Merge, kKeyA);
+  ASSERT_EQ(imported.error, host::BackupError::None);
+  EXPECT_EQ(imported.counts.at("typo_patterns").imported, 0u);
+  EXPECT_EQ(imported.counts.at("typo_patterns").skipped, 1u);
+  EXPECT_TRUE(typo.Patterns().empty());
 }
 
 TEST(LearningDataManagerTest, ImportWithAnotherKeyFailsWithoutTouchingStores) {
@@ -406,7 +577,7 @@ TEST(LearningDataManagerTest, ConflictPoliciesApplyToEachStore) {
   const auto archive = directory.File("conflicts.zip");
   Stores source;
   source.kana.Observe("にほん", "日本", 0.5, kNow);
-  source.typo.Observe("こんちには", "こんにちは", kNow);
+  source.typo.ObserveReadingPair("こんちには", "こんにちは", kNow);
   source.user_dictionary.Add({"東京特許", "とうきょうとっきょ", std::nullopt, std::nullopt, 9.0});
   ASSERT_EQ(host::ExportLearningData(source.View(), kAllStores, archive, true, kKeyA,
                                      host::BackupManifest{})
@@ -415,7 +586,7 @@ TEST(LearningDataManagerTest, ConflictPoliciesApplyToEachStore) {
 
   const auto run = [&](learning::ImportConflictPolicy policy, Stores& target) {
     target.kana.Observe("にほん", "日本", 1.0, kNow);
-    target.typo.Observe("こんちには", "こんにちは", kNow);
+    target.typo.ObserveReadingPair("こんちには", "こんにちは", kNow);
     target.user_dictionary.Add({"東京特許", "とうきょうとっきょ", std::nullopt, std::nullopt, 1.0});
     const auto result = host::ImportLearningData(target.View(), kAllStores, archive, policy, kKeyA);
     EXPECT_EQ(result.error, host::BackupError::None);
@@ -426,13 +597,13 @@ TEST(LearningDataManagerTest, ConflictPoliciesApplyToEachStore) {
   const auto merge_result = run(learning::ImportConflictPolicy::Merge, merged);
   EXPECT_EQ(merge_result.counts.at("learning").conflicts, 1u);
   EXPECT_DOUBLE_EQ(merged.kana.Score("にほん", "日本", kNow), 1.5);
-  EXPECT_EQ(merged.typo.All().front().record.count, 2u);
+  EXPECT_EQ(merged.typo.ReadingPairs().front().record.count, 2u);
   EXPECT_EQ(merged.user_dictionary.All().front().value, 1.0);
 
   Stores overwritten;
   run(learning::ImportConflictPolicy::Overwrite, overwritten);
   EXPECT_DOUBLE_EQ(overwritten.kana.Score("にほん", "日本", kNow), 0.5);
-  EXPECT_EQ(overwritten.typo.All().front().record.count, 1u);
+  EXPECT_EQ(overwritten.typo.ReadingPairs().front().record.count, 1u);
   EXPECT_EQ(overwritten.user_dictionary.All().front().value, 9.0);
 
   Stores kept;
@@ -453,6 +624,30 @@ TEST(LearningDataManagerTest, ItemWithMalformedRowsFailsWithoutTouchingStores) {
                                        {{"learning", "learning.tsv.enc", 2,
                                          "# azookey-learning-tsv escaped=1 version=2\nnot a row\n"},
                                         {"typo_corrections", "typo_corrections.tsv.enc", 0, ""}},
+                                       true, kKeyA, host::BackupManifest{}, &written, &size,
+                                       &error));
+
+  Stores target;
+  target.Fill();
+  const auto before = target.Texts();
+  const auto imported = host::ImportLearningData(target.View(), kAllStores, archive,
+                                                 learning::ImportConflictPolicy::Merge, kKeyA);
+  EXPECT_EQ(imported.error, host::BackupError::BadItem);
+  EXPECT_TRUE(imported.counts.empty());
+  EXPECT_EQ(target.Texts(), before);
+}
+
+// A typo_patterns row the store cannot read fails the import as any other
+// item does, before any store changes.
+TEST(LearningDataManagerTest, MalformedTypoPatternsItemFailsWithoutTouchingStores) {
+  ScopedDirectory directory;
+  const auto archive = directory.File("tampered-patterns.zip");
+  host::BackupManifest written;
+  uint64_t size = 0;
+  auto error = host::BackupError::None;
+  ASSERT_TRUE(host::WriteBackupArchive(archive,
+                                       {{"typo_patterns", "typo_patterns.tsv.enc", 1,
+                                         "# azookey-typo-patterns-tsv escaped=1\nnot a row\n"}},
                                        true, kKeyA, host::BackupManifest{}, &written, &size,
                                        &error));
 

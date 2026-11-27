@@ -65,6 +65,9 @@ struct DispatcherConfig {
   // Immutable startup snapshot; power changes and model reloads do not
   // replace it. The actual loaded backend remains the engine's health state.
   std::optional<ipc::BackendSelectionDiagnostics> backend_selection;
+  // D-010 (typo-correction-learning-spec section 12.8): this Host start
+  // rebuilt the typo v2 store from a corrupt file. Fixed for the run.
+  bool typo_store_rebuilt{false};
   // M63-B (docs/mixed-english-auto-conversion-spec.md section 10): from the
   // receipt of a QueryCandidates request, the deadline of the conversions of
   // its mixed readings.

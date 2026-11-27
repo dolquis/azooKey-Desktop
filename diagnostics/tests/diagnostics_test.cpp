@@ -1364,6 +1364,50 @@ TEST(DiagnosticsTest, UnreadableV2LearningTakesPriorityOverRetainedLegacyWarning
   std::filesystem::remove_all(directory, ec);
 }
 
+// D-010 (typo-correction-learning-spec section 12.8): a typo v2 store the
+// Host rebuilt from a corrupt file at its start warns for that run, after the
+// learning store's own findings.
+TEST(DiagnosticsTest, RebuiltTypoStoreWarnsAfterTheLearningStoreFindings) {
+  diag::Snapshot snapshot;
+  azookey::ipc::QueryDiagnosticsPayload host;
+  host.engine = "mock";
+  host.backend = "cpu";
+  host.fallback_state = "healthy";
+  snapshot.host_diagnostics = host;
+  const auto is_d010 = [](const auto& item) { return item.id == "D-010"; };
+
+  auto report = diag::EvaluateSnapshot(snapshot, 1);
+  auto check = std::find_if(report.checks.begin(), report.checks.end(), is_d010);
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Ok);
+  auto details = j::Parse(check->details_json);
+  ASSERT_TRUE(details);
+  EXPECT_FALSE(details->GetBool("typo_store_rebuilt").has_value());
+
+  snapshot.host_diagnostics->typo_store_rebuilt = true;
+  report = diag::EvaluateSnapshot(snapshot, 1);
+  check = std::find_if(report.checks.begin(), report.checks.end(), is_d010);
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Warning);
+  EXPECT_EQ(check->message, "Typo learning store was rebuilt from a corrupt file");
+  details = j::Parse(check->details_json);
+  ASSERT_TRUE(details);
+  EXPECT_EQ(details->GetBool("typo_store_rebuilt"), true);
+
+  snapshot.learning_store_legacy_retained = true;
+  report = diag::EvaluateSnapshot(snapshot, 1);
+  check = std::find_if(report.checks.begin(), report.checks.end(), is_d010);
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Warning);
+  EXPECT_EQ(check->message, "Legacy learning store cleanup is pending");
+
+  snapshot.learning_store_valid = false;
+  report = diag::EvaluateSnapshot(snapshot, 1);
+  check = std::find_if(report.checks.begin(), report.checks.end(), is_d010);
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Error);
+}
+
 TEST(DiagnosticsTest, OptionalComDisplayNameIsWarningOnlyWhenRequiredRegistrationMatches) {
   diag::Snapshot snapshot;
   snapshot.com_registration_matches = true;

@@ -110,6 +110,9 @@ struct QueryDiagnosticsPayload {
   // of the loaded model (declared or inferred). Absent when no model is loaded and from Hosts
   // that predate it.
   std::optional<std::string> prompt_format;
+  // Protocol v1 additive field (DEV-2149). True when this Host start rebuilt the typo v2 store
+  // from a corrupt file (D-010). Sent only when true; absent reads as false.
+  bool typo_store_rebuilt{false};
 };
 
 struct LoadModelRequest {

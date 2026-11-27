@@ -291,6 +291,7 @@ std::string BuildQueryDiagnostics(const QueryDiagnosticsPayload& p) {
     o.emplace("backend_selection", j::Value(std::move(selection)));
   }
   if (p.prompt_format) o.emplace("prompt_format", j::Value(*p.prompt_format));
+  if (p.typo_store_rebuilt) o.emplace("typo_store_rebuilt", j::Value(true));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -372,6 +373,7 @@ std::optional<QueryDiagnosticsPayload> ParseQueryDiagnostics(const std::string& 
       format && (*format == "zenz-v3" || *format == "kanakanji-edge-v1")) {
     p.prompt_format = std::move(format);
   }
+  p.typo_store_rebuilt = v->GetBool("typo_store_rebuilt").value_or(false);
   return p;
 }
 

@@ -942,12 +942,74 @@ int main(int argc, char** argv) {
                                       : azookey::logging::RuntimeLogLevel::Warn,
                      "user_dictionary_load", user_dict_loaded ? "ok" : "error");
 
-  azookey::learning::TypoCorrectionStore typo_store(user_paths->typo_store_path);
-  const bool typo_store_loaded = typo_store.Load();
-  LogBusinessOutcome(runtime_log,
-                     typo_store_loaded ? azookey::logging::RuntimeLogLevel::Info
-                                       : azookey::logging::RuntimeLogLevel::Warn,
-                     "typo_store_load", typo_store_loaded ? "ok" : "error");
+  // M55 v2 store (typo-correction-learning-spec section 12.8): the load
+  // migrates the v1 store or rebuilds a corrupt file as it goes. The log
+  // carries the outcome and counts only, never a reading.
+  azookey::learning::TypoLearningStore typo_store(user_paths->typo_store_path);
+  const auto typo_load =
+      typo_store.Load(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                                std::chrono::system_clock::now().time_since_epoch())
+                                                .count()));
+  {
+    using azookey::learning::TypoLearningLoadIssue;
+    using azookey::learning::TypoLearningMode;
+    const char* mode = typo_load.mode == TypoLearningMode::V2           ? "v2"
+                       : typo_load.mode == TypoLearningMode::V1Fallback ? "v1_fallback"
+                                                                        : "blocked";
+    const char* issue = "none";
+    switch (typo_load.issue) {
+      case TypoLearningLoadIssue::None:
+        break;
+      case TypoLearningLoadIssue::SqliteUnavailable:
+        issue = "sqlite_unavailable";
+        break;
+      case TypoLearningLoadIssue::V2Unreadable:
+        issue = "v2_unreadable";
+        break;
+      case TypoLearningLoadIssue::V2TooNew:
+        issue = "v2_too_new";
+        break;
+      case TypoLearningLoadIssue::V1StoreUnreadable:
+        issue = "v1_store_unreadable";
+        break;
+      case TypoLearningLoadIssue::V1BackupUnreadable:
+        issue = "v1_backup_unreadable";
+        break;
+      case TypoLearningLoadIssue::MigrationFailed:
+        issue = "migration_failed";
+        break;
+      case TypoLearningLoadIssue::CorruptCopyFailed:
+        issue = "corrupt_copy_failed";
+        break;
+    }
+    const bool degraded = typo_load.mode != TypoLearningMode::V2 ||
+                          typo_load.issue != TypoLearningLoadIssue::None ||
+                          typo_load.rebuilt_from_corruption;
+    if (typo_load.mode == TypoLearningMode::Blocked) {
+      // A store that stops saving is a dictionary I/O failure (observability-spec
+      // section 7.4), so the error carries its category.
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "typo_store_load",
+                      {{"result", SafeLogText("error")},
+                       {"error_code", SafeLogText("business")},
+                       {"mode", SafeLogText(mode)},
+                       {"issue", SafeLogText(issue)},
+                       {"rebuilt", typo_load.rebuilt_from_corruption},
+                       {"corruption_reason", SafeLogText(typo_load.corruption_reason)},
+                       {"migrated_pairs", static_cast<uint64_t>(typo_load.migrated_pairs)},
+                       {"v1_store_pending", typo_load.v1_store_pending}});
+    } else {
+      runtime_log.Log(degraded ? azookey::logging::RuntimeLogLevel::Warn
+                               : azookey::logging::RuntimeLogLevel::Info,
+                      "typo_store_load",
+                      {{"result", SafeLogText("ok")},
+                       {"mode", SafeLogText(mode)},
+                       {"issue", SafeLogText(issue)},
+                       {"rebuilt", typo_load.rebuilt_from_corruption},
+                       {"corruption_reason", SafeLogText(typo_load.corruption_reason)},
+                       {"migrated_pairs", static_cast<uint64_t>(typo_load.migrated_pairs)},
+                       {"v1_store_pending", typo_load.v1_store_pending}});
+    }
+  }
 
   azookey::learning::AutoWordStore auto_word_store(user_paths->auto_word_store_path);
   const bool auto_word_store_loaded = auto_word_store.Load();
@@ -995,6 +1057,11 @@ int main(int argc, char** argv) {
 
   azookey::host::InferenceEngine engine(std::move(converter), &store, config, &runtime_log);
   engine.SetUserDictionary(&user_dict);
+  // Section 12.12.2: the published privacy_mode_secure, which is also on
+  // for an invalid settings.json (fail closed); HandleUpdateConfig follows
+  // every reload.
+  const bool privacy_secure = settings_store.LockPrivacyPolicy().privacy_mode_secure;
+  engine.SetTypoWritesSuspended(privacy_secure);
   engine.SetTypoStore(&typo_store);
   engine.SetAutoWordStore(&auto_word_store);
   engine.SetEnglishLearningStore(&english_store);
@@ -1284,6 +1351,7 @@ int main(int argc, char** argv) {
   dconf.runtime_tier = "mock";
 #endif
   dconf.default_backend = default_backend;
+  dconf.typo_store_rebuilt = typo_load.rebuilt_from_corruption;
   // Preserve the startup decision separately from the loaded backend and
   // the `auto` value that subsequently follows power changes.
   const auto& startup_selection = auto_backend.selection;

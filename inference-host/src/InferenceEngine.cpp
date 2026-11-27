@@ -324,6 +324,14 @@ InferenceEngine::~InferenceEngine() {
     }
     if (attempt < 2) std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
+  // The typo store's unsaved observations get the same bounded retries.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    {
+      std::lock_guard<std::mutex> lock(typo_store_mutex_);
+      if (SaveTypoStoreLocked()) break;
+    }
+    if (attempt < 2) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
   // M60: the English channel saves on every commit; a save that failed then
   // gets the same bounded retries here.
   for (int attempt = 0; attempt < 3; ++attempt) {
@@ -344,10 +352,42 @@ void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   RefreshDictionaryLocked();
 }
 
-void InferenceEngine::SetTypoStore(learning::TypoCorrectionStore* store) {
+void InferenceEngine::SetTypoStore(learning::TypoLearningStore* store) {
   std::lock_guard history_lock(learning_history_mutex_);
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  // The outgoing store keeps what it observed: save it before letting go.
+  {
+    std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+    (void)SaveTypoStoreLocked();
+  }
+  std::scoped_lock lock(state_mutex_, typo_store_mutex_);
   typo_store_ = store;
+  if (store) store->SetWritesSuspended(typo_writes_suspended_);
+  typo_unsaved_observations_ = 0;
+  typo_last_observation_epoch_sec_ = 0;
+  last_successful_typo_save_steady_.reset();
+  typo_flush_due_steady_.reset();
+}
+
+void InferenceEngine::SetTypoWritesSuspended(bool suspended) {
+  uint64_t flush_interval_sec = 0;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    flush_interval_sec = config_.learning_flush_interval_sec;
+  }
+  bool pending = false;
+  {
+    std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+    const bool lifted = typo_writes_suspended_ && !suspended;
+    typo_writes_suspended_ = suspended;
+    if (typo_store_) typo_store_->SetWritesSuspended(suspended);
+    // What was observed before the suspension waits for it to lift. The flush
+    // worker saves it after the interval; with interval 0, which the worker
+    // never schedules, the lift saves it at once. Only the lift does: every
+    // UpdateConfig calls this, and a failed save waits for the next trigger.
+    if (lifted && flush_interval_sec == 0) (void)SaveTypoStoreLocked();
+    pending = TypoSavePendingLocked();
+  }
+  if (pending) ScheduleTypoFlush();
 }
 
 void InferenceEngine::SetAutoWordStore(learning::AutoWordStore* store) {
@@ -889,23 +929,45 @@ bool InferenceEngine::ResetEnglishRuntimeAdditions() {
 bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
                                   const std::string& correct_reading, uint64_t now_epoch_sec) {
   std::lock_guard history_lock(learning_history_mutex_);
-  learning::TypoCorrectionStore* store = nullptr;
+  learning::TypoLearningStore* store = nullptr;
+  size_t flush_every_n = 0;
+  uint64_t flush_interval_sec = 0;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     // "off" stops the learning too, not just the application: a user who turned
     // the feature off should not accumulate a correction table.
     if (!typo_store_ || config_.typo_correction_mode == "off") return false;
     store = typo_store_;
+    flush_every_n = config_.learning_flush_every_n;
+    flush_interval_sec = config_.learning_flush_interval_sec;
   }
   // The store keeps no lock of its own, so typo_store_mutex_ serializes it.
   // Taking it after state_mutex_ has been released keeps Save()'s disk write off
   // the mutex the query path takes several times per request; the two are never
-  // held together, so there is no ordering hazard.
-  std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
-  if (!store->Observe(wrong_reading, correct_reading, now_epoch_sec)) return false;
-  if (!store->Save() && runtime_logger_) {
-    runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "typo_store_save_failed", {});
+  // held together, so there is no ordering hazard. learning_history_mutex_
+  // keeps SetTypoStore from swapping `store` out meanwhile.
+  bool pending = false;
+  {
+    std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+    if (!store->ObserveReadingPair(wrong_reading, correct_reading, now_epoch_sec)) return false;
+    // The learning store's rules (user-learning-enhancement-spec section
+    // 3.1.1): the first observation of a burst saves at once, then every
+    // learning_flush_every_n observations, and the rest after
+    // learning_flush_interval_sec through the flush worker.
+    const auto observed_steady = std::chrono::steady_clock::now();
+    const bool burst_start =
+        typo_unsaved_observations_ == 0 && (!last_successful_typo_save_steady_.has_value() ||
+                                            observed_steady - *last_successful_typo_save_steady_ >=
+                                                std::chrono::seconds(flush_interval_sec));
+    ++typo_unsaved_observations_;
+    typo_last_observation_epoch_sec_ = now_epoch_sec;
+    if (burst_start || flush_interval_sec == 0 ||
+        (flush_every_n > 0 && typo_unsaved_observations_ >= flush_every_n)) {
+      (void)SaveTypoStoreLocked();
+    }
+    pending = TypoSavePendingLocked();
   }
+  if (pending) ScheduleTypoFlush();
   return true;
 }
 
@@ -1479,6 +1541,9 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
       next_config.inference_threads = config_.inference_threads;
     }
   };
+  // The model load boundary saves the typo store too (learning-data-management-
+  // spec section 11), under typo_store_mutex_ alone before state_mutex_.
+  (void)FlushTypoStore();
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     (void)FlushLearningStoreLocked(std::chrono::milliseconds::zero());
@@ -2041,7 +2106,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   CandidatesResult out;
   std::string suggest_reading;
   {
-    learning::TypoCorrectionStore* store = nullptr;
+    learning::TypoLearningStore* store = nullptr;
     std::string mode;
     uint32_t min_count = 0;
     {
@@ -2055,7 +2120,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     // M63-B section 12: a mixed reading is converted as typed.
     if (store && mode != "off" && (!mixed || mixed->typo_correction)) {
       std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
-      auto corrected = store->Lookup(requested_kana, min_count, now_epoch_sec);
+      auto corrected = store->LookupReadingPair(requested_kana, min_count, now_epoch_sec);
       if (corrected && *corrected != requested_kana) {
         if (mode == "auto_replace") {
           out.corrected_reading = std::move(*corrected);
@@ -2941,8 +3006,58 @@ bool InferenceEngine::FlushLearningStore() {
     std::lock_guard<std::mutex> lock(state_mutex_);
     ok = FlushLearningStoreLocked(learning::kTransientFileRetryBudget);
   }
+  ok = FlushTypoStore() && ok;
   std::lock_guard<std::mutex> lock(english_mutex_);
   return SaveEnglishStoreLocked(learning::kTransientFileRetryBudget) && ok;
+}
+
+bool InferenceEngine::SaveTypoStoreLocked() {
+  // While writes are suspended the observations wait in memory for the
+  // suspension to lift (typo-correction-learning-spec section 12.12.2); the
+  // refused write is not a failure.
+  if (!typo_store_ || typo_unsaved_observations_ == 0 || typo_writes_suspended_) return true;
+  // A store that could not be loaded stops saving until the Host restarts
+  // (typo-correction-learning-spec section 12.8); typo_store_load reported it,
+  // and its observations stay in memory without a retry or a warning each time.
+  if (typo_store_->save_blocked()) return false;
+  if (!typo_store_->Save(typo_last_observation_epoch_sec_)) {
+    if (runtime_logger_) {
+      runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "typo_store_save_failed", {});
+    }
+    return false;
+  }
+  typo_unsaved_observations_ = 0;
+  last_successful_typo_save_steady_ = std::chrono::steady_clock::now();
+  return true;
+}
+
+bool InferenceEngine::FlushTypoStore() {
+  bool ok = true;
+  bool pending = false;
+  {
+    std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+    ok = SaveTypoStoreLocked();
+    pending = TypoSavePendingLocked();
+  }
+  // Like the learning store, a failed save is retried after another interval.
+  if (pending) ScheduleTypoFlush();
+  return ok;
+}
+
+bool InferenceEngine::TypoSavePendingLocked() const {
+  return typo_store_ && typo_unsaved_observations_ > 0 && !typo_writes_suspended_ &&
+         !typo_store_->save_blocked();
+}
+
+void InferenceEngine::ScheduleTypoFlush() {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  // An earlier schedule stands, so the interval counts from the first unsaved
+  // observation. With interval 0 every observation saves at once, and a failed
+  // save waits for the next observation, as in the learning store.
+  if (typo_flush_due_steady_.has_value() || config_.learning_flush_interval_sec == 0) return;
+  typo_flush_due_steady_ =
+      std::chrono::steady_clock::now() + std::chrono::seconds(config_.learning_flush_interval_sec);
+  learning_flush_cv_.notify_all();
 }
 
 void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
@@ -3042,11 +3157,24 @@ void InferenceEngine::LearningFlushWorker() {
       continue;
     }
 
+    // The typo store saves under typo_store_mutex_ alone, so the worker lets
+    // go of state_mutex_ for it (the two are never held in that order).
+    if (typo_flush_due_steady_.has_value() &&
+        std::chrono::steady_clock::now() >= *typo_flush_due_steady_) {
+      typo_flush_due_steady_.reset();
+      lock.unlock();
+      (void)FlushTypoStore();
+      lock.lock();
+      continue;
+    }
+    const auto typo_due = typo_flush_due_steady_;
+    const auto wake_due = typo_due.has_value() ? (std::min)(persona_due, *typo_due) : persona_due;
+
     if (learning_erasure_in_progress_ || !store_ || !store_->dirty() ||
         config_.learning_flush_interval_sec == 0 ||
         !first_unsaved_observation_steady_.has_value()) {
-      learning_flush_cv_.wait_until(lock, persona_due, [this]() {
-        return learning_flush_stop_ ||
+      learning_flush_cv_.wait_until(lock, wake_due, [this, typo_due]() {
+        return learning_flush_stop_ || typo_flush_due_steady_ != typo_due ||
                (!learning_erasure_in_progress_ && store_ && store_->dirty() &&
                 config_.learning_flush_interval_sec > 0 &&
                 first_unsaved_observation_steady_.has_value());
@@ -3056,10 +3184,11 @@ void InferenceEngine::LearningFlushWorker() {
 
     const auto flush_deadline = *first_unsaved_observation_steady_ +
                                 std::chrono::seconds(config_.learning_flush_interval_sec);
-    const bool changed =
-        learning_flush_cv_.wait_until(lock, (std::min)(flush_deadline, persona_due), [this]() {
-          return learning_flush_stop_ || learning_erasure_in_progress_ || !store_ ||
-                 !store_->dirty() || config_.learning_flush_interval_sec == 0 ||
+    const bool changed = learning_flush_cv_.wait_until(
+        lock, (std::min)(flush_deadline, wake_due), [this, typo_due]() {
+          return learning_flush_stop_ || typo_flush_due_steady_ != typo_due ||
+                 learning_erasure_in_progress_ || !store_ || !store_->dirty() ||
+                 config_.learning_flush_interval_sec == 0 ||
                  !first_unsaved_observation_steady_.has_value();
         });
     if (changed || std::chrono::steady_clock::now() < flush_deadline) {

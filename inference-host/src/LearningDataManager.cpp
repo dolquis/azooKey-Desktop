@@ -51,6 +51,62 @@ void AppendLearning(LearningDataStore store, const LearningChannel& channel,
   }
 }
 
+// A pattern is one entry per (observed, intended), whatever its typo types
+// and keyboard layouts, since forgetting removes them together
+// (typo-correction-learning-spec section 12.8).
+void AppendTypoPatterns(const learning::TypoLearningStore& typo,
+                        std::vector<LearningDataEntry>& out) {
+  struct Folded {
+    uint64_t accept_count{};
+    uint64_t reject_count{};
+    uint64_t last_updated_epoch_sec{};
+  };
+  std::map<std::pair<std::string, std::string>, Folded> folded;
+  for (auto& pattern : typo.Patterns()) {
+    auto& row = folded[{std::move(pattern.observed_pattern), std::move(pattern.intended_pattern)}];
+    row.accept_count += pattern.accept_count;
+    row.reject_count += pattern.reject_count;
+    row.last_updated_epoch_sec = (std::max)(row.last_updated_epoch_sec, pattern.updated_at);
+  }
+  for (auto& [key, row] : folded) {
+    LearningDataEntry entry;
+    entry.id = LearningEntryId(LearningDataStore::Typo, kTypoPatternChannel, key.first, key.second);
+    entry.channel = std::string(kTypoPatternChannel);
+    entry.reading = key.first;
+    entry.surface = key.second;
+    entry.weight = static_cast<double>(row.accept_count);
+    entry.last_updated_epoch_sec = row.last_updated_epoch_sec;
+    entry.metadata.emplace("accept_count", std::to_string(row.accept_count));
+    entry.metadata.emplace("reject_count", std::to_string(row.reject_count));
+    out.push_back(std::move(entry));
+  }
+}
+
+// Counts what an item holds and erases the copied readings.
+size_t CountTypoReadingPairs(const learning::TypoLearningStore& typo) {
+  auto pairs = typo.ReadingPairs();
+  const size_t count = pairs.size();
+  for (auto& pair : pairs) {
+    learning::SecureErase(pair.wrong_reading);
+    learning::SecureErase(pair.correct_reading);
+  }
+  return count;
+}
+
+void EraseTypoPatterns(std::vector<learning::TypoPatternRecord>& patterns) {
+  for (auto& pattern : patterns) {
+    learning::SecureErase(pattern.observed_pattern);
+    learning::SecureErase(pattern.intended_pattern);
+  }
+}
+
+size_t CountTypoPatterns(const learning::TypoLearningStore& typo) {
+  auto patterns = typo.Patterns();
+  const size_t count = patterns.size();
+  EraseTypoPatterns(patterns);
+  return count;
+}
+
 std::vector<LearningDataEntry> CollectEntries(const LearningDataStores& stores,
                                               LearningDataStore store) {
   std::vector<LearningDataEntry> entries;
@@ -75,7 +131,7 @@ std::vector<LearningDataEntry> CollectEntries(const LearningDataStores& stores,
       break;
     case LearningDataStore::Typo:
       if (!stores.typo) break;
-      for (const auto& typo : stores.typo->All()) {
+      for (const auto& typo : stores.typo->ReadingPairs()) {
         LearningDataEntry entry;
         entry.id = LearningEntryId(store, "", typo.wrong_reading, typo.correct_reading);
         entry.reading = typo.wrong_reading;
@@ -84,6 +140,7 @@ std::vector<LearningDataEntry> CollectEntries(const LearningDataStores& stores,
         entry.last_updated_epoch_sec = typo.record.last_updated_epoch_sec;
         entries.push_back(std::move(entry));
       }
+      AppendTypoPatterns(*stores.typo, entries);
       break;
     case LearningDataStore::AutoWord:
       if (!stores.auto_word) break;
@@ -116,8 +173,14 @@ bool ForgetEntry(const LearningDataStores& stores, LearningDataStore store,
       return false;
     case LearningDataStore::UserDictionary:
       return stores.user_dictionary && stores.user_dictionary->Remove(entry.surface, entry.reading);
-    case LearningDataStore::Typo:
-      return stores.typo && stores.typo->Remove(entry.reading, entry.surface);
+    case LearningDataStore::Typo: {
+      if (!stores.typo) return false;
+      const auto result =
+          entry.channel == kTypoPatternChannel
+              ? stores.typo->ForgetPattern(entry.reading, entry.surface, stores.now_epoch_sec)
+              : stores.typo->ForgetReadingPair(entry.reading, entry.surface, stores.now_epoch_sec);
+      return result == learning::TypoForgetResult::Removed;
+    }
     case LearningDataStore::AutoWord:
       return stores.auto_word && stores.auto_word->Reject(entry.surface, entry.reading);
   }
@@ -144,6 +207,7 @@ struct ParsedItems {
   std::vector<ParsedLearning> learning;
   std::unique_ptr<learning::UserDictionary> user_dictionary;
   std::unique_ptr<learning::TypoCorrectionStore> typo;
+  std::optional<std::vector<learning::TypoPatternRecord>> typo_patterns;
   std::unique_ptr<learning::AutoWordStore> auto_word;
 };
 
@@ -270,7 +334,14 @@ std::optional<std::vector<BackupItem>> CollectBackupItems(
   }
   if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && stores.typo) {
     items.push_back(BackupItem{"typo_corrections", ItemFile("typo_corrections.tsv", encrypt),
-                               stores.typo->size(), stores.typo->SerializeText()});
+                               CountTypoReadingPairs(*stores.typo),
+                               stores.typo->SerializeReadingPairsText()});
+    // Only the v2 store has patterns (spec section 5).
+    if (stores.typo->mode() == learning::TypoLearningMode::V2) {
+      items.push_back(BackupItem{"typo_patterns", ItemFile("typo_patterns.tsv", encrypt),
+                                 CountTypoPatterns(*stores.typo),
+                                 stores.typo->SerializePatternsText()});
+    }
   }
   if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) && stores.auto_word) {
     items.push_back(BackupItem{"auto_words", ItemFile("auto_words.tsv", encrypt),
@@ -371,6 +442,11 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
           std::make_unique<learning::TypoCorrectionStore>(std::filesystem::path{}, crypto);
       parsed_or_fail(parsed.typo->LoadText(item->plaintext));
     }
+    if (const auto* item = FindItem(*items, "typo_patterns")) {
+      parsed.typo_patterns.emplace();
+      parsed_or_fail(
+          learning::TypoLearningStore::ParsePatternsText(item->plaintext, *parsed.typo_patterns));
+    }
   }
   if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) && stores.auto_word) {
     if (const auto* item = FindItem(*items, "auto_words")) {
@@ -379,8 +455,30 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
     }
   }
   for (auto& item : *items) learning::SecureErase(item.plaintext);
-  if (result.error != BackupError::None) return result;
+  if (result.error != BackupError::None) {
+    if (parsed.typo_patterns) EraseTypoPatterns(*parsed.typo_patterns);
+    return result;
+  }
 
+  // The typo store merges in SQLite and can fail without changing anything;
+  // it goes first so such a failure leaves the other stores as they were.
+  if (parsed.typo_patterns) {
+    auto counts = stores.typo->MergePatterns(*parsed.typo_patterns, policy, stores.now_epoch_sec);
+    EraseTypoPatterns(*parsed.typo_patterns);
+    if (!counts) {
+      result.error = BackupError::Io;
+      return result;
+    }
+    result.counts["typo_patterns"] = *counts;
+  }
+  if (parsed.typo) {
+    auto counts = stores.typo->MergeReadingPairs(*parsed.typo, policy);
+    if (!counts) {
+      result.error = BackupError::Io;
+      return result;
+    }
+    result.counts["typo_corrections"] = *counts;
+  }
   for (const auto& item : parsed.learning) {
     result.counts[item.item_name] = item.target->Merge(*item.scratch, policy);
   }
@@ -388,7 +486,6 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
     result.counts["user_dictionary"] =
         stores.user_dictionary->Merge(*parsed.user_dictionary, policy);
   }
-  if (parsed.typo) result.counts["typo_corrections"] = stores.typo->Merge(*parsed.typo, policy);
   if (parsed.auto_word) {
     result.counts["auto_words"] = stores.auto_word->Merge(*parsed.auto_word, policy);
   }

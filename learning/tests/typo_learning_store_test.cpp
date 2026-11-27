@@ -669,10 +669,14 @@ TEST_F(TypoLearningStoreTest, RetentionLimitsApplyBeforeSaving) {
   EXPECT_EQ(store->Patterns().size(), 1u);
 }
 
-TEST_F(TypoLearningStoreTest, SuspendedWritesNeitherLearnNorTouchFiles) {
+// Section 12.12.2: suspended writes refuse learning and saving, while
+// forgetting and resetting record no input and still write.
+TEST_F(TypoLearningStoreTest, SuspendedWritesRefuseLearningButNotDeletion) {
   MakeMigratedV2();
   auto store = MakeStore();
   ASSERT_EQ(store->Load(kNow).mode, TypoLearningMode::V2);
+  // Learned before the suspension and not saved yet.
+  ASSERT_TRUE(store->ObserveReadingPair("おはよお", "おはよう", kNow));
   const auto v2_bytes = ReadBytes(EncryptedPathFor(paths_.v2_store));
   const auto backup_bytes = ReadBytes(EncryptedPathFor(paths_.v1_backup));
 
@@ -683,14 +687,23 @@ TEST_F(TypoLearningStoreTest, SuspendedWritesNeitherLearnNorTouchFiles) {
                                                      TypoPatternOutcome::Accept, kNow))
                    .has_value());
   EXPECT_FALSE(store->Save(kNow + 1));
-  EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Failed);
-  EXPECT_EQ(store->ForgetPattern("j_insert_after_u", "j_delete_after_u", kNow),
-            TypoForgetResult::Failed);
-  EXPECT_FALSE(store->ResetAll(kNow));
   EXPECT_EQ(ReadBytes(EncryptedPathFor(paths_.v2_store)), v2_bytes);
   EXPECT_EQ(ReadBytes(EncryptedPathFor(paths_.v1_backup)), backup_bytes);
   EXPECT_FALSE(store->LookupReadingPair("きょうわ", 1, kNow).has_value());
   EXPECT_TRUE(store->Patterns().empty());
+
+  // The forget saves what memory holds: the earlier observation, but never
+  // the one refused during the suspension.
+  EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Removed);
+  EXPECT_FALSE(Contains(DecryptedText(paths_.v1_backup), "こんちには"));
+  const auto saved = DecryptedText(paths_.v2_store);
+  EXPECT_FALSE(Contains(saved, "こんちには"));
+  EXPECT_TRUE(Contains(saved, "おはよお"));
+  EXPECT_FALSE(Contains(saved, "きょうわ"));
+  EXPECT_TRUE(store->ResetAll(kNow));
+  EXPECT_FALSE(Exists(EncryptedPathFor(paths_.v1_backup)));
+  EXPECT_TRUE(store->ReadingPairs().empty());
+  EXPECT_FALSE(Contains(DecryptedText(paths_.v2_store), "おはよお"));
 
   store->SetWritesSuspended(false);
   EXPECT_TRUE(store->ObserveReadingPair("きょうわ", "きょうは", kNow));
@@ -906,9 +919,54 @@ TEST_F(TypoLearningStoreTest, V1FallbackForgetsAndResetsTheBackupFirst) {
   EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Removed);
   EXPECT_FALSE(Contains(DecryptedText(paths_.v1_backup), "こんちには"));
   EXPECT_FALSE(Contains(DecryptedText(v1_), "こんちには"));
+  auto corrupt_copy = EncryptedPathFor(paths_.v2_store);
+  corrupt_copy += ".corrupt-1";
+  WriteBytes(corrupt_copy, "an earlier corrupt file");
   EXPECT_TRUE(store->ResetAll(kNow));
   EXPECT_FALSE(Exists(EncryptedPathFor(paths_.v1_backup)));
+  EXPECT_FALSE(Exists(corrupt_copy));
   EXPECT_TRUE(store->ReadingPairs().empty());
+}
+
+// Section 12.8 "学習の削除" step 2: the reset removes the copies a corrupt v2
+// file left under either of its names, and no other store's copy.
+TEST_F(TypoLearningStoreTest, ResetRemovesTheCorruptV2CopiesUnderBothNamesOnly) {
+  WriteEncrypted(paths_.v2_store, "this is not a database file at all, only text");
+  auto store = MakeStore();
+  const auto result = store->Load(kNow);
+  ASSERT_EQ(result.mode, TypoLearningMode::V2);
+  ASSERT_TRUE(result.rebuilt_from_corruption);
+  auto encrypted_copy = EncryptedPathFor(paths_.v2_store);
+  encrypted_copy += ".corrupt-" + std::to_string(kNow);
+  ASSERT_TRUE(Exists(encrypted_copy));
+  auto logical_copy = paths_.v2_store;
+  logical_copy += ".corrupt-1";
+  WriteBytes(logical_copy, "an earlier corrupt file");
+  const auto other_copy = dir_ / "learning.v2.tsv.enc.corrupt-1";
+  WriteBytes(other_copy, "a learning store copy");
+
+  ASSERT_TRUE(store->ResetAll(kNow));
+  EXPECT_FALSE(Exists(encrypted_copy));
+  EXPECT_FALSE(Exists(logical_copy));
+  EXPECT_TRUE(Exists(other_copy));
+  EXPECT_EQ(CountCorruptCopies(dir_), 1u);
+}
+
+TEST_F(TypoLearningStoreTest, ACopyThatCannotBeRemovedFailsTheResetAndKeepsThePublishedContents) {
+  MakeMigratedV2();
+  auto store = MakeStore();
+  ASSERT_EQ(store->Load(kNow).mode, TypoLearningMode::V2);
+  // A directory that is not empty cannot be removed in its place.
+  auto copy = EncryptedPathFor(paths_.v2_store);
+  copy += ".corrupt-1";
+  ASSERT_TRUE(std::filesystem::create_directory(copy));
+  WriteBytes(copy / "held", "x");
+  const auto v2_bytes = ReadBytes(EncryptedPathFor(paths_.v2_store));
+
+  EXPECT_FALSE(store->ResetAll(kNow));
+  EXPECT_TRUE(Exists(copy));
+  EXPECT_EQ(ReadBytes(EncryptedPathFor(paths_.v2_store)), v2_bytes);
+  EXPECT_EQ(store->LookupReadingPair("こんちには", 3, kNow), "こんにちは");
 }
 
 TEST_F(TypoLearningStoreTest, BackupItemsRoundTripAndMerge) {
@@ -1051,7 +1109,7 @@ TEST_F(TypoLearningStoreTest, AnUnreadableBackupAloneIsReportedAsAnUnreadableV1S
   EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Failed);
 }
 
-TEST_F(TypoLearningStoreTest, SuspendedWritesTouchNothingWhileReadingV1AsItIs) {
+TEST_F(TypoLearningStoreTest, SuspendedWritesWhileReadingV1AsItIsRefuseLearningButNotDeletion) {
   WriteEncrypted(v1_, std::string(kHeader) + "こんちには\tこんにちは\t3 1700000000\n");
   crypto_.fail_encrypt = true;
   auto store = MakeStore();
@@ -1061,11 +1119,15 @@ TEST_F(TypoLearningStoreTest, SuspendedWritesTouchNothingWhileReadingV1AsItIs) {
   store->SetWritesSuspended(true);
   EXPECT_FALSE(store->ObserveReadingPair("こんちには", "こんにちは", kNow));
   EXPECT_FALSE(store->Save(kNow));
-  EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Failed);
-  EXPECT_FALSE(store->ResetAll(kNow));
   EXPECT_EQ(ReadBytes(EncryptedPathFor(v1_)), v1_bytes);
   EXPECT_EQ(store->LookupReadingPair("こんちには", 3, kNow), "こんにちは");
   EXPECT_FALSE(store->LookupReadingPair("こんちには", 4, kNow).has_value());
+
+  // Deletion records no input and still writes the v1 store.
+  EXPECT_EQ(store->ForgetReadingPair("こんちには", "こんにちは", kNow), TypoForgetResult::Removed);
+  EXPECT_FALSE(Contains(DecryptedText(v1_), "こんちには"));
+  EXPECT_TRUE(store->ResetAll(kNow));
+  EXPECT_TRUE(store->ReadingPairs().empty());
 }
 
 TEST_F(TypoLearningStoreTest, AFailedReadBackRemovesTheUnmarkedV2AndReadsV1AsItIs) {

@@ -217,6 +217,9 @@ Response:
 | `user_dict` | 単語を削除する |
 | `auto_word` | 状態を `rejected` にする。削除すると同じ語を再び候補として提案するため、行は残す |
 
+`typo` は、Host の `privacy_mode_secure` が立っている間は書込みを止める（`docs/typo-correction-learning-spec.md` §12.12.2）。
+止めるのは観測の学習と保存、import の保存で、忘却は入力を記録しないので止めず、その間も通常どおり成功・失敗を返す。
+
 `learning` の 0 化した行を保存で除くのは、忘れた語をディスクに残さないためである。
 `learning_min_weight` の GC（`user-learning-enhancement-spec.md` §3.1.1）が無効でも除く。
 忘却した組は、前方一致の `min_score` の値によらず予測に出さない。
@@ -334,6 +337,8 @@ counts のキーは archive の item 名（§5.1）である。
   暗号化・保存・旧形式の書き戻し・再試行は状態と変換器のロックの外で行い、返る前に結果を反映する。
   保存中の問い合わせは直前に公開されたストアを参照できる。学習の反映と変換器の履歴更新は同じ区間で行う。
   定期 flush は操作中の snapshot を上書きせず、操作終了後に再開する。
+  `typo` の忘却・全削除は複写せず、v2 ストアが自分でファイルを書き、失敗したときは公開している内容を変えない。
+  書く間は状態のロックを持たず typo ストアのロックを持つので、補正の照会はその間待つ。
   ユーザー辞書は、`AddUserWord` と同じくファイルロックを取り、ディスクの内容を読み直した複写へ変更する。
   `AddUserWord` / `RemoveUserWord` と import も、ファイルロックの待ちと読み直し・保存を状態のロックの外で行い、
   保存に成功したときだけ複写を公開する。import は複写への merge だけを状態のロックの中で行う。
@@ -347,6 +352,8 @@ counts のキーは archive の item 名（§5.1）である。
   いずれも変換の経路を止める時間を短くするためである。
 - import の後の保存に失敗したときは `error = "io"` を返す。ユーザー辞書は変更前に戻す。
   学習・typo・auto_word は merge した内容をメモリに残し、次の flush で保存を再試行する。
+  typo の merge（SQLite）自体が失敗したときも `io` を返し、typo より後に merge するストアは変えない。
+  先に merge できた typo の item はメモリに残り、次の flush で保存する。
   設定アプリは、取り込みがまだディスクに無いことを利用者に伝える。
 - 学習の忘却は、v2 側に組が無くても M7 ファイルからの除去を試みる。M7 ファイルからの除去に失敗すると
   `save_failed` を返す（v2 側の忘却は保存済みでありうる）。このとき一覧からは組が消えて id では届かないので、
@@ -402,6 +409,7 @@ counts のキーは archive の item 名（§5.1）である。
 このため `save_failed` の後も Host が提示する学習の内容は変わらない。
 `learning` のリセット成功時は、変換器がメモリに持つ確定履歴も全て消す。
 保存に失敗したリセットでは、変換器の履歴を保つ。
+`typo` の全削除は、Host の `privacy_mode_secure` で書込みを止めている間（§4.2）も止めず、通常どおり成功・失敗を返す。
 `auto_word` の忘却・全削除と新語の承認・却下は、writer の mutex を保持してメモリ上の写しを変更・保存する。
 保存成功時だけ表を公開する。同時操作はその後に進むため、失敗時に承認・却下を上書きしない。
 `auto_word` の全削除は、表を空にして保存した後、writer の mutex を放してから英単語辞書の追加語を消す
@@ -441,9 +449,9 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
   backup には DB を入れない。読みの組は item `typo_corrections` に v1 の TSV のまま書き、パターンは item
   `typo_patterns` に書き、`typo_events` は入れない。import はどちらもテキストとして解析し、archive の
   バイト列を SQLite として開かない（平文の export もありうるため）。v2 を持たない Host は `typo_patterns` を
-  知らないので読み飛ばし、`typo_corrections` は従来どおり取り込む。Host を v2 のストアへ切り替えるのは
-  DEV-2149 の組み込みであり、それまでの Host は v1 のストアから `typo_corrections` だけを書く。`typo_patterns` の
-  書き出しと merge は `learning/` の `TypoLearningStore` にだけある。
+  知らないので読み飛ばし、`typo_corrections` は従来どおり取り込む。「v1 のまま読む」起動
+  （`docs/typo-correction-learning-spec.md` §12.8）の Host は `typo_corrections` だけを書き、import の
+  `typo_patterns` は取り込まずに skipped に数える。
   - `typo_patterns` の 1 行目は `# azookey-typo-patterns-tsv escaped=1` で、各行は
     `observed_pattern`、`intended_pattern`、`typo_type`、`keyboard_layout`、採用の回数、拒否の回数、
     `last_used_at`、`created_at`、`updated_at` をタブで区切る。文字列の列は `typo_corrections` と同じ
@@ -618,6 +626,12 @@ privacy のロックを archive の読み書きの間は持たない（確定の
 そのため、プロセスが終了する瞬間には未保存の観測が残りうる。
 本節は、どの終了経路まで保存を保証するか、保証しない経路で最悪どれだけ失われるかを定める。
 本節の対象は Host が書く `learning.tsv` であり、`user_dict.json` のように操作のたびに保存するストアは含まない。
+M55 の typo v2 ストア（`docs/typo-correction-learning-spec.md` §12.8）も、未保存の観測を別に数えて `learning.tsv` と同じ契機
+（burst 先頭、件数、時間、明示呼び出し、モデルロード境界、終了時）で保存するので、本節に含む。違いは次の 3 点である。
+typo の保存は契機を問わず下記の一時的な競合の再試行を行う。観測と flush の契機（モデルロード境界と書込みの停止の解除を含む）では、
+その間に状態ロックではなく typo ストアのロックを持つ。import は状態ロックの中で保存する（§4.5）。
+補正の照会も typo ストアのロックを取るので、保存が終わるまで待つ。保存の失敗は stderr ではなく構造化ログ（`typo_store_save_failed`）に出す。
+書込みを止めている間（同 §12.12.2）は保存しないので、止めたまま終了すると未保存の観測と import の内容は失われる。
 本節は終了経路ごとの flush の保証、burst 先頭の同期 flush、失われうる量の正典であり、
 `docs/user-learning-enhancement-spec.md` §3.1.1 と `docs/windows-tsf-host-architecture.md`「学習」から参照される。
 

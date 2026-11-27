@@ -1200,6 +1200,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envel
   }
   if (config_.neologd_layer) p.neologd_layer = config_.neologd_layer->Snapshot();
   p.backend_selection = config_.backend_selection;
+  p.typo_store_rebuilt = config_.typo_store_rebuilt;
   return MakeResponse(req, ipc::BuildQueryDiagnostics(p));
 }
 
@@ -2588,6 +2589,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
 
   std::lock_guard<std::mutex> lock(*config_.update_config_mutex);
   const auto load_result = settings_store_->Reload();
+  // typo-correction-learning-spec section 12.12.2: before the invalid return
+  // below, since an invalid reload publishes secure (fail closed) without
+  // applying any config. Read first, so that the privacy lock is not held
+  // into the engine.
+  const bool privacy_secure = settings_store_->LockPrivacyPolicy().privacy_mode_secure;
+  engine_->SetTypoWritesSuspended(privacy_secure);
   core::CrashReporting::SetConsent(load_result.settings.crash_report_consent == "local"
                                        ? core::CrashConsent::Local
                                        : core::CrashConsent::Off);

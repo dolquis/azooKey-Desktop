@@ -1587,21 +1587,32 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
                                                      : "Runtime is in safe mode"),
            {{"state", j::Value(fallback_state)}});
 
+  // The Host reports a typo v2 store it rebuilt from a corrupt file at its
+  // start; the warning lasts for that run.
+  const bool typo_store_rebuilt =
+      snapshot.host_diagnostics && snapshot.host_diagnostics->typo_store_rebuilt;
   const auto learning_status =
       !snapshot.learning_store_valid
           ? Status::Error
-          : (snapshot.learning_store_migration_available || snapshot.learning_store_legacy_retained
+          : (snapshot.learning_store_migration_available ||
+                     snapshot.learning_store_legacy_retained || typo_store_rebuilt
                  ? Status::Warning
                  : Status::Ok);
+  j::Object learning_details{
+      {"entries", j::Value(snapshot.learning_entries)},
+      {"legacy_retained", j::Value(snapshot.learning_store_legacy_retained)}};
+  if (typo_store_rebuilt) learning_details.emplace("typo_store_rebuilt", j::Value(true));
   AddCheck(report, "D-010", "learning_store", learning_status,
-           learning_status == Status::Error ? "Learning store is unreadable or corrupt"
-                                            : (snapshot.learning_store_legacy_retained
-                                                   ? "Legacy learning store cleanup is pending"
-                                                   : (snapshot.learning_store_migration_available
-                                                          ? "Legacy learning store can be migrated"
-                                                          : "Learning store is readable")),
-           {{"entries", j::Value(snapshot.learning_entries)},
-            {"legacy_retained", j::Value(snapshot.learning_store_legacy_retained)}});
+           learning_status == Status::Error
+               ? "Learning store is unreadable or corrupt"
+               : (snapshot.learning_store_legacy_retained
+                      ? "Legacy learning store cleanup is pending"
+                      : (snapshot.learning_store_migration_available
+                             ? "Legacy learning store can be migrated"
+                             : (typo_store_rebuilt
+                                    ? "Typo learning store was rebuilt from a corrupt file"
+                                    : "Learning store is readable"))),
+           std::move(learning_details));
 
   AddCheck(report, "D-011", "user_dictionary",
            snapshot.user_dict_valid ? Status::Ok : Status::Error,

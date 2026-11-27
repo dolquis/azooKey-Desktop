@@ -14,7 +14,7 @@
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/ImportConflictPolicy.h"
 #include "azookey/learning/LearningStore.h"
-#include "azookey/learning/TypoCorrectionStore.h"
+#include "azookey/learning/TypoLearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace azookey::host {
@@ -39,6 +39,9 @@ inline constexpr size_t kMaxLearningListLimit = 500;
 // Learning channels (DEV-1196 keeps English learning in its own file).
 inline constexpr std::string_view kKanaLearningChannel = "kana";
 inline constexpr std::string_view kEnglishLearningChannel = "english";
+// The typo store's pattern entries (typo-correction-learning-spec section
+// 12.8); its reading pairs keep the empty channel.
+inline constexpr std::string_view kTypoPatternChannel = "pattern";
 
 struct LearningDataEntry {
   // Stable across restarts: derived from the store, channel and key (no
@@ -66,12 +69,15 @@ struct LearningChannel {
 
 // Borrowed stores; a null pointer means the store is unavailable. The caller
 // serializes access (the stores other than AutoWordStore are not
-// thread-safe) and saves the stores after Forget or Import.
+// thread-safe) and saves the stores after Forget or Import, except the typo
+// store, whose Forget writes its file itself.
 struct LearningDataStores {
   std::vector<LearningChannel> learning;
   learning::UserDictionary* user_dictionary{};
-  learning::TypoCorrectionStore* typo{};
+  learning::TypoLearningStore* typo{};
   learning::AutoWordStore* auto_word{};
+  // The typo store's clock for Forget and the pattern merge.
+  uint64_t now_epoch_sec{};
 };
 
 std::string LearningEntryId(LearningDataStore store, std::string_view channel,

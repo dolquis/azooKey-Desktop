@@ -38,7 +38,7 @@
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Persona.h"
 #include "azookey/learning/Reranker.h"
-#include "azookey/learning/TypoCorrectionStore.h"
+#include "azookey/learning/TypoLearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/learning/UserDictionaryTextImport.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -312,7 +312,15 @@ class InferenceEngine {
   // External, non-owning. May be nullptr (no user dictionary).
   void SetUserDictionary(learning::UserDictionary* dict);
   // External, non-owning; nullptr disables typo correction entirely (M35).
-  void SetTypoStore(learning::TypoCorrectionStore* store);
+  // The store is the M55 v2 store (typo-correction-learning-spec section
+  // 12.8), already loaded; the engine applies the writes suspension to it.
+  void SetTypoStore(learning::TypoLearningStore* store);
+  // Section 12.12.2: while the Host's secure setting is on, the typo store
+  // neither learns nor saves what it learned; forgetting and resetting still
+  // write. The lift saves or schedules what waits. The caller passes the published
+  // privacy_mode_secure at startup and after every settings reload,
+  // including one that failed (which publishes secure).
+  void SetTypoWritesSuspended(bool suspended);
   // External, non-owning; nullptr disables new-word mining entirely (M36-A).
   void SetAutoWordStore(learning::AutoWordStore* store);
   // M60: the English learning channel (UserDataPaths::english_learning_path).
@@ -553,9 +561,11 @@ class InferenceEngine {
                          const std::string& app_name = {}, const std::string& left_context = {});
   bool CommitSegmentsObservation(const ipc::CommitSegmentsObservationRequest& request,
                                  uint64_t now_epoch_sec);
-  // M35: records one observed (mistyped reading -> retyped reading) pair and
-  // persists it. Returns false when there is no store, or when the pair fails
-  // the accept filters.
+  // M35: records one observed (mistyped reading -> retyped reading) pair.
+  // Saved by count and time like the learning store (section 12.8 and
+  // user-learning-enhancement-spec section 3.1.1). Returns false when there is
+  // no store, or when the store refused the pair (accept filters, suspended
+  // writes).
   bool ObserveTypo(const std::string& wrong_reading, const std::string& correct_reading,
                    uint64_t now_epoch_sec);
   // M54 correction (user-learning-enhancement-spec section 4, DEV-1529).
@@ -744,6 +754,18 @@ class InferenceEngine {
   void RecordLearningSaveFailureLocked();
   void RecordUserDictionaryFailureLocked(const char* error);
   void LearningFlushWorker();
+  // The typo store's share of the flush rules. The Locked one expects
+  // typo_store_mutex_ held; FlushTypoStore takes it. Neither takes
+  // state_mutex_. True when nothing is left unsaved.
+  bool SaveTypoStoreLocked();
+  bool FlushTypoStore();
+  // Whether unsaved observations wait for a save that can still succeed:
+  // none while writes are suspended or the store is blocked. Expects
+  // typo_store_mutex_ held.
+  bool TypoSavePendingLocked() const;
+  // Asks the flush worker to save the typo store after
+  // learning_flush_interval_sec; takes state_mutex_ alone.
+  void ScheduleTypoFlush();
   ResetOutcome ResetLearningChannels();
   void RefreshPersonaLocked();
   void RefreshDictionaryLocked();
@@ -755,7 +777,9 @@ class InferenceEngine {
   learning::LearningStore* store_;
   learning::Reranker reranker_;
   learning::UserDictionary* user_dict_{nullptr};
-  learning::TypoCorrectionStore* typo_store_{nullptr};
+  // Written under both state_mutex_ and typo_store_mutex_, so either lock
+  // reads it.
+  learning::TypoLearningStore* typo_store_{nullptr};
   learning::AutoWordStore* auto_word_store_{nullptr};
   const learning::ByteCrypto* backup_crypto_{nullptr};
   // Guards the English store and the English dictionary cache. Only the
@@ -783,11 +807,18 @@ class InferenceEngine {
   const learning::UserDictionary* indexed_user_dict_{nullptr};
   uint64_t indexed_user_revision_{};
   bool user_dictionary_enabled_{true};
-  // Serializes TypoCorrectionStore, which keeps no lock of its own. The query
+  // Serializes TypoLearningStore, which keeps no lock of its own. The query
   // path holds it on its own, so the store's disk write does not stall queries
   // that take state_mutex_ several times per request; only the learning data
   // operations take it together with state_mutex_ (one std::scoped_lock).
+  // Nothing takes state_mutex_ while holding it.
   mutable std::mutex typo_store_mutex_;
+  // Guarded by typo_store_mutex_: the batching of typo saves (count, burst
+  // start, the epoch the next save stamps) and the secure suspension.
+  size_t typo_unsaved_observations_{0};
+  uint64_t typo_last_observation_epoch_sec_{0};
+  std::optional<std::chrono::steady_clock::time_point> last_successful_typo_save_steady_;
+  bool typo_writes_suspended_{false};
   mutable std::mutex state_mutex_;
   mutable std::mutex converter_call_mutex_;
   // Serializes commits with erasure across disk writes and the reset's final
@@ -840,6 +871,8 @@ class InferenceEngine {
   std::thread learning_flush_thread_;
   std::thread model_preload_thread_;
   bool learning_flush_stop_{false};
+  // Guarded by state_mutex_: when the flush worker saves the typo store.
+  std::optional<std::chrono::steady_clock::time_point> typo_flush_due_steady_;
 };
 
 }  // namespace azookey::host

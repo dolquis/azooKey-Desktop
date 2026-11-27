@@ -12,8 +12,8 @@
 
   Targets every file under -DataDirectory (default %LOCALAPPDATA%\azooKey\data) plus
   the known stores (learning.tsv, learning.v2.tsv, user_dict.json,
-  typo_corrections.tsv, auto_words.tsv, english_learning.tsv, english_learning.v2.tsv
-  and their .enc).
+  typo_corrections.tsv, typo_learning.v2.db, typo_corrections.v1.tsv.bak,
+  auto_words.tsv, english_learning.tsv, english_learning.v2.tsv and their .enc).
   Known stores are recorded with exists=false when missing.
 
   Only the relative path, existence, size, line count, last write time (UTC) and
@@ -64,6 +64,8 @@ $script:LearningSnapshotKnownStores = @(
   "learning.v2.tsv",
   "user_dict.json",
   "typo_corrections.tsv",
+  "typo_learning.v2.db",
+  "typo_corrections.v1.tsv.bak",
   "auto_words.tsv",
   "english_learning.tsv",
   "english_learning.v2.tsv"

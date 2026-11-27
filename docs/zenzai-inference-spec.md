@@ -538,7 +538,7 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 （`docs/legacy-parity-spec.md` §5.4）。
 `inference-host/src/InferenceEngine.cpp` の `QueryCandidatesExImpl` は次の順で処理する。
 
-1. **typo 補正読みの解決**: `TypoCorrectionStore::Lookup` の結果を、`auto_replace` なら
+1. **typo 補正読みの解決**: `TypoLearningStore::LookupReadingPair` の結果を、`auto_replace` なら
    `corrected_reading` に設定し、以降の辞書検索・変換・rerank に同じ補正読みを使う。
    `suggest` なら元の読みを保ち、補正読みを手順 10 の提案用に保持する。
 2. **辞書レイヤの完全一致検索**: `RefreshDictionaryLocked` の後、

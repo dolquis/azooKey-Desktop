@@ -380,6 +380,7 @@ Response:
         "os_build": uint32, "winml_os_eligible": bool, "on_battery": bool
       },
       "prompt_format": "zenz-v3" | "kanakanji-edge-v1"   (optional, ロード中モデルの値),
+      "typo_store_rebuilt": true   (optional, typo v2 をその起動で破損から作り直したときだけ存在),
       "ep": str (optional, R2/winml 時の選択 EP 名),
       "ep_state": str (optional, "NotPresent"|"NotReady"|"Ready"|"Registered"|"Failed"),
       "ep_last_error": str (optional, EP 取得・登録失敗の HRESULT/診断文; `docs/copilot-pc-backend-spec.md` §4.6),
@@ -418,6 +419,12 @@ OS build 不明を表す。SafeMode の probe 省略時は件数と bool も 0 /
 reader は欠落と未知の値を「無し」として扱い、payload 全体は不正にしない。値は
 2 つの固定名だけで、パスや利用者の入力を含まない。診断 CLI の JSON は `D-008` の
 `details.prompt_format` に同じ値を載せる（省略時は載せない）。
+
+`typo_store_rebuilt` は protocol v1 への省略可能な追加フィールドで、Host がその起動で M55 の typo v2 ストアを
+破損から作り直したとき（`docs/typo-correction-learning-spec.md` §12.8）だけ true で載せる。それ以外と古い Host では
+省略する。reader は欠落と型違いを false として扱い、payload 全体は不正にしない。診断 CLI は D-010 を `warning` にし、
+`details.typo_store_rebuilt` に true を載せる（false のときは載せない）。学習ストアの `error` と、cleanup 待ち・
+migration 可能の `warning` の message を優先する。
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
 `last_error` / `ep_last_error` は失敗時にユーザーパスを含みうるため、保存前に

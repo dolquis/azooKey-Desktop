@@ -17,6 +17,14 @@
 
 namespace azookey::host {
 
+namespace {
+uint64_t WallClockEpochSec() {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count());
+}
+}  // namespace
+
 void InferenceEngine::SetBackupCrypto(const learning::ByteCrypto* crypto) {
   std::scoped_lock lock(state_mutex_);
   backup_crypto_ = crypto;
@@ -31,6 +39,7 @@ LearningDataStores InferenceEngine::LearningDataStoresLocked() {
   stores.user_dictionary = user_dict_;
   stores.typo = typo_store_;
   stores.auto_word = auto_word_store_;
+  stores.now_epoch_sec = WallClockEpochSec();
   return stores;
 }
 
@@ -71,17 +80,27 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
       return ForgetOutcome::NotFound;
     }
     case LearningDataStore::Typo: {
-      std::optional<learning::TypoCorrectionStore> snapshot;
-      {
-        std::scoped_lock lock(state_mutex_, typo_store_mutex_);
-        if (!typo_store_) return ForgetOutcome::NotFound;
-        snapshot = *typo_store_;
+      // The store writes its file itself and leaves what it publishes as it
+      // was when that fails. The write runs under typo_store_mutex_ without
+      // state_mutex_; a query that looks up a reading pair takes
+      // typo_store_mutex_ and waits for it, as it waits for an observation's
+      // save. learning_history_mutex_ keeps typo_store_ in place.
+      std::lock_guard typo_lock(typo_store_mutex_);
+      if (!typo_store_) return ForgetOutcome::NotFound;
+      const auto result =
+          entry->channel == kTypoPatternChannel
+              ? typo_store_->ForgetPattern(entry->reading, entry->surface, stores.now_epoch_sec)
+              : typo_store_->ForgetReadingPair(entry->reading, entry->surface,
+                                               stores.now_epoch_sec);
+      switch (result) {
+        case learning::TypoForgetResult::Removed:
+          return ForgetOutcome::Forgotten;
+        case learning::TypoForgetResult::NotFound:
+          return ForgetOutcome::NotFound;
+        case learning::TypoForgetResult::Failed:
+          break;
       }
-      if (!snapshot->Remove(entry->reading, entry->surface)) return ForgetOutcome::NotFound;
-      const bool saved = snapshot->Save();
-      std::scoped_lock lock(state_mutex_, typo_store_mutex_);
-      *typo_store_ = std::move(*snapshot);
-      return saved ? ForgetOutcome::Forgotten : ForgetOutcome::SaveFailed;
+      return ForgetOutcome::SaveFailed;
     }
     case LearningDataStore::AutoWord: {
       if (!auto_word_store_) return ForgetOutcome::NotFound;
@@ -293,17 +312,13 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
     case LearningDataStore::Learning:
       break;  // Handled above, including the converter history reset.
     case LearningDataStore::Typo: {
-      std::optional<learning::TypoCorrectionStore> snapshot;
-      {
-        std::scoped_lock lock(state_mutex_, typo_store_mutex_);
-        if (!typo_store_) return ResetOutcome::Unavailable;
-        if (typo_store_->save_blocked()) return ResetOutcome::SaveFailed;
-        snapshot = *typo_store_;
-      }
-      snapshot->Reset();
-      if (!snapshot->Save()) return ResetOutcome::SaveFailed;
-      std::scoped_lock lock(state_mutex_, typo_store_mutex_);
-      *typo_store_ = std::move(*snapshot);
+      // As in the forget above. ResetAll refuses a store that failed to load,
+      // and changes nothing then; suspended writes do not stop it.
+      std::lock_guard typo_lock(typo_store_mutex_);
+      if (!typo_store_) return ResetOutcome::Unavailable;
+      if (!typo_store_->ResetAll(WallClockEpochSec())) return ResetOutcome::SaveFailed;
+      // The unsaved observations went with the rest.
+      typo_unsaved_observations_ = 0;
       return ResetOutcome::Reset;
     }
     case LearningDataStore::AutoWord: {
@@ -530,6 +545,7 @@ LearningImportResult InferenceEngine::ImportLearningData(
 
   LearningImportResult result;
   bool saved = true;
+  bool typo_pending = false;
   {
     std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
     auto stores = LearningDataStoresLocked();
@@ -537,19 +553,36 @@ LearningImportResult InferenceEngine::ImportLearningData(
     result = ApplyImportedItems(stores, selected, std::move(*items), policy);
     // Before any return: a failed item may have left others applied.
     ClearEnglishSuppressedCache();
-    if (result.error != BackupError::None) return result;
-    if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) {
-      RefreshPersonaLocked();
+    // A typo item with counts merged into the store in memory, also when the
+    // other typo item failed with io after it; the next save writes what
+    // memory holds. A failed merge changed nothing and leaves no count.
+    const bool typo_merged = typo_store_ && (result.counts.count("typo_patterns") > 0 ||
+                                             result.counts.count("typo_corrections") > 0);
+    if (typo_merged) {
+      typo_unsaved_observations_ = (std::max)(typo_unsaved_observations_, size_t{1});
+      typo_last_observation_epoch_sec_ =
+          (std::max)(typo_last_observation_epoch_sec_, stores.now_epoch_sec);
     }
+    if (result.error == BackupError::None) {
+      if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) {
+        RefreshPersonaLocked();
+      }
 
-    saved = SaveLearningDataLocked();
-    if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && typo_store_) {
-      saved = typo_store_->Save() && saved;
+      saved = SaveLearningDataLocked();
+      if (typo_merged) {
+        // While writes are suspended the import stays in memory and the
+        // response says io (typo-correction-learning-spec section 12.12.2).
+        saved = !typo_writes_suspended_ && SaveTypoStoreLocked() && saved;
+      }
+      if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) &&
+          auto_word_store_) {
+        saved = auto_word_store_->Save() && saved;
+      }
     }
-    if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) && auto_word_store_) {
-      saved = auto_word_store_->Save() && saved;
-    }
+    typo_pending = typo_merged && TypoSavePendingLocked();
   }
+  if (typo_pending) ScheduleTypoFlush();
+  if (result.error != BackupError::None) return result;
   if (user_dict_copy) {
     // Published only once on disk; a failed save leaves the live dictionary
     // as it was before the import.

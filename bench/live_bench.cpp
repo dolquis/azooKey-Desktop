@@ -27,6 +27,7 @@
 #include "azookey/ipc/TraceId.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/Sha256.h"
+#include "azookey/learning/TypoLearningStore.h"
 #include "azookey/logging/Phase.h"
 #include "azookey/logging/RuntimeLogger.h"
 
@@ -53,7 +54,8 @@ void PrintUsage(const char* exe) {
       << "       " << exe
       << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
          " [--backend cpu|cuda] [--model PATH] [--category NAME]"
-         " [--iterations N] [--typo-mode off] [--trace [--trace-output PATH]]"
+         " [--iterations N] [--typo-mode off|suggest|rank|aggressive]"
+         " [--trace [--trace-output PATH]]"
          " [--nll on|off] [--decode-stats JSONL] [--dict-dir DIR [--lattice on|off]]"
          " [--profile TEXT | --profile-file PATH]\n"
       << "       " << exe
@@ -201,18 +203,24 @@ azookey::logging::RuntimeLoggerOptions TraceLoggerOptions(const std::filesystem:
   return options;
 }
 
-std::vector<azookey::core::Candidate> QueryCandidates(
+// `raw_keys` (typo-correction-learning-spec section 12.13) goes to the engine as a Host request's
+// does; empty passes no options, so the reading alone makes the M55 hypotheses.
+azookey::host::InferenceEngine::CandidatesResult QueryCandidates(
     azookey::host::InferenceEngine& engine, const std::string& kana, const std::string& context,
     uint64_t now_epoch_sec, uint32_t max_candidates, azookey::logging::RuntimeLogger* bench_logger,
-    uint64_t& request_id, const std::string& backend) {
+    uint64_t& request_id, const std::string& backend, const std::string& raw_keys = {}) {
+  azookey::host::MixedConversionOptions options;
+  options.raw_keys = raw_keys;
+  const auto* mixed = raw_keys.empty() ? nullptr : &options;
   if (!bench_logger) {
-    return engine.QueryCandidates(kana, context, now_epoch_sec, nullptr, max_candidates, false);
+    return engine.QueryCandidatesEx(kana, context, now_epoch_sec, nullptr, max_candidates, false,
+                                    nullptr, nullptr, mixed);
   }
   const auto trace_id = azookey::ipc::GenerateTraceId();
   const azookey::host::InferenceTelemetry telemetry{++request_id, {}, trace_id};
   const auto start = std::chrono::steady_clock::now();
-  auto candidates = engine.QueryCandidates(kana, context, now_epoch_sec, nullptr, max_candidates,
-                                           false, &telemetry);
+  auto candidates = engine.QueryCandidatesEx(kana, context, now_epoch_sec, nullptr, max_candidates,
+                                             false, &telemetry, nullptr, mixed);
   const auto latency_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   bench_logger->Log(azookey::logging::RuntimeLogLevel::Info, "latency_phase",
@@ -413,8 +421,9 @@ int main(int argc, char** argv) {
     if (*lattice_enabled && dict_dir.empty()) {
       throw std::invalid_argument("--lattice on requires --dict-dir");
     }
-    if (quality_options.typo_mode != "off") {
-      throw std::invalid_argument("--typo-mode supports only off until M55");
+    if (quality_options.typo_mode != "off" && quality_options.typo_mode != "suggest" &&
+        quality_options.typo_mode != "rank" && quality_options.typo_mode != "aggressive") {
+      throw std::invalid_argument("--typo-mode must be off, suggest, rank or aggressive");
     }
     if (!quality_run && (!quality_options.per_case_path.empty() ||
                          quality_options.category != "all" || quality_options.typo_mode != "off")) {
@@ -551,7 +560,21 @@ int main(int argc, char** argv) {
   // Keep store and engine after learning_file: engine shutdown flushes learning,
   // and the atomic writer would recreate the directory if cleanup ran first.
   azookey::learning::LearningStore store(learning_file->Path());
+  // Spec section 7: a mode other than off corrects with an empty typo store beside the temporary
+  // learning file (learning_state "empty"). Nothing records a typo, so it writes no file.
+  std::optional<azookey::learning::TypoLearningStore> typo_store;
+  if (quality_options.typo_mode != "off") {
+    typo_store.emplace(learning_file->Path().parent_path() / "typo_corrections.tsv");
+    const auto now = static_cast<uint64_t>(
+        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+    if (typo_store->Load(now).mode != azookey::learning::TypoLearningMode::V2) {
+      std::cerr << "cannot start an empty typo store" << std::endl;
+      return 2;
+    }
+  }
   azookey::host::EngineConfig engine_config;
+  // The engine's own default is suggest; the bench converts with the mode it records.
+  engine_config.typo_correction_mode = quality_options.typo_mode;
   engine_config.backend = quality_options.backend == "cuda" ? azookey::host::BackendKind::Cuda
                                                             : azookey::host::BackendKind::Cpu;
   engine_config.model_path = quality_options.model;
@@ -560,6 +583,7 @@ int main(int argc, char** argv) {
   engine_config.lattice.enabled = *lattice_enabled;
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
                                         engine_config, trace_logger ? &*trace_logger : nullptr);
+  if (typo_store) engine.SetTypoStore(&*typo_store);
   if (!quality_options.model.empty() && !engine.LoadModel()) {
     std::cerr << "failed to load model" << std::endl;
     return 2;
@@ -640,24 +664,27 @@ int main(int argc, char** argv) {
     uint64_t decode_stats_call = 0;
     const azookey::bench::CandidateQuery query =
         [&engine, &request_id, &trace_logger, &quality_options, &decode_stats, &decode_stats_call](
-            const std::string& input, const std::string& context) {
+            const std::string& input, const std::string& context, const std::string& raw_keys) {
           const auto now = static_cast<uint64_t>(
               std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
           const auto start = std::chrono::steady_clock::now();
-          auto candidates = QueryCandidates(
+          auto result = QueryCandidates(
               engine, input, context, now,
               static_cast<uint32_t>(azookey::bench::kConversionQualityCandidateLimit),
-              trace_logger ? &*trace_logger : nullptr, request_id, quality_options.backend);
+              trace_logger ? &*trace_logger : nullptr, request_id, quality_options.backend,
+              raw_keys);
           if (decode_stats.is_open()) {
             const auto latency_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                     .count();
             decode_stats << DecodeStatsLine(++decode_stats_call, input, context, latency_ms, engine,
-                                            candidates)
+                                            result.candidates)
                          << '\n';
             if (!decode_stats) throw std::runtime_error("cannot write decode stats output");
           }
-          return candidates;
+          azookey::bench::CandidateQueryResult output(std::move(result.candidates));
+          output.corrected_reading = std::move(result.corrected_reading);
+          return output;
         };
     const bool ok = personal_eval ? azookey::bench::RunPersonalEvaluation(
                                         quality_options, personal_input, query, std::cerr, &error)

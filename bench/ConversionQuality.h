@@ -7,6 +7,7 @@
 #include <iosfwd>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "azookey/core/Candidate.h"
@@ -60,8 +61,26 @@ struct ConversionQualityOptions {
   bool trace{false};
 };
 
+// The debug_info of a candidate the typo correction made (typo-correction-learning-spec section
+// 5-2), the mark the TIP renders as a suggestion.
+inline constexpr std::string_view kTypoCorrectionDebugInfo = "typo-correction";
+
+struct CandidateQueryResult {
+  CandidateQueryResult() = default;
+  // Implicit, so a query that only has candidates can return them as they are.
+  CandidateQueryResult(std::vector<core::Candidate> candidates)
+      : candidates(std::move(candidates)) {}
+
+  std::vector<core::Candidate> candidates;
+  // Non-empty when the conversion ran on a corrected reading instead of the given one (the v1
+  // pair under aggressive, InferenceEngine::CandidatesResult::corrected_reading).
+  std::string corrected_reading;
+};
+
+// Called with the reading, the left context and the case's raw_keys (empty for a case without
+// them, spec section 4.3).
 using CandidateQuery =
-    std::function<std::vector<core::Candidate>(const std::string&, const std::string&)>;
+    std::function<CandidateQueryResult(const std::string&, const std::string&, const std::string&)>;
 
 // Printed on every personal run and on every run with a profile (spec section 15.7).
 inline constexpr std::string_view kUnsaltedHashWarning =

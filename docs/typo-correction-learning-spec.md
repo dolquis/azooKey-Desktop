@@ -1175,7 +1175,8 @@ private の学習停止を理由に予測を停止しない。secure 中は検�
 `raw_keys` 送信、補正適用を停止する。M55 の適用ゲートは当該要求の secure 判定を
 消費する経路として定義する。Host の候補要求処理は、`QueryCandidates.secure` が true の要求（欠落・型不正を
 含む。§12.13）を、v1 の読みの組も含めて補正せず、その `raw_keys` も使わない。Host の `privacy_mode_secure` が
-立っている間は、どの要求も補正しない。`learning_allowed` は補正適用の判定に用いない。要求の secure で補正を止める
+立っている間は、どの要求も補正しない。`QueryLiveConversion` と `QueryBatchConversion` も、それぞれの要求の `secure` で
+同じに扱う。`learning_allowed` は補正適用の判定に用いない。要求の secure で補正を止める
 この規則は、Host が要求の secure を補正の判定に用いず TIP が補正読みを捨てるとした DEV-1956 の決定を、
 DEV-2149 で改めたものである。
 

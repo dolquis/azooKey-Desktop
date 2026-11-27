@@ -1564,8 +1564,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
       return std::nullopt;
     }
   }
+  // typo-correction-learning-spec section 12.12.2: a secure request is converted as typed.
+  MixedConversionOptions as_requested;
+  as_requested.typo_correction = !parsed->secure;
   const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
-                                                      cancel.get(), trace.context());
+                                                      cancel.get(), trace.context(), &as_requested);
   const bool canceled = cancel->load(std::memory_order_acquire);
   completion.Complete();
   if (canceled) {
@@ -2252,10 +2255,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     const bool english = parsed->mode == "neural" && !parsed->secure &&
                          parsed->english_candidates && !parsed->raw_romaji.empty() &&
                          chunks.size() == 1;
+    // typo-correction-learning-spec section 12.12.2: a secure batch is converted as typed.
+    MixedConversionOptions as_requested;
+    as_requested.typo_correction = !parsed->secure;
     for (const auto& reading : chunks) {
       if (cancel->load(std::memory_order_acquire)) break;
-      auto candidates = engine_->QueryCandidates(reading, "", NowSec(), cancel.get(),
-                                                 parsed->max_candidates, false, trace.context());
+      auto candidates =
+          engine_
+              ->QueryCandidatesEx(reading, "", NowSec(), cancel.get(), parsed->max_candidates,
+                                  false, trace.context(), nullptr, &as_requested)
+              .candidates;
       if (parsed->max_candidates > 0 && candidates.size() > parsed->max_candidates) {
         candidates.resize(parsed->max_candidates);
       }

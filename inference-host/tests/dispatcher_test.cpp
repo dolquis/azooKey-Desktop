@@ -5544,6 +5544,100 @@ TEST_F(DispatcherTest, RankHypothesesFollowTheRequestsRawKeysAndSettings) {
   std::remove(settings_path.c_str());
 }
 
+// Section 12.12.2 (DEV-2149): QueryLiveConversion and QueryBatchConversion follow the same rule as
+// QueryCandidates: a secure request, and any request while privacy_mode_secure is on, is converted
+// as typed.
+TEST_F(DispatcherTest, SecureLiveAndBatchRequestsAreNeverCorrected) {
+  const auto settings_path = temp_directory.File("azookey_dispatcher_typo_secure_live.json");
+  const auto write_settings = [&](const char* text) {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << text;
+  };
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  azookey::host::SettingsStore settings_store(settings_path);
+  ASSERT_EQ(settings_store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings_store);
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_secure_live.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(0).mode, azookey::learning::TypoLearningMode::V2);
+  engine.SetTypoStore(&typo);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  typo.ObserveReadingPair("こんちには", "こんにちは", now_epoch_sec);
+  const auto as_typed = [&](const std::string& reading) {
+    azookey::host::MixedConversionOptions options;
+    options.typo_correction = false;
+    const auto candidate =
+        engine.QueryLiveConversion(reading, "", now_epoch_sec, nullptr, nullptr, &options);
+    return candidate ? candidate->surface : std::string();
+  };
+
+  uint64_t id = 7260;
+  const auto live = [&](bool secure) {
+    ipc::QueryLiveConversionRequest request;
+    request.kana = "こんちには";
+    request.secure = secure;
+    const auto response = target.Dispatch(MakeReq(++id, ipc::MessageType::QueryLiveConversion,
+                                                  ipc::BuildQueryLiveConversionRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryLiveConversionResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->surface : std::string();
+  };
+  const auto batch_corrected = [&](bool secure) {
+    ipc::QueryBatchConversionRequest request;
+    request.reading = "こんちには";
+    request.secure = secure;
+    const auto response = target.Dispatch(MakeReq(++id, ipc::MessageType::QueryBatchConversion,
+                                                  ipc::BuildQueryBatchConversionRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryBatchConversionResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    EXPECT_TRUE(parsed && !parsed->segments.empty() && !parsed->segments[0].candidates.empty());
+    bool corrected = false;
+    if (parsed)
+      for (const auto& segment : parsed->segments)
+        for (const auto& c : segment.candidates) corrected |= c.reading == "こんにちは";
+    return corrected;
+  };
+  const auto update = [&](const std::string& text) {
+    write_settings(text.c_str());
+    ASSERT_TRUE(target.Dispatch(MakeReq(++id, ipc::MessageType::UpdateConfig, "{}")).has_value());
+  };
+  const auto typed = as_typed("こんちには");
+  const auto corrected = as_typed("こんにちは");
+  ASSERT_FALSE(typed.empty());
+  ASSERT_NE(typed, corrected);
+  for (const char* host_mode : {"suggest", "aggressive"}) {
+    SCOPED_TRACE(host_mode);
+    const std::string tail =
+        std::string(R"(,"typoMinCount":2,"typoCorrection":{"mode":")") + host_mode + R"("}})";
+    update(R"({"privacy":{"mode":"normal"})" + tail);
+    ASSERT_EQ(engine.config().typo_correction_mode, host_mode);
+    const bool replaces = std::string(host_mode) == "aggressive";
+    EXPECT_EQ(live(false), replaces ? corrected : typed);
+    EXPECT_TRUE(batch_corrected(false));
+    EXPECT_EQ(live(true), typed);
+    EXPECT_FALSE(batch_corrected(true));
+
+    update(R"({"privacy":{"mode":"secure"})" + tail);
+    ASSERT_EQ(engine.config().typo_correction_mode, host_mode);
+    EXPECT_EQ(live(false), typed);
+    EXPECT_FALSE(batch_corrected(false));
+  }
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+  std::remove(settings_path.c_str());
+}
+
 TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
   const auto auto_word_path = temp_directory.File("azookey_dispatcher_auto_words.tsv");
   std::remove(auto_word_path.c_str());

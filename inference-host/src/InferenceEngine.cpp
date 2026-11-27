@@ -375,7 +375,7 @@ void InferenceEngine::SetTypoWritesSuspended(bool suspended) {
     typo_writes_suspended_ = suspended;
     if (typo_store_) typo_store_->SetWritesSuspended(suspended);
     // What was observed before the suspension waits for it to lift.
-    pending = !suspended && typo_unsaved_observations_ > 0;
+    pending = TypoSavePendingLocked();
   }
   if (pending) ScheduleTypoFlush();
 }
@@ -955,7 +955,7 @@ bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
         (flush_every_n > 0 && typo_unsaved_observations_ >= flush_every_n)) {
       (void)SaveTypoStoreLocked();
     }
-    pending = typo_unsaved_observations_ > 0;
+    pending = TypoSavePendingLocked();
   }
   if (pending) ScheduleTypoFlush();
   return true;
@@ -1531,6 +1531,9 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
       next_config.inference_threads = config_.inference_threads;
     }
   };
+  // The model load boundary saves the typo store too (learning-data-management-
+  // spec section 11), under typo_store_mutex_ alone before state_mutex_.
+  (void)FlushTypoStore();
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     (void)FlushLearningStoreLocked(std::chrono::milliseconds::zero());
@@ -3003,6 +3006,10 @@ bool InferenceEngine::SaveTypoStoreLocked() {
   // suspension to lift (typo-correction-learning-spec section 12.12.2); the
   // refused write is not a failure.
   if (!typo_store_ || typo_unsaved_observations_ == 0 || typo_writes_suspended_) return true;
+  // A store that could not be loaded stops saving until the Host restarts
+  // (typo-correction-learning-spec section 12.8); typo_store_load reported it,
+  // and its observations stay in memory without a retry or a warning each time.
+  if (typo_store_->save_blocked()) return false;
   if (!typo_store_->Save(typo_last_observation_epoch_sec_)) {
     if (runtime_logger_) {
       runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "typo_store_save_failed", {});
@@ -3016,13 +3023,20 @@ bool InferenceEngine::SaveTypoStoreLocked() {
 
 bool InferenceEngine::FlushTypoStore() {
   bool ok = true;
+  bool pending = false;
   {
     std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
     ok = SaveTypoStoreLocked();
+    pending = TypoSavePendingLocked();
   }
   // Like the learning store, a failed save is retried after another interval.
-  if (!ok) ScheduleTypoFlush();
+  if (pending) ScheduleTypoFlush();
   return ok;
+}
+
+bool InferenceEngine::TypoSavePendingLocked() const {
+  return typo_store_ && typo_unsaved_observations_ > 0 && !typo_writes_suspended_ &&
+         !typo_store_->save_blocked();
 }
 
 void InferenceEngine::ScheduleTypoFlush() {

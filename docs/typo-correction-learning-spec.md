@@ -1169,7 +1169,8 @@ Host の学習ゲートに重ねる最後の段で、ゲートの代わりには
 import の merge は学習ではないので止めない。import の内容は、止めている間は保存されない。
 Host はこの入口を、公開した `privacy_mode_secure`（解析できない `settings.json` で fail-closed に立つものを含む）に
 連動させ、起動時と `UpdateConfig` のたびに当てる。要求ごとの `secure` には連動させない。止める前に観測して
-未保存のままの内容は、解除の後に保存する。
+未保存のままの内容は、解除の後に保存する。止めたまま Host が終了したときは保存せず、その内容は失われる
+（`docs/learning-data-management-spec.md` §11）。
 
 ### 12.13 IPC（protocol v1 の加算的拡張）
 

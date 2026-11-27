@@ -81,9 +81,10 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
     }
     case LearningDataStore::Typo: {
       // The store writes its file itself and leaves what it publishes as it
-      // was when that fails. typo_store_mutex_ alone, so queries waiting on
-      // state_mutex_ are not held behind the write; learning_history_mutex_
-      // keeps typo_store_ in place.
+      // was when that fails. The write runs under typo_store_mutex_ without
+      // state_mutex_; a query that looks up a reading pair takes
+      // typo_store_mutex_ and waits for it, as it waits for an observation's
+      // save. learning_history_mutex_ keeps typo_store_ in place.
       std::lock_guard typo_lock(typo_store_mutex_);
       if (!typo_store_) return ForgetOutcome::NotFound;
       const auto result =
@@ -552,17 +553,16 @@ LearningImportResult InferenceEngine::ImportLearningData(
     result = ApplyImportedItems(stores, selected, std::move(*items), policy);
     // Before any return: a failed item may have left others applied.
     ClearEnglishSuppressedCache();
-    // The typo merges change the store in memory. Io from them means one of
-    // the two failed, possibly after the other had changed the store; either
-    // way the next save writes what memory holds.
-    const bool typo_merged = detail::LearningStoreSelected(selected, LearningDataStore::Typo) &&
-                             typo_store_ &&
-                             (result.error == BackupError::None || result.error == BackupError::Io);
+    // A typo item with counts merged into the store in memory, also when the
+    // other typo item failed with io after it; the next save writes what
+    // memory holds. A failed merge changed nothing and leaves no count.
+    const bool typo_merged =
+        typo_store_ && (result.counts.count("typo_patterns") > 0 ||
+                        result.counts.count("typo_corrections") > 0);
     if (typo_merged) {
       typo_unsaved_observations_ = (std::max)(typo_unsaved_observations_, size_t{1});
       typo_last_observation_epoch_sec_ =
           (std::max)(typo_last_observation_epoch_sec_, stores.now_epoch_sec);
-      typo_pending = true;
     }
     if (result.error == BackupError::None) {
       if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) {
@@ -574,13 +574,13 @@ LearningImportResult InferenceEngine::ImportLearningData(
         // While writes are suspended the import stays in memory and the
         // response says io (typo-correction-learning-spec section 12.12.2).
         saved = !typo_writes_suspended_ && SaveTypoStoreLocked() && saved;
-        typo_pending = typo_unsaved_observations_ > 0;
       }
       if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) &&
           auto_word_store_) {
         saved = auto_word_store_->Save() && saved;
       }
     }
+    typo_pending = typo_merged && TypoSavePendingLocked();
   }
   if (typo_pending) ScheduleTypoFlush();
   if (result.error != BackupError::None) return result;

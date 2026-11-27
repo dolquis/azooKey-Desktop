@@ -470,6 +470,68 @@ TEST(LearningDataManagerTest, TypoPatternsRoundTripThroughTheBackup) {
   EXPECT_EQ(restored.typo.SerializeReadingPairsText(), source.typo.SerializeReadingPairsText());
 }
 
+namespace {
+
+// kKeyA that can refuse to encrypt, so a typo store's v1 migration fails.
+class RefusableCrypto final : public learning::ByteCrypto {
+ public:
+  bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+    return !refuse_encrypt && kKeyA.Encrypt(plain, cipher);
+  }
+  bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+    return kKeyA.Decrypt(cipher, plain);
+  }
+  bool refuse_encrypt{false};
+};
+
+}  // namespace
+
+// A typo store that reads v1 as it is (typo-correction-learning-spec section
+// 12.8) has no patterns: its export writes typo_corrections alone, and an
+// import counts the typo_patterns item as skipped (spec section 5).
+TEST(LearningDataManagerTest, TypoStoreReadingV1AsItIsSkipsPatterns) {
+  ScopedDirectory directory;
+  const auto v1_path = directory.File("typo.tsv");
+  {
+    learning::TypoCorrectionStore v1(v1_path, &kKeyA);
+    ASSERT_TRUE(v1.Observe("こんちには", "こんにちは", kNow));
+    ASSERT_TRUE(v1.Save());
+  }
+  RefusableCrypto crypto;
+  crypto.refuse_encrypt = true;
+  learning::TypoLearningStore typo(v1_path, &crypto);
+  ASSERT_EQ(typo.Load(kNow).mode, learning::TypoLearningMode::V1Fallback);
+  crypto.refuse_encrypt = false;
+  const host::LearningDataStores view{{}, nullptr, &typo, nullptr, kNow};
+
+  const auto exported_archive = directory.File("v1.zip");
+  const auto exported = host::ExportLearningData(view, {LearningDataStore::Typo}, exported_archive,
+                                                 true, kKeyA, host::BackupManifest{});
+  ASSERT_EQ(exported.error, host::BackupError::None);
+  ASSERT_EQ(exported.manifest.items.size(), 1u);
+  EXPECT_EQ(exported.manifest.items[0].name, "typo_corrections");
+  EXPECT_EQ(exported.manifest.items[0].count, 1u);
+
+  const auto patterns_archive = directory.File("patterns.zip");
+  Stores source;
+  ASSERT_TRUE(source.typo
+                  .RecordPatternEvent(PatternEvent("j_insert_after_u", "j_delete_after_u",
+                                                   "extra_char", learning::TypoPatternOutcome::Accept,
+                                                   kNow))
+                  .has_value());
+  ASSERT_EQ(host::ExportLearningData(source.View(), {LearningDataStore::Typo}, patterns_archive,
+                                     true, kKeyA, host::BackupManifest{})
+                .error,
+            host::BackupError::None);
+  const auto imported =
+      host::ImportLearningData(view, {LearningDataStore::Typo}, patterns_archive,
+                               learning::ImportConflictPolicy::Merge, kKeyA);
+  ASSERT_EQ(imported.error, host::BackupError::None);
+  EXPECT_EQ(imported.counts.at("typo_patterns").imported, 0u);
+  EXPECT_EQ(imported.counts.at("typo_patterns").skipped, 1u);
+  EXPECT_TRUE(typo.Patterns().empty());
+}
+
 TEST(LearningDataManagerTest, ImportWithAnotherKeyFailsWithoutTouchingStores) {
   ScopedDirectory directory;
   const auto archive = directory.File("other-user.zip");

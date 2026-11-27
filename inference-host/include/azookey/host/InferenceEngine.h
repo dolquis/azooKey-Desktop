@@ -758,6 +758,10 @@ class InferenceEngine {
   // state_mutex_. True when nothing is left unsaved.
   bool SaveTypoStoreLocked();
   bool FlushTypoStore();
+  // Whether unsaved observations wait for a save that can still succeed:
+  // none while writes are suspended or the store is blocked. Expects
+  // typo_store_mutex_ held.
+  bool TypoSavePendingLocked() const;
   // Asks the flush worker to save the typo store after
   // learning_flush_interval_sec; takes state_mutex_ alone.
   void ScheduleTypoFlush();

@@ -985,17 +985,30 @@ int main(int argc, char** argv) {
     const bool degraded = typo_load.mode != TypoLearningMode::V2 ||
                           typo_load.issue != TypoLearningLoadIssue::None ||
                           typo_load.rebuilt_from_corruption;
-    runtime_log.Log(
-        degraded ? azookey::logging::RuntimeLogLevel::Warn
-                 : azookey::logging::RuntimeLogLevel::Info,
-        "typo_store_load",
-        {{"result", SafeLogText(typo_load.mode == TypoLearningMode::Blocked ? "error" : "ok")},
-         {"mode", SafeLogText(mode)},
-         {"issue", SafeLogText(issue)},
-         {"rebuilt", typo_load.rebuilt_from_corruption},
-         {"corruption_reason", SafeLogText(typo_load.corruption_reason)},
-         {"migrated_pairs", static_cast<uint64_t>(typo_load.migrated_pairs)},
-         {"v1_store_pending", typo_load.v1_store_pending}});
+    if (typo_load.mode == TypoLearningMode::Blocked) {
+      // A store that stops saving is a dictionary I/O failure (observability-spec
+      // section 7.4), so the error carries its category.
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "typo_store_load",
+                      {{"result", SafeLogText("error")},
+                       {"error_code", SafeLogText("business")},
+                       {"mode", SafeLogText(mode)},
+                       {"issue", SafeLogText(issue)},
+                       {"rebuilt", typo_load.rebuilt_from_corruption},
+                       {"corruption_reason", SafeLogText(typo_load.corruption_reason)},
+                       {"migrated_pairs", static_cast<uint64_t>(typo_load.migrated_pairs)},
+                       {"v1_store_pending", typo_load.v1_store_pending}});
+    } else {
+      runtime_log.Log(degraded ? azookey::logging::RuntimeLogLevel::Warn
+                               : azookey::logging::RuntimeLogLevel::Info,
+                      "typo_store_load",
+                      {{"result", SafeLogText("ok")},
+                       {"mode", SafeLogText(mode)},
+                       {"issue", SafeLogText(issue)},
+                       {"rebuilt", typo_load.rebuilt_from_corruption},
+                       {"corruption_reason", SafeLogText(typo_load.corruption_reason)},
+                       {"migrated_pairs", static_cast<uint64_t>(typo_load.migrated_pairs)},
+                       {"v1_store_pending", typo_load.v1_store_pending}});
+    }
   }
 
   azookey::learning::AutoWordStore auto_word_store(user_paths->auto_word_store_path);

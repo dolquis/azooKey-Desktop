@@ -3979,10 +3979,17 @@ TEST(EngineTypoCorrectionTest, TheFlushWorkerSavesObservationsAfterTheInterval) 
   auto engine = MakeEngine(store, cfg);
   engine->SetTypoStore(&typo);
 
+  // The burst start saves the first observation at once.
   ASSERT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  const auto saved_file = azookey::learning::EncryptedPathFor(typo.paths().v2_store);
+  std::error_code error;
+  const auto first_save = std::filesystem::last_write_time(saved_file, error);
+  ASSERT_FALSE(error);
   ASSERT_TRUE(engine->ObserveTypo("ありがおう", "ありがとう", kNowBase));
+  // Waits for the worker to replace the file, without reading it meanwhile.
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  while (SavedTypoPairs(typo_path) < 2u && std::chrono::steady_clock::now() < deadline) {
+  while (std::filesystem::last_write_time(saved_file, error) == first_save &&
+         std::chrono::steady_clock::now() < deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   EXPECT_EQ(SavedTypoPairs(typo_path), 2u);
@@ -4030,6 +4037,72 @@ TEST(EngineTypoCorrectionTest, SuspendedWritesRefuseLearningAndDeletionUntilLift
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_EQ(SavedTypoPairs(typo_path), 2u);
   EXPECT_TRUE(engine->ObserveTypo("おはよお", "おはよう", kNowBase));
+}
+
+// learning-data-management-spec section 11: the model load boundary saves the
+// typo store's unsaved observations, as it does the learning store's.
+TEST(EngineTypoCorrectionTest, TheModelLoadBoundarySavesUnsavedObservations) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  const auto typo_path = temp.File("typo.tsv");
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::V2);
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 3600;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetTypoStore(&typo);
+  ASSERT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  ASSERT_TRUE(engine->ObserveTypo("ありがおう", "ありがとう", kNowBase));
+  ASSERT_EQ(SavedTypoPairs(typo_path), 1u);
+
+  EXPECT_TRUE(engine->LoadModelWithResult().ok);
+  EXPECT_EQ(SavedTypoPairs(typo_path), 2u);
+}
+
+// A store that could not be loaded stops saving until the Host restarts
+// (typo-correction-learning-spec section 12.8). Its observations stay in
+// memory, and the refused saves are neither retried nor warned about each time.
+TEST(EngineTypoCorrectionTest, ABlockedStoreLearnsInMemoryWithoutSaveWarnings) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  const auto typo_path = temp.File("typo.tsv");
+  {
+    // A v1 store that cannot be decrypted blocks the load.
+    std::ofstream out(azookey::learning::EncryptedPathFor(typo_path), std::ios::binary);
+    out << "not a ciphertext";
+  }
+  azookey::learning::TypoLearningStore typo(typo_path, &azookey::learning::test::Crypto());
+  ASSERT_EQ(typo.Load(kNowBase).mode, azookey::learning::TypoLearningMode::Blocked);
+
+  const auto log_path = temp.File("host.log");
+  azookey::logging::RuntimeLoggerOptions log_options;
+  log_options.enabled = true;
+  log_options.component = "host";
+  log_options.output_path = log_path;
+  azookey::logging::RuntimeLogger logger(log_options);
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  cfg.typo_min_count = 1;
+  cfg.learning_flush_interval_sec = 3600;
+  auto engine = std::make_unique<azookey::host::InferenceEngine>(
+      MakeConverterWithDictionary({{"こんにちは", "今日は"}}), &store, cfg, &logger);
+  engine->SetTypoStore(&typo);
+
+  EXPECT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  auto applied = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+  EXPECT_TRUE(HasCandidateMarked(applied.candidates, "typo-correction"));
+  EXPECT_FALSE(engine->FlushLearningStore());
+  engine.reset();
+
+  std::ifstream stream(log_path);
+  for (std::string line; std::getline(stream, line);) {
+    EXPECT_EQ(line.find("typo_store_save_failed"), std::string::npos) << line;
+  }
 }
 
 // ---- M36-A: new word mining ----

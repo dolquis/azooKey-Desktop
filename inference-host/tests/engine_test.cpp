@@ -4341,6 +4341,19 @@ TEST(TypoCorrectionPolicyTest, ActivationFollowsTheTypedReadingsCandidates) {
   EXPECT_FALSE(TypoCorrectionActivates({2.0, std::nullopt, 1.0}));
 }
 
+// Sections 12.5 and 12.10: a dictionary score over that of a Sudachi word of the highest
+// frequency, clamped to [0, 1], and 0 for a score that is not finite.
+TEST(TypoCorrectionPolicyTest, DictionaryHitScoreScalesTheDictionaryScore) {
+  using azookey::host::kTypoDictionaryFullScore;
+  using azookey::host::TypoDictionaryHitScore;
+  EXPECT_DOUBLE_EQ(TypoDictionaryHitScore(kTypoDictionaryFullScore), 1.0);
+  EXPECT_DOUBLE_EQ(TypoDictionaryHitScore(kTypoDictionaryFullScore / 2), 0.5);
+  EXPECT_DOUBLE_EQ(TypoDictionaryHitScore(2.0), 1.0);
+  EXPECT_DOUBLE_EQ(TypoDictionaryHitScore(-0.3), 0.0);
+  EXPECT_DOUBLE_EQ(TypoDictionaryHitScore(std::numeric_limits<double>::quiet_NaN()), 0.0);
+  EXPECT_DOUBLE_EQ(TypoDictionaryHitScore(std::numeric_limits<double>::infinity()), 0.0);
+}
+
 // Sections 12.10 and 12.11: only a pattern past the warm-up, never rejected on balance and
 // confident enough leads, and only over a weak first candidate.
 TEST(TypoCorrectionPolicyTest, OnlyAWarmedUpConfidentPatternMayLead) {

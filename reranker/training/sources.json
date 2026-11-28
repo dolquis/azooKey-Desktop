@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "corpora": [],
+  "reading_dictionary": {
+    "id": "sudachidict-core-20260723",
+    "url": "https://sudachi.s3.ap-northeast-1.amazonaws.com/sudachidict/sudachi-dictionary-20260723-core.zip",
+    "revision": "20260723",
+    "sha256": null,
+    "license": "Apache-2.0",
+    "notice": "Works Applications Co., Ltd. See dictbuild/notices/sudachidict-legal.txt for upstream notices.",
+    "member": "sudachi-dictionary-20260723/system_core.dic"
+  }
+}

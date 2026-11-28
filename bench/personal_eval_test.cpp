@@ -354,7 +354,8 @@ TEST(PersonalEvalTest, ValidatesBenchProfilesWithoutQuotingThem) {
 #if defined(_WIN32)
 // Answers each reading with a fixed list of candidates.
 CandidateQuery ScriptedQuery(std::map<std::string, std::vector<std::string>> surfaces) {
-  return [surfaces = std::move(surfaces)](const std::string& reading, const std::string&) {
+  return [surfaces = std::move(surfaces)](const std::string& reading, const std::string&,
+                                          const std::string&) {
     std::vector<core::Candidate> candidates;
     const auto found = surfaces.find(reading);
     if (found == surfaces.end()) return candidates;

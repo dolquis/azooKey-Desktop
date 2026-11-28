@@ -499,7 +499,7 @@ candidate: 交渉
 
 #### 12.4.6 `RomajiKanaConverter::FuzzyMatch`（M17 の横断項目）
 
-入力ローマ字 `input` に対して、上位 `k` 通り（下の適用順序では `K=8`）のかな解釈を返す API。
+入力ローマ字 `input` に対して、上位 `k` 通りのかな解釈を返す API。
 
 ```cpp
 struct FuzzyKanaCandidate {
@@ -546,14 +546,10 @@ QWERTY 隣接：`q-w`, `w-e`, ..., `a-s`, `s-d`, ... 全 ASCII 小文字ペア�
 - カスタム表のとき、`input` が空か 64 文字を超えるとき、`a`〜`z`・`-`・`'` の外の文字を含むときは空を返す。
 - 探索は 20,000 状態で打ち切る。
 
-適用順序:
-
-1. Standard parse（既存）→ 1 候補
-2. FuzzyMatch (K=8) → 8 候補
-3. それぞれを `SimpleConverter::Query` or `Zenzai::Query` に通す
-4. 全候補を `score - alpha * cost` でソート（alpha=0.5、設定で変更可）
-
-§12.4.1 の補正エンジンは、仮説を作るために `k` を 256 として呼ぶ。
+呼び出し元は §12.4.1 の補正エンジンで、仮説を作るために `k` を 256 として呼ぶ。得た読みは §12.4.4 の辞書の
+制約と §12.10 のスコアで候補になる。`FuzzyMatch` のコストで候補を直接並べはしない。`k` を 8 や 64 に絞ると、
+意図した読みが仮説から落ちる。ローマ字の打ち間違え 82 件の評価では、意図した読みが上位 8 に入るのは 11 件、
+上位 64 で 61 件、上位 200 で 81 件だった。
 
 ### 12.5 発動条件
 
@@ -595,8 +591,8 @@ activate_typo_correction(reading, observed_pattern):
 - 発動しても補正候補が第一候補になるとは限らない。順位は §12.10 のスコアと
   §12.11 の誤補正防止条件で決まる。発動は「補正 hypothesis を **生成する**
   か」だけを決める前段ゲートである。
-- Host は `dict_best` を 2 値で近似し、M52 の校正（§12.16、DEV-2150）で見直す。元の読みに辞書（システム辞書・
-  ユーザー辞書・新語）の語があれば 1、無ければ 0 とする。このため `weak` は `no_dict` と同じになる。`observed_pattern` は仮説ごとに決まるので、
+- Host は `dict_best` を、元の読みの辞書（システム辞書・ユーザー辞書・新語）の語の辞書スコアの最大値を
+  `D_FULL`（§12.16）で割って `[0, 1]` に収めた値とする。語が無ければ 0 とする。`observed_pattern` は仮説ごとに決まるので、
   `strong_pat` は仮説ごとに評価する。`weak`・`small_gap`・`no_dict` のどれも立たない読みでは、warm-up（§12.11）を
   満たし confidence が `minConfidenceForRanking` 以上の個人パターン（§12.8）に当たる仮説だけを作る。
   どの個人パターンも warm-up を満たさなければ、仮説を作らない。
@@ -1064,8 +1060,11 @@ overcorrection_penalty =
   `context_score = 1.0` フォールバック。
 - 係数 `P_*` / `S_STRONG` は初期値であり M52（`typo_overcorrection_rate`）で
   校正する（§12.16）。
-- Host は `dictionary_hit_score` を 1（§12.4.4 で語のある仮説だけが残る）、`s1_strength` を元の top1 が辞書の語なら 1、
-  そうでなければ 0 で近似し、M52 の校正（§12.16、DEV-2150）で見直す。`context_score` と `app_factor_typo` は 1.0 とする。
+- Host は `dictionary_hit_score` を 1 とする（§12.4.4 で語のある仮説だけが残る）。仮説の語の辞書スコアで仮説を
+  並べると、層の優先度が高い語（新語辞書のカタカナ語、技術用語）が正解の読みの語を押し出すため、仮説の語の辞書
+  スコアは `typo_score` に入れない。`s1_strength` は、元の top1 が
+  元の読みの辞書の語ならその辞書スコアを `D_FULL`（§12.16）で割って `[0, 1]` に収めた値、そうでなければ 0 とする。
+  `context_score` と `app_factor_typo` は 1.0 とする。
   個人パターンの confidence（§12.2）は、照会の時点の §12.9 の値で、app bonus を含めない。
 
 ### 12.11 誤補正防止条件
@@ -1403,6 +1402,7 @@ M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
 | `P_lowconf`（§12.10） | 0.50 | — | overcorrection 率（aggressive） |
 | `minConfidenceForRanking`（§12.14） | 0.70 | `< minConfidenceForTopCandidate` | FP 率（rank） |
 | `minConfidenceForTopCandidate`（§12.14） | 0.90 | `> minConfidenceForRanking` | overcorrection 率（aggressive） |
+| `D_FULL`（§12.5/§12.10） | 1.4 | `D_FULL > 0`。頻度が最大の Sudachi の語の辞書スコア（頻度 + 層の優先度 + 完全一致の加点 + カテゴリの補正 − 1。カテゴリの補正が 1 の語で 1.0 + 0.30 + 0.10 + 1 − 1）に合わせ、その語で `dict_best` と `s1_strength` が 1 になる | top5 accuracy（rank）、overcorrection 率（aggressive） |
 | `personal_cost_reduction`（§12.4.1） | 0.5 | `0 <= personal_cost_reduction <= 1` | top5 accuracy（rank） |
 | `HYP_MAX_READING` / `HYP_MAX_KEYS`（§12.4） | 10 / 20 | `HYP_MAX_READING > LEN_MIN`。読みがこのコードポイント数を、または `raw_keys` がこのキー数を超えると、`rank` / `aggressive` でも仮説を作らず v1 の読みの組だけを引く。設定キーではない | 候補表示の p95 と top5 accuracy（rank） |
 
@@ -1412,3 +1412,22 @@ M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
 - 校正は係数の数値のみを動かし、本表の不変条件・式の形・モード別の rank cap
   （§12.11）は固定する。SQLite/TSV スキーマ（§12.8）を変える結果が出た場合は
   M55 範囲外とし別 M で扱う。
+- M52 ベンチは空の学習ストアで採るので、学習済みのパターンにだけ効く定数はベンチで校正できない。
+  該当するのは `accept_weight` / `reject_weight` / `B_rec` / `B_app` / `P_reject`、
+  `minConfidenceForTopCandidate`、warm-up の `typo_min_count`（§12.11）。これらは表の既定を使う。
+  運用での校正は、`typo_accept` / `typo_reject` を記録する経路（DEV-2197）ができてから行う。
+  空のストアには v1 の組も個人パターンも無く、`rank` で補正の候補が第一候補にならないので、`rank` の
+  `typo_false_positive_rate` は変換の候補が 0 件の読みを除いて 0 となる。FP 率を指標とする定数（`S_WEAK`、`G_GAP`、`LEN_MIN`、
+  `minConfidenceForRanking`）も、ベンチの FP 率では校正できない。
+- `rank` / `aggressive` では、v2 枠（§12.7）を置いたあと、枠の先頭の語の読みを 1 回だけ変換し直し、その第一候補を
+  枠の先頭に足す。足すのは、その候補がまだ候補に無く（枠の先頭の語そのものを含む）、かなだけで書かれていないときだけとする。
+  足した候補は先頭の語と同じ「もしかして: <読み>」の表示を持ち、枠は `maxReadingHypotheses` 語に保つ（あふれた
+  末尾の語を外す）。かなだけの候補を足さないのは、誤った読みのかながそのまま正解を top5 から押し出すためである。
+  変換し直しは元の変換と同じ時間予算で打ち切り、失敗したときは枠を変えない。aggressive で先頭に出た語は変換し
+  直さず、変換の第一候補の後ろの最初の語を枠の先頭とする。先頭に出た語も `maxReadingHypotheses` の語数に数える。
+- M55 の受け入れでは `typo_correction_top5_accuracy` の目標を 40% とする（roadmap M55）。M55 は合格基準 v1
+  （`conversion-quality-benchmark-spec.md` §9）の 85% の例外で、85% は M53〜M57 完了時点の目標として残す。残りは別
+  Issue（Zenzai の NLL による読みの仮説の順位付け、学習済みストアでの評価）で扱う。
+- 受け入れ構成（`conversion-quality-benchmark-spec.md` §7）の DEV-2150 の採取では、変換し直しの 1 回分が遅延に乗る。
+  typo の p50 / p95 は 32.4 / 67.9 ms（`off` で 10.8 / 22.4 ms）、clean の p50 / p95 は 25.1 / 54.5 ms（`off` で
+  13.4 / 48.9 ms）で、合格基準 v1 の `latency_p95_ms` 50 ms 以下を超える。M55 ではこれを受け入れ、短縮は別 Issue で扱う。

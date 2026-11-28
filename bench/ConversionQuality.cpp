@@ -40,6 +40,8 @@ struct EvaluationCase {
   std::string left_context;
   std::string observed_reading;
   std::string intended_reading;
+  // Spec section 4.3: the keys typed for observed_reading, empty when the case has none.
+  std::string raw_keys;
   std::optional<std::string> typo_type;
   bool typo{false};
 };
@@ -163,6 +165,7 @@ EvaluationCase ParseCase(const std::string& line, size_t line_number) {
   result.typo = true;
   result.observed_reading = RequiredString(object, "observed_reading");
   result.intended_reading = RequiredString(object, "intended_reading");
+  result.raw_keys = OptionalString(object, "raw_keys");
   result.expected = RequiredString(object, "expected_surface");
   const auto typo_type = object.find("typo_type");
   if (typo_type == object.end()) throw std::runtime_error("missing required field: typo_type");
@@ -581,8 +584,10 @@ void ValidateRunOptions(const ConversionQualityOptions& options) {
   if (options.n_best == 0 || options.n_best > kConversionQualityCandidateLimit) {
     throw std::invalid_argument("n_best must be between 1 and 5");
   }
-  if (options.typo_mode != "off") {
-    throw std::invalid_argument("--typo-mode supports only off until M55");
+  // Spec section 7. The v1 auto_replace is not a bench mode: the result records aggressive.
+  if (options.typo_mode != "off" && options.typo_mode != "suggest" && options.typo_mode != "rank" &&
+      options.typo_mode != "aggressive") {
+    throw std::invalid_argument("--typo-mode must be off, suggest, rank or aggressive");
   }
 }
 
@@ -591,15 +596,16 @@ EvaluatedCase EvaluateCase(EvaluationCase item, const ConversionQualityOptions& 
                            const CandidateQuery& query) {
   const std::string& reading = item.typo ? item.observed_reading : item.input;
   std::vector<double> latencies;
-  std::vector<core::Candidate> candidates;
+  CandidateQueryResult last;
   latencies.reserve(options.iterations);
   for (size_t iteration = 0; iteration < options.iterations; ++iteration) {
     const auto start = std::chrono::steady_clock::now();
-    auto current = query(reading, item.left_context);
+    auto current = query(reading, item.left_context, item.raw_keys);
     const auto end = std::chrono::steady_clock::now();
     latencies.push_back(std::chrono::duration<double, std::milli>(end - start).count());
-    if (iteration + 1 == options.iterations) candidates = std::move(current);
+    if (iteration + 1 == options.iterations) last = std::move(current);
   }
+  auto& candidates = last.candidates;
   if (candidates.size() > options.n_best) candidates.resize(options.n_best);
   std::sort(latencies.begin(), latencies.end());
   EvaluatedCase result;
@@ -610,7 +616,11 @@ EvaluatedCase EvaluateCase(EvaluationCase item, const ConversionQualityOptions& 
   result.match = EvaluateCandidateMatch(top1, result.source.expected, result.source.acceptable);
   result.reading_fidelity =
       !result.candidates.empty() && result.candidates.front().reading == result.source.input;
-  result.typo_corrected = false;
+  // Spec section 4.3.1: the first candidate is a correction, either one the correction placed
+  // there or any candidate of a conversion that ran on a corrected reading.
+  result.typo_corrected = !last.corrected_reading.empty() ||
+                          (!result.candidates.empty() &&
+                           result.candidates.front().debug_info == kTypoCorrectionDebugInfo);
   result.latency_ms = latencies[latencies.size() / 2];
   return result;
 }

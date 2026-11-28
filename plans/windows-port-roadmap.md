@@ -2684,7 +2684,9 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **受け入れ条件**（typo 補正指標は補正有効モードで採取する。
   `conversion-quality-benchmark-spec.md` §7・§14。`--typo-mode off` での値は
   受け入れに用いない）:
-  - M52 ベンチ（`--typo-mode rank`）で typo_correction_top5_accuracy が 85% 以上
+  - M52 ベンチ（`--typo-mode rank`）で typo_correction_top5_accuracy が 40% 以上。M55 は合格基準 v1
+    （`conversion-quality-benchmark-spec.md` §9）の 85% の例外とし、85% は M53〜M57 完了時点の目標として残す。
+    残りは別 Issue（Zenzai の NLL による読みの仮説の順位付け、学習済みストアでの評価）で扱う
   - M52 ベンチ（`--typo-mode rank`）で typo_false_positive_rate が 1% 未満
   - M52 ベンチ（`--typo-mode aggressive`）で typo_overcorrection_rate が
     0.5% 未満

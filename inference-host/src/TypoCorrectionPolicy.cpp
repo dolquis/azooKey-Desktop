@@ -77,6 +77,11 @@ bool TypoCorrectionActivates(const TypoActivationInput& input) {
   return weak || small_gap || no_dict;
 }
 
+double TypoDictionaryHitScore(double word_score) {
+  if (!std::isfinite(word_score)) return 0.0;
+  return std::clamp(word_score / kTypoDictionaryFullScore, 0.0, 1.0);
+}
+
 double TypoReadingSimilarity(size_t edit_distance, size_t observed_codepoints,
                              size_t corrected_codepoints) {
   const size_t longer = (std::max)(observed_codepoints, corrected_codepoints);

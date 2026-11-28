@@ -317,6 +317,8 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
       reranker_(store),
       config_(std::move(config)),
       runtime_logger_(runtime_logger) {
+  config_.tiny_reranker = reranker::ClampTinyRerankerConfig(std::move(config_.tiny_reranker));
+  tiny_reranker_.SetConfig(config_.tiny_reranker);
   lattice_fallback_budget_ns_.store(
       std::chrono::duration_cast<std::chrono::nanoseconds>(kLatticeFallbackBudget).count(),
       std::memory_order_relaxed);
@@ -1499,6 +1501,38 @@ bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string&
                             options);
 }
 
+void InferenceEngine::SetTinyRerankerRuntimeFactoryForTests(
+    reranker::TinyRerankerRuntime::Factory factory,
+    std::optional<std::chrono::milliseconds> watchdog_timeout) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  tiny_reranker_.SetFactoryForTests(std::move(factory), watchdog_timeout);
+}
+
+void InferenceEngine::SetTinyRerankerPrivacyMode(bool secure) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  tiny_reranker_privacy_secure_ = secure;
+}
+
+void InferenceEngine::SetTinyRerankerModelDirectories(std::filesystem::path user_models,
+                                                     std::filesystem::path bundled_models) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  tiny_reranker_.SetModelDirectories(std::move(user_models), std::move(bundled_models));
+}
+
+void InferenceEngine::ApplyTinyRerankerLocked(std::vector<core::Candidate>& candidates, bool secure,
+                                             const std::atomic<bool>* cancel,
+                                             reranker::TinyRerankerRuntime::Deadline deadline) {
+  const auto outcome =
+      tiny_reranker_.Apply(candidates, secure || tiny_reranker_privacy_secure_, cancel, deadline);
+  if (!runtime_logger_ || !runtime_logger_->enabled()) return;
+  if (const char* reason = reranker::TinyRerankReason(outcome)) {
+    runtime_logger_->Log(logging::RuntimeLogLevel::Info, "tiny_rerank",
+                         {{"tiny_used", false}, {"reason", logging::RuntimeLogSafeText(reason)}});
+  } else if (outcome == reranker::TinyRerankOutcome::Applied) {
+    runtime_logger_->Log(logging::RuntimeLogLevel::Info, "tiny_rerank", {{"tiny_used", true}});
+  }
+}
+
 void InferenceEngine::ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
                                                         const std::atomic<bool>* cancel) const {
   if (!tiny_reranker_feature_observer_for_tests_ ||
@@ -1851,6 +1885,8 @@ void InferenceEngine::ApplyConfigLocked(const EngineConfig& config) {
   config_.app_profiles = config.app_profiles;
   config_.english = config.english;
   config_.nll = ClampNllConfig(config.nll);
+  config_.tiny_reranker = reranker::ClampTinyRerankerConfig(config.tiny_reranker);
+  tiny_reranker_.SetConfig(config_.tiny_reranker);
   ++nll_config_revision_;
   config_.lattice = config.lattice;
   config_.enable_live_conversion = config.enable_live_conversion;
@@ -2630,6 +2666,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     ObserveTinyRerankerFeaturesLocked(merged, cancel);
+    ApplyTinyRerankerLocked(merged, mixed && mixed->secure, cancel, request_deadline);
     result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec, cancel);
   }
   if (canceled()) {
@@ -2897,10 +2934,12 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(
       DictionaryCandidates(dictionaries_, kana, learning::LookupMode::PredictivePrefix,
                            now_epoch_sec, 32, true, config_.user_word_default_score);
   ObserveTinyRerankerFeaturesLocked(dictionary_predictions, cancel);
+  ApplyTinyRerankerLocked(dictionary_predictions, false, cancel);
   dictionary_predictions =
       ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec, cancel);
   if (rerank_canceled()) return {};
   ObserveTinyRerankerFeaturesLocked(candidates, cancel);
+  ApplyTinyRerankerLocked(candidates, false, cancel);
   candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec, cancel);
   if (rerank_canceled()) return {};
   if (rerank_start)
@@ -2985,6 +3024,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
   ObserveTinyRerankerFeaturesLocked(candidates, nullptr);
+  ApplyTinyRerankerLocked(candidates, false, nullptr);
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 

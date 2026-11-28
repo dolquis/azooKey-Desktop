@@ -1062,6 +1062,15 @@ int main(int argc, char** argv) {
   // every reload.
   const bool privacy_secure = settings_store.LockPrivacyPolicy().privacy_mode_secure;
   engine.SetTypoWritesSuspended(privacy_secure);
+  engine.SetTinyRerankerPrivacyMode(privacy_secure);
+  std::filesystem::path tiny_user_models;
+  if (path_inputs.local_app_data) tiny_user_models = *path_inputs.local_app_data / "azooKey/models";
+  std::filesystem::path tiny_bundled_models;
+#ifdef _WIN32
+  if (const auto exe_dir = GetExeDirectory(); !exe_dir.empty())
+    tiny_bundled_models = exe_dir / "models";
+#endif
+  engine.SetTinyRerankerModelDirectories(std::move(tiny_user_models), std::move(tiny_bundled_models));
   engine.SetTypoStore(&typo_store);
   engine.SetAutoWordStore(&auto_word_store);
   engine.SetEnglishLearningStore(&english_store);

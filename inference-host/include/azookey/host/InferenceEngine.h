@@ -44,6 +44,7 @@
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/learning/UserDictionaryTextImport.h"
 #include "azookey/logging/RuntimeLogger.h"
+#include "azookey/reranker/TinyRerankerRuntime.h"
 
 namespace azookey::host {
 
@@ -93,6 +94,7 @@ struct MixedConversionOptions {
   // M55 (typo-correction-learning-spec section 12.7): false makes no reading hypothesis, while the
   // v1 pairs still apply. QueryAmbiguousCandidatesEx sets it false for the typed reading.
   bool typo_hypotheses{true};
+  bool secure{};
 };
 
 struct InferenceTelemetry {
@@ -165,6 +167,7 @@ struct EngineConfig {
   // M60 inline English candidates (settings inlineEnglish*).
   EnglishCandidateConfig english;
   NllConfig nll;
+  reranker::TinyRerankerConfig tiny_reranker;
   LatticeConfig lattice;
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
@@ -352,6 +355,9 @@ class InferenceEngine {
   // privacy_mode_secure at startup and after every settings reload,
   // including one that failed (which publishes secure).
   void SetTypoWritesSuspended(bool suspended);
+  void SetTinyRerankerPrivacyMode(bool secure);
+  void SetTinyRerankerModelDirectories(std::filesystem::path user_models,
+                                       std::filesystem::path bundled_models);
   // External, non-owning; nullptr disables new-word mining entirely (M36-A).
   void SetAutoWordStore(learning::AutoWordStore* store);
   // M60: the English learning channel (UserDataPaths::english_learning_path).
@@ -496,6 +502,9 @@ class InferenceEngine {
   // Test-only: runs under state_mutex_ just before applying the learned ranking. The views are
   // valid only during the callback, which must not call back into the engine.
   void SetTinyRerankerFeatureObserverForTests(TinyRerankerFeatureObserverForTests hook);
+  void SetTinyRerankerRuntimeFactoryForTests(
+      reranker::TinyRerankerRuntime::Factory factory,
+      std::optional<std::chrono::milliseconds> watchdog_timeout = {});
 
   bool LoadModel();
   AiTransformResult TransformLocal(const AiTransformRequest& request,
@@ -769,6 +778,9 @@ class InferenceEngine {
                                    size_t max_records, double min_weight);
   void ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
                                          const std::atomic<bool>* cancel) const;
+  void ApplyTinyRerankerLocked(std::vector<core::Candidate>& candidates, bool secure,
+                              const std::atomic<bool>* cancel,
+                              reranker::TinyRerankerRuntime::Deadline deadline = {});
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec,
@@ -827,6 +839,8 @@ class InferenceEngine {
   std::shared_ptr<core::IConverter> active_converter_;
   learning::LearningStore* store_;
   learning::Reranker reranker_;
+  reranker::TinyRerankerRuntime tiny_reranker_;
+  bool tiny_reranker_privacy_secure_{};
   learning::UserDictionary* user_dict_{nullptr};
   // Written under both state_mutex_ and typo_store_mutex_, so either lock
   // reads it.

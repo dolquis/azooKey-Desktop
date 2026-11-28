@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <limits>
 #include <memory>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include "../../learning/tests/TestByteCrypto.h"
+#include "../../reranker/tests/MockTinyRerankerRuntime.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
@@ -2630,26 +2632,28 @@ namespace {
 // broken generations above a usable one would.
 class ScriptedConverter final : public azookey::core::IConverter {
  public:
-  explicit ScriptedConverter(std::vector<azookey::core::Candidate> candidates)
-      : candidates_(std::move(candidates)) {}
+  explicit ScriptedConverter(std::vector<azookey::core::Candidate> candidates,
+                             bool script_all_routes = false)
+      : candidates_(std::move(candidates)), script_all_routes_(script_all_routes) {}
   std::vector<azookey::core::Candidate> Convert(const std::string&,
                                                 const azookey::core::ConversionContext&) override {
     return candidates_;
   }
   std::vector<azookey::core::Candidate> PredictNext(
       const std::string&, const azookey::core::ConversionContext&) override {
-    return {};
+    return script_all_routes_ ? candidates_ : std::vector<azookey::core::Candidate>{};
   }
   std::vector<azookey::core::Candidate> Correct(const std::string&,
                                                 const azookey::core::CorrectionHint&,
                                                 const azookey::core::ConversionContext&) override {
-    return {};
+    return script_all_routes_ ? candidates_ : std::vector<azookey::core::Candidate>{};
   }
   void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
   void Learn(const std::string&, const std::string&) override {}
 
  private:
   std::vector<azookey::core::Candidate> candidates_;
+  bool script_all_routes_{};
 };
 
 // Records the instruction profile of every context it converts.
@@ -2782,6 +2786,98 @@ TEST(InferenceEngineTest, TinyRerankerObserverSeesMergedFeaturesWithoutChangingR
       EXPECT_EQ(observed[i].surface, baseline[i].surface);
       EXPECT_EQ(observed[i].score, baseline[i].score);
     }
+  }
+}
+
+TEST(InferenceEngineTest, TinyRerankerCoversEveryRouteAndOffPreservesOrderAndScores) {
+  using azookey::core::Candidate;
+  using azookey::reranker::test::MockTinyRerankerRuntime;
+  using namespace std::chrono_literals;
+  ScopedTempDirectory temp;
+  const auto model = azookey::core::Utf8Path(temp.File("tiny.onnx"));
+  std::ofstream(model).put('x');
+  azookey::learning::UserDictionary dictionary(temp.File("user.json"),
+                                                &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dictionary.Load());
+  Candidate high{"上", "かな", 1.0625};
+  Candidate low{"下位", "かな", 1.0};
+  low.rerank_signals.dictionary_score = 0.5;
+  azookey::host::EngineConfig cfg;
+  cfg.lattice.enabled = false;
+  azookey::host::InferenceEngine engine(
+      std::make_unique<ScriptedConverter>(std::vector<Candidate>{high, low}, true), nullptr, cfg);
+  engine.SetUserDictionary(&dictionary);
+  ASSERT_TRUE(engine.AddUserWord({"予測", "かなよみ"}));
+  auto calls = std::make_shared<std::atomic<int>>(0);
+  auto mock = std::make_shared<MockTinyRerankerRuntime>([calls](auto features, const auto&) {
+    ++*calls;
+    std::vector<float> scores;
+    for (const auto& row : features) scores.push_back(row[1] == 0.5f ? 1.0f : 0.0f);
+    return scores;
+  });
+  int loads = 0;
+  engine.SetTinyRerankerRuntimeFactoryForTests(
+      [&](const auto&) {
+        ++loads;
+        return mock;
+      }, 2s);
+  cfg.tiny_reranker.model_path = azookey::core::PathToUtf8(model);
+  azookey::host::MixedConversionOptions mixed;
+  mixed.english_ranges = {{0, 2}};
+  mixed.typo_correction = false;
+
+  struct Route {
+    const char* name;
+    std::function<std::vector<Candidate>()> query;
+    int forwards;
+  };
+  const Route routes[]{
+      {"conversion", [&] { return engine.QueryCandidates("かな", "", kNowBase); }, 1},
+      {"live", [&] {
+         const auto candidate = engine.QueryLiveConversion("かな", "", kNowBase, nullptr);
+         return candidate ? std::vector<Candidate>{*candidate} : std::vector<Candidate>{};
+       }, 1},
+      {"mixed", [&] {
+         return engine.QueryCandidatesEx("PCかな", "", kNowBase, nullptr, 0, false, nullptr,
+                                         nullptr, &mixed).candidates;
+       }, 1},
+      {"predictions", [&] { return engine.QueryPredictions("かな", "", kNowBase); }, 2},
+      {"corrections", [&] { return engine.QueryCorrections("かな", "", "誤り", kNowBase); }, 1},
+  };
+  int expected_forwards = 0;
+  int expected_loads = 0;
+  for (const auto& route : routes) {
+    SCOPED_TRACE(route.name);
+    cfg.tiny_reranker.enabled = false;
+    engine.ApplyConfig(cfg);
+    const auto baseline = route.query();
+    ASSERT_FALSE(baseline.empty());
+    EXPECT_EQ(baseline.front().surface, "上");
+    EXPECT_DOUBLE_EQ(baseline.front().score, high.score);
+    EXPECT_EQ(calls->load(), expected_forwards);
+    EXPECT_EQ(loads, expected_loads);
+
+    cfg.tiny_reranker.enabled = true;
+    engine.ApplyConfig(cfg);
+    const auto reranked = route.query();
+    ASSERT_FALSE(reranked.empty());
+    EXPECT_EQ(reranked.front().surface, "下位");
+    EXPECT_DOUBLE_EQ(reranked.front().score, 1.15);
+    expected_forwards += route.forwards;
+    ++expected_loads;
+    EXPECT_EQ(calls->load(), expected_forwards);
+    EXPECT_EQ(loads, expected_loads);
+
+    cfg.tiny_reranker.enabled = false;
+    engine.ApplyConfig(cfg);
+    const auto disabled = route.query();
+    ASSERT_EQ(disabled.size(), baseline.size());
+    for (size_t i = 0; i < baseline.size(); ++i) {
+      EXPECT_EQ(disabled[i].surface, baseline[i].surface);
+      EXPECT_DOUBLE_EQ(disabled[i].score, baseline[i].score);
+    }
+    EXPECT_EQ(calls->load(), expected_forwards);
+    EXPECT_EQ(loads, expected_loads);
   }
 }
 

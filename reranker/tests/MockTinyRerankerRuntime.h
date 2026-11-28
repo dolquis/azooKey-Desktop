@@ -8,9 +8,8 @@ namespace azookey::reranker::test {
 
 class MockTinyRerankerRuntime final : public ITinyRerankerRuntime {
  public:
-  using Forward =
-      std::function<std::vector<float>(std::span<const std::array<float, 12>>,
-                                       const std::atomic<bool>&)>;
+  using Forward = std::function<std::vector<float>(std::span<const std::array<float, 12>>,
+                                                   const std::atomic<bool>&)>;
 
   explicit MockTinyRerankerRuntime(Forward forward) : forward_(std::move(forward)) {}
 

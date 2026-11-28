@@ -1261,30 +1261,31 @@ TEST_F(DispatcherTest, SecureCandidateAndLiveRequestsNeverCallTinyReranker) {
       [&](const auto&) {
         ++loads;
         return mock;
-      }, 2s);
+      },
+      2s);
 
   ipc::QueryCandidatesRequest candidates;
   candidates.reading = "にほん";
   ipc::QueryLiveConversionRequest live{"にほん", ""};
   candidates.secure = true;
   live.secure = true;
-  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(
-      9010, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(candidates))));
-  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(
-      9011, ipc::MessageType::QueryLiveConversion, ipc::BuildQueryLiveConversionRequest(live))));
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9010, ipc::MessageType::QueryCandidates,
+                                          ipc::BuildQueryCandidatesRequest(candidates))));
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9011, ipc::MessageType::QueryLiveConversion,
+                                          ipc::BuildQueryLiveConversionRequest(live))));
   EXPECT_EQ(loads, 0);
   EXPECT_EQ(forwards->load(), 0);
   candidates.secure = false;
   live.secure = false;
-  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(
-      9012, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(candidates))));
-  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(
-      9013, ipc::MessageType::QueryLiveConversion, ipc::BuildQueryLiveConversionRequest(live))));
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9012, ipc::MessageType::QueryCandidates,
+                                          ipc::BuildQueryCandidatesRequest(candidates))));
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9013, ipc::MessageType::QueryLiveConversion,
+                                          ipc::BuildQueryLiveConversionRequest(live))));
   EXPECT_EQ(loads, 1);
   EXPECT_EQ(forwards->load(), 2);
   engine.SetTinyRerankerPrivacyMode(true);
-  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(
-      9014, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(candidates))));
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9014, ipc::MessageType::QueryCandidates,
+                                          ipc::BuildQueryCandidatesRequest(candidates))));
   EXPECT_EQ(forwards->load(), 2);
 }
 

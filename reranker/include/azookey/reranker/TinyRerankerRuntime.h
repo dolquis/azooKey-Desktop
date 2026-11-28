@@ -62,7 +62,8 @@ const char* TinyRerankReason(TinyRerankOutcome outcome);
 // including across session resets. A late forward owns only its runtime, batch, and stop flag.
 class TinyRerankerRuntime {
  public:
-  using Factory = std::function<std::shared_ptr<ITinyRerankerRuntime>(const std::filesystem::path&)>;
+  using Factory =
+      std::function<std::shared_ptr<ITinyRerankerRuntime>(const std::filesystem::path&)>;
   using Deadline = std::optional<std::chrono::steady_clock::time_point>;
 
   void SetConfig(TinyRerankerConfig config);

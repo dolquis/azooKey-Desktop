@@ -55,15 +55,23 @@ std::optional<std::filesystem::path> ResolveTinyRerankerModelPath(
 
 const char* TinyRerankReason(TinyRerankOutcome outcome) {
   switch (outcome) {
-    case TinyRerankOutcome::Disabled: return "disabled";
-    case TinyRerankOutcome::SecureMode: return "secure_mode";
-    case TinyRerankOutcome::LoadFailed: return "load_failed";
-    case TinyRerankOutcome::InvalidInput: return "invalid_input";
-    case TinyRerankOutcome::Timeout: return "timeout";
-    case TinyRerankOutcome::InferError: return "infer_error";
-    case TinyRerankOutcome::CircuitOpen: return "circuit_open";
+    case TinyRerankOutcome::Disabled:
+      return "disabled";
+    case TinyRerankOutcome::SecureMode:
+      return "secure_mode";
+    case TinyRerankOutcome::LoadFailed:
+      return "load_failed";
+    case TinyRerankOutcome::InvalidInput:
+      return "invalid_input";
+    case TinyRerankOutcome::Timeout:
+      return "timeout";
+    case TinyRerankOutcome::InferError:
+      return "infer_error";
+    case TinyRerankOutcome::CircuitOpen:
+      return "circuit_open";
     case TinyRerankOutcome::Applied:
-    case TinyRerankOutcome::Skipped: return nullptr;
+    case TinyRerankOutcome::Skipped:
+      return nullptr;
   }
   return nullptr;
 }
@@ -116,8 +124,8 @@ TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candi
     load_attempted_ = true;
     try {
       if (factory_) {
-        const auto path = ResolveTinyRerankerModelPath(config_.model_path, user_models_,
-                                                        bundled_models_);
+        const auto path =
+            ResolveTinyRerankerModelPath(config_.model_path, user_models_, bundled_models_);
         if (path) runtime_ = factory_(*path);
       }
     } catch (...) {
@@ -168,8 +176,8 @@ TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candi
   };
   std::vector<float> scores;
   try {
-    std::packaged_task<std::vector<float>()> work(
-        [runtime = runtime_, batch = std::move(batch), stop] { return runtime->Infer(batch, *stop); });
+    std::packaged_task<std::vector<float>()> work([runtime = runtime_, batch = std::move(batch),
+                                                   stop] { return runtime->Infer(batch, *stop); });
     auto result = work.get_future();
     std::thread worker(std::move(work));
     worker.detach();

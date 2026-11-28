@@ -41,8 +41,7 @@ class TinyRerankerRuntimeTest : public testing::Test {
     if (!temp_.empty()) std::filesystem::remove_all(temp_, error);
   }
 
-  void Install(MockTinyRerankerRuntime::Forward forward,
-               std::chrono::milliseconds timeout = 2s) {
+  void Install(MockTinyRerankerRuntime::Forward forward, std::chrono::milliseconds timeout = 2s) {
     auto mock = std::make_shared<MockTinyRerankerRuntime>(std::move(forward));
     runtime_.SetFactoryForTests([mock](const auto&) { return mock; }, timeout);
   }
@@ -145,10 +144,14 @@ TEST_F(TinyRerankerRuntimeTest, MalformedOutputsAreAtomicAndSuccessAndReloadRese
   auto calls = std::make_shared<std::atomic<int>>(0);
   Install([calls](auto rows, const auto&) -> std::vector<float> {
     switch ((*calls)++) {
-      case 1: return std::vector<float>(rows.size(), 0.0f);
-      case 2: return {1.0f};
-      case 3: return {1.0f, std::numeric_limits<float>::quiet_NaN()};
-      default: throw std::runtime_error("mock failure");
+      case 1:
+        return std::vector<float>(rows.size(), 0.0f);
+      case 2:
+        return {1.0f};
+      case 3:
+        return {1.0f, std::numeric_limits<float>::quiet_NaN()};
+      default:
+        throw std::runtime_error("mock failure");
     }
   });
   EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::InferError);
@@ -172,11 +175,13 @@ TEST_F(TinyRerankerRuntimeTest, WatchdogDiscardsTheLateResultAndOpensTheBreaker)
   runtime_.SetConfig(config_);
   auto stopped = std::make_shared<std::promise<void>>();
   auto completion = stopped->get_future();
-  Install([stopped](auto rows, const auto& stop) {
-    stop.wait(false, std::memory_order_relaxed);
-    stopped->set_value();
-    return std::vector<float>(rows.size(), 1.0f);
-  }, 10ms);
+  Install(
+      [stopped](auto rows, const auto& stop) {
+        stop.wait(false, std::memory_order_relaxed);
+        stopped->set_value();
+        return std::vector<float>(rows.size(), 1.0f);
+      },
+      10ms);
 
   std::vector<core::Candidate> candidates{{"先", "", 0.5}, {"後", "", 1.0}};
   EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Timeout);

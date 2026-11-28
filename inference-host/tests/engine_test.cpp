@@ -2797,7 +2797,7 @@ TEST(InferenceEngineTest, TinyRerankerCoversEveryRouteAndOffPreservesOrderAndSco
   const auto model = azookey::core::Utf8Path(temp.File("tiny.onnx"));
   std::ofstream(model).put('x');
   azookey::learning::UserDictionary dictionary(temp.File("user.json"),
-                                                &azookey::learning::test::Crypto());
+                                               &azookey::learning::test::Crypto());
   ASSERT_TRUE(dictionary.Load());
   Candidate high{"上", "かな", 1.0625};
   Candidate low{"下位", "かな", 1.0};
@@ -2820,7 +2820,8 @@ TEST(InferenceEngineTest, TinyRerankerCoversEveryRouteAndOffPreservesOrderAndSco
       [&](const auto&) {
         ++loads;
         return mock;
-      }, 2s);
+      },
+      2s);
   cfg.tiny_reranker.model_path = azookey::core::PathToUtf8(model);
   azookey::host::MixedConversionOptions mixed;
   mixed.english_ranges = {{0, 2}};
@@ -2833,14 +2834,19 @@ TEST(InferenceEngineTest, TinyRerankerCoversEveryRouteAndOffPreservesOrderAndSco
   };
   const Route routes[]{
       {"conversion", [&] { return engine.QueryCandidates("かな", "", kNowBase); }, 1},
-      {"live", [&] {
+      {"live",
+       [&] {
          const auto candidate = engine.QueryLiveConversion("かな", "", kNowBase, nullptr);
          return candidate ? std::vector<Candidate>{*candidate} : std::vector<Candidate>{};
-       }, 1},
-      {"mixed", [&] {
-         return engine.QueryCandidatesEx("PCかな", "", kNowBase, nullptr, 0, false, nullptr,
-                                         nullptr, &mixed).candidates;
-       }, 1},
+       },
+       1},
+      {"mixed",
+       [&] {
+         return engine
+             .QueryCandidatesEx("PCかな", "", kNowBase, nullptr, 0, false, nullptr, nullptr, &mixed)
+             .candidates;
+       },
+       1},
       {"predictions", [&] { return engine.QueryPredictions("かな", "", kNowBase); }, 2},
       {"corrections", [&] { return engine.QueryCorrections("かな", "", "誤り", kNowBase); }, 1},
   };

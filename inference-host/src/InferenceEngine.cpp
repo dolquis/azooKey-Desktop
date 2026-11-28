@@ -1514,14 +1514,14 @@ void InferenceEngine::SetTinyRerankerPrivacyMode(bool secure) {
 }
 
 void InferenceEngine::SetTinyRerankerModelDirectories(std::filesystem::path user_models,
-                                                     std::filesystem::path bundled_models) {
+                                                      std::filesystem::path bundled_models) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   tiny_reranker_.SetModelDirectories(std::move(user_models), std::move(bundled_models));
 }
 
 void InferenceEngine::ApplyTinyRerankerLocked(std::vector<core::Candidate>& candidates, bool secure,
-                                             const std::atomic<bool>* cancel,
-                                             reranker::TinyRerankerRuntime::Deadline deadline) {
+                                              const std::atomic<bool>* cancel,
+                                              reranker::TinyRerankerRuntime::Deadline deadline) {
   const auto outcome =
       tiny_reranker_.Apply(candidates, secure || tiny_reranker_privacy_secure_, cancel, deadline);
   if (!runtime_logger_ || !runtime_logger_->enabled()) return;

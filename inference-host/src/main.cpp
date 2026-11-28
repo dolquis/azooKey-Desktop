@@ -1070,7 +1070,8 @@ int main(int argc, char** argv) {
   if (const auto exe_dir = GetExeDirectory(); !exe_dir.empty())
     tiny_bundled_models = exe_dir / "models";
 #endif
-  engine.SetTinyRerankerModelDirectories(std::move(tiny_user_models), std::move(tiny_bundled_models));
+  engine.SetTinyRerankerModelDirectories(std::move(tiny_user_models),
+                                         std::move(tiny_bundled_models));
   engine.SetTypoStore(&typo_store);
   engine.SetAutoWordStore(&auto_word_store);
   engine.SetEnglishLearningStore(&english_store);

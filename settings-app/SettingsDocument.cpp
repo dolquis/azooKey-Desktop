@@ -86,8 +86,8 @@ j::Object SanitizeReranker(const j::Object& input, std::vector<std::string>* war
     else if ((key == "tinyNeuralTimeoutMs" || key == "tinyNeuralFailureThreshold") &&
              IsInteger(value)) {
       const bool timeout = key == "tinyNeuralTimeoutMs";
-      output.emplace(key, j::Value(std::clamp(value.AsNumber(), timeout ? 10.0 : 1.0,
-                                             timeout ? 20.0 : 10.0)));
+      output.emplace(
+          key, j::Value(std::clamp(value.AsNumber(), timeout ? 10.0 : 1.0, timeout ? 20.0 : 10.0)));
       continue;
     } else if (key == "nllTopK")
       valid = IsInteger(value, 1, 16);

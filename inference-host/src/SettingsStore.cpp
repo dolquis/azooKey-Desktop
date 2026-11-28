@@ -229,8 +229,8 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
     tiny.enabled = ReadBool(*reranker, "tinyNeuralEnabled", tiny.enabled);
     tiny.model_path = ReadString(*reranker, "tinyNeuralModelPath", tiny.model_path);
     tiny.timeout_ms = ReadClampedInt32(*reranker, "tinyNeuralTimeoutMs", tiny.timeout_ms,
-                                      azookey::reranker::kTinyTimeoutMinMs,
-                                      azookey::reranker::kTinyTimeoutMaxMs);
+                                       azookey::reranker::kTinyTimeoutMinMs,
+                                       azookey::reranker::kTinyTimeoutMaxMs);
     tiny.failure_threshold =
         ReadClampedInt32(*reranker, "tinyNeuralFailureThreshold", tiny.failure_threshold,
                          azookey::reranker::kTinyFailureMin, azookey::reranker::kTinyFailureMax);

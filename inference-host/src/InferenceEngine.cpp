@@ -2251,11 +2251,16 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       merged.push_back(std::move(c));
     }
   }
-  // DEV-2149 interim section 12.5 dict_best and section 12.10 s1_strength: 1 for a word of the
-  // dictionaries, the user dictionary or the mined words, 0 otherwise.
+  // Section 12.5 dict_best and section 12.10 s1_strength (DEV-2150): the words of the
+  // dictionaries, the user dictionary and the mined words for the reading as typed, and their
+  // scores.
   std::vector<std::string> typed_words;
+  std::vector<double> typed_word_scores;
   if (typo_hypotheses)
-    for (const auto& c : merged) typed_words.push_back(c.surface);
+    for (const auto& c : merged) {
+      typed_words.push_back(c.surface);
+      typed_word_scores.push_back(c.score);
+    }
 
   if (canceled()) return {};
 
@@ -2532,7 +2537,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     TypoActivationInput activation;
     if (!result.empty()) activation.top1_score = result[0].score;
     if (result.size() > 1) activation.top2_score = result[1].score;
-    activation.dictionary_best = typed_words.empty() ? 0.0 : 1.0;
+    for (const double score : typed_word_scores)
+      activation.dictionary_best =
+          (std::max)(activation.dictionary_best, TypoDictionaryHitScore(score));
     const TypoGuards guards{config.typo_min_count, config.typo_min_confidence_for_ranking,
                             config.typo_min_confidence_for_top_candidate};
     const bool activates = TypoCorrectionActivates(activation);
@@ -2550,11 +2557,13 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
         options.personalized = &*lookup;
       }
       const auto hypotheses = correction::GenerateReadingHypotheses({kana, raw_keys}, options);
-      const double top1_strength =
-          !result.empty() && std::find(typed_words.begin(), typed_words.end(),
-                                       result.front().surface) != typed_words.end()
-              ? 1.0
-              : 0.0;
+      double top1_strength = 0.0;
+      if (!result.empty()) {
+        const auto at = std::find(typed_words.begin(), typed_words.end(), result.front().surface);
+        if (at != typed_words.end())
+          top1_strength = TypoDictionaryHitScore(
+              typed_word_scores[static_cast<size_t>(at - typed_words.begin())]);
+      }
       std::vector<TypoHypothesisWord> words;
       {
         std::lock_guard<std::mutex> lock(state_mutex_);
@@ -2584,6 +2593,58 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       if (!canceled())
         PlaceTypoHypothesisWords(result, std::move(words), typo_mode, top1_strength, guards,
                                  config.typo_max_reading_hypotheses);
+      // Section 12.16 (DEV-2150 plan X): convert the reading of the frame's first word once and
+      // put that conversion's first candidate before it, with its reading and label, unless the
+      // candidate is shown already (the word itself, say) or is written in kana alone, the kana
+      // of a wrong reading. The frame starts after the first candidate, so an aggressive lead
+      // is not its head.
+      if (!canceled() && request_time_left() && !result.empty()) {
+        const auto head = std::find_if(
+            result.begin() + 1, result.end(),
+            [](const core::Candidate& c) { return c.debug_info == kTypoCorrectionMark; });
+        if (head != result.end()) {
+          const std::string reading = head->reading;
+          const auto at = static_cast<size_t>(head - result.begin());
+          // As for the v1 suggestion below: the converter that did not fail, a fresh budget.
+          const auto& again_converter =
+              convert_failed && fallback_converter ? fallback_converter : converter;
+          auto again_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
+          if (request_deadline) again_deadline = (std::min)(again_deadline, *request_deadline);
+          std::vector<core::Candidate> again;
+          {
+            std::lock_guard<std::mutex> again_lock(converter_call_mutex_);
+            try {
+              again = again_converter->Convert(
+                  reading, BuildContext(reading, limited_context, cancel, again_deadline,
+                                        effective_max_candidates, live));
+            } catch (...) {
+              // A failed conversion leaves the frame as it is rather than fail the query.
+              again.clear();
+            }
+          }
+          if (!canceled() && !again.empty() && !again.front().surface.empty() &&
+              KanaSurfaceReading(again.front().surface).empty() &&
+              std::none_of(result.begin(), result.end(), [&](const core::Candidate& existing) {
+                return existing.surface == again.front().surface;
+              })) {
+            auto& candidate = again.front();
+            candidate.reading = reading;
+            candidate.debug_info = kTypoCorrectionMark;
+            candidate.description = head->description;
+            candidate.score = head->score;
+            result.insert(result.begin() + static_cast<std::ptrdiff_t>(at), std::move(candidate));
+            // Keep to typo_max_reading_hypotheses words, a lead included, as placed above.
+            size_t marked = 0;
+            for (size_t i = 0; i < result.size(); ++i) {
+              if (result[i].debug_info != kTypoCorrectionMark) continue;
+              if (++marked > config.typo_max_reading_hypotheses) {
+                result.erase(result.begin() + static_cast<std::ptrdiff_t>(i));
+                break;
+              }
+            }
+          }
+        }
+      }
     }
   }
 

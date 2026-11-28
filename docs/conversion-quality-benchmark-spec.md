@@ -435,8 +435,19 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 - **M55 受け入れ**: 補正有効モードでの**実測値**を検証する。
   `typo_correction_top1/5_accuracy` は評価対象モード（M55 既定の `rank` 等）で、
   `typo_overcorrection_rate` は §4.3.1 のとおり `aggressive` モードで測る。
+  採取の構成は次のとおり。
+  - モデル: Zenzai の実モデル（`ggml-model-Q5_K_M.gguf`、`--model`）
+  - 辞書: 同梱辞書（`--dict-dir`）
+  - ラティス: `--lattice off`
+  - 学習ストア: 空（`learning_state = empty`）
+  - モデルなしの構成は受け入れに用いない。補正が無くても clean の正解が top5 を外れる行があり、その行が
+    `typo_overcorrection_rate` の床になるため。
 - 通常変換（`kana_kanji_eval`）は常に `off`（補正非対象）。baseline は
   モードごとに別管理（互換キーに `typo_correction_mode` を含む、§14）。
+- `off` 以外のモードでは、空の打ち間違え学習ストア（`learning_state = empty`）を Host の
+  エンジンに渡して変換する。ケースに `raw_keys`（§4.3）があれば、Host の候補照会と同じく
+  補正仮説の入力として渡す。v1 の `auto_replace` は bench のモードとして受け付けない
+  （`aggressive` を指定する）。
 
 ## 8. 出力 JSON 形式
 
@@ -585,7 +596,7 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `acceptable_match` | `top1` が正準形 `expected` 以外の許容変種に一致（`top1 ∈ 正解集合 \ {expected}`、§6.1.1）。`exact_match` と排他で、両者が同時に true にならない |
 | `cer` / `nfkc_cer` | §6.1.2 の per-case CER（1.0 超あり得る、クランプなし） |
 | `reading_fidelity` | 第一候補の読みが入力読みと一致（通常変換ケース） |
-| `typo_corrected` | typo 系で補正が発動したか（`--typo-mode off` では常に false） |
+| `typo_corrected` | typo 系で第一候補が補正の候補か（補正が置いた候補か、補正後の読みで変換した結果。§4.3.1 の `typo_false_positive_rate` の分子。`--typo-mode off` では常に false） |
 | `latency_ms` | 当該ケースの計測 latency（`--iterations` 指定時は中央値） |
 
 - per-case JSONL は集計を持たない（集計は §8 の `--output` 側の正典）。

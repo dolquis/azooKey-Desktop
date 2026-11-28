@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ConversionQuality.h"
@@ -209,7 +210,7 @@ TEST(ConversionQualityTest, ReportsKatakanaSubsetP99AndDictionaryCompatibilityKe
   options.eval_path = data;
   options.output_path = directory.path() / "result.json";
   options.iterations = 1;
-  const auto query = [](const std::string& input, const std::string&) {
+  const auto query = [](const std::string& input, const std::string&, const std::string&) {
     // テスト comes back unconverted, so the katakana subset is one of two.
     const std::string surface = input == "こーひー" ? "コーヒー"
                                 : input == "てすと" ? "てすと"
@@ -268,7 +269,7 @@ TEST(ConversionQualityTest, BaselineWithoutNllCountsAsNllOff) {
   options.eval_path = data;
   options.output_path = directory.path() / "result.json";
   options.iterations = 1;
-  const auto query = [](const std::string& input, const std::string&) {
+  const auto query = [](const std::string& input, const std::string&, const std::string&) {
     core::Candidate candidate;
     candidate.surface = "仮名";
     candidate.reading = input;
@@ -293,6 +294,103 @@ TEST(ConversionQualityTest, BaselineWithoutNllCountsAsNllOff) {
   options.nll = "on";
   EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
   EXPECT_EQ(error, "baseline is incompatible: nll");
+#endif
+}
+
+TEST(ConversionQualityTest, TypoModesPassRawKeysAndCountCorrectionsInFirstPlace) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "SHA-256 uses Windows CNG and NFKC uses the Windows Normaliz API";
+#else
+  ScopedDirectory directory("azookey-conversion-quality-typo");
+  const auto data = directory.path() / "bench" / "data" / "typo_eval.jsonl";
+  const auto line = [](std::string_view id, std::string_view keys, std::string_view observed,
+                       std::string_view intended, std::string_view expected,
+                       std::string_view type) {
+    const bool clean = type == "null";
+    return "{\"id\":\"" + std::string(id) + "\",\"raw_keys\":\"" + std::string(keys) +
+           "\",\"observed_reading\":\"" + std::string(observed) + "\",\"intended_reading\":\"" +
+           std::string(intended) + "\",\"expected_surface\":\"" + std::string(expected) +
+           "\",\"typo_type\":" + (clean ? "null" : "\"" + std::string(type) + "\"") +
+           ",\"category\":[\"" + (clean ? "typo_clean" : "typo") +
+           "\"],\"provenance\":\"authored\"}\n";
+  };
+  WriteBytes(data, line("t1", "taberi", "たべり", "たべる", "食べる", "adjacent_key") +
+                       line("c1", "taberu", "たべる", "たべる", "食べる", "null") +
+                       line("c2", "kaku", "かく", "かく", "書く", "null") +
+                       line("c3", "kau", "かう", "かう", "買う", "null"));
+  std::vector<std::string> raw_keys;
+  const auto query = [&raw_keys](const std::string& input, const std::string&,
+                                 const std::string& keys) {
+    raw_keys.push_back(keys);
+    const auto make = [&input](std::string surface, bool corrected) {
+      core::Candidate candidate;
+      candidate.surface = std::move(surface);
+      candidate.reading = input;
+      if (corrected) candidate.debug_info = std::string(kTypoCorrectionDebugInfo);
+      return candidate;
+    };
+    CandidateQueryResult result;
+    if (input == "たべり") {
+      result.candidates = {make("食べる", true), make("たべり", false)};
+    } else if (input == "たべる") {
+      result.candidates = {make("食べる", false), make("食べる。", true)};
+    } else if (input == "かく") {
+      // The conversion ran on another reading: every candidate is a correction.
+      result.candidates = {make("書く", false)};
+      result.corrected_reading = "かくう";
+    } else {
+      // A correction in first place that pushes the expected surface out.
+      result.candidates = {make("飼う", true)};
+    }
+    return result;
+  };
+  ConversionQualityOptions options;
+  options.eval_path = data;
+  options.output_path = directory.path() / "rank.json";
+  options.per_case_path = directory.path() / "rank.jsonl";
+  options.iterations = 1;
+  options.typo_mode = "rank";
+  std::string error;
+  ASSERT_TRUE(RunConversionQualityEvaluation(options, query, &error)) << error;
+  EXPECT_EQ(raw_keys, (std::vector<std::string>{"taberi", "taberu", "kaku", "kau"}));
+  const auto rank = ipc::json::Parse(ReadText(options.output_path));
+  ASSERT_TRUE(rank && rank->IsObject());
+  EXPECT_EQ(rank->FindObject("config")->at("typo_correction_mode").AsString(), "rank");
+  const auto& rank_summary = *rank->FindObject("summary");
+  EXPECT_DOUBLE_EQ(rank_summary.at("typo_correction_top1_accuracy").AsNumber(), 1.0);
+  EXPECT_DOUBLE_EQ(rank_summary.at("typo_correction_top5_accuracy").AsNumber(), 1.0);
+  EXPECT_DOUBLE_EQ(rank_summary.at("typo_false_positive_rate").AsNumber(), 2.0 / 3.0);
+  // Spec section 4.3.1 measures the overcorrection under aggressive only.
+  EXPECT_DOUBLE_EQ(rank_summary.at("typo_overcorrection_rate").AsNumber(), 0.0);
+  // Only the first candidate counts: c1's second one is a correction.
+  const auto per_case = ReadText(options.per_case_path);
+  for (const auto& [id, corrected] : {std::pair{"t1", true}, std::pair{"c1", false},
+                                      std::pair{"c2", true}, std::pair{"c3", true}}) {
+    const auto at = per_case.find("\"id\":\"" + std::string(id) + "\"");
+    ASSERT_NE(at, std::string::npos) << id;
+    const auto flag = per_case.find("\"typo_corrected\":", at);
+    ASSERT_NE(flag, std::string::npos) << id;
+    EXPECT_EQ(per_case.compare(flag + 17, corrected ? 4 : 5, corrected ? "true" : "false"), 0)
+        << id;
+  }
+
+  // Each mode keeps its own baseline (spec section 14.1).
+  options.typo_mode = "aggressive";
+  options.output_path = directory.path() / "aggressive.json";
+  options.per_case_path.clear();
+  options.baseline_path = directory.path() / "rank.json";
+  EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
+  EXPECT_EQ(error, "baseline is incompatible: typo_correction_mode");
+  options.baseline_path.clear();
+  ASSERT_TRUE(RunConversionQualityEvaluation(options, query, &error)) << error;
+  const auto aggressive = ipc::json::Parse(ReadText(options.output_path));
+  ASSERT_TRUE(aggressive && aggressive->IsObject());
+  EXPECT_DOUBLE_EQ(aggressive->FindObject("summary")->at("typo_overcorrection_rate").AsNumber(),
+                   1.0 / 3.0);
+
+  options.typo_mode = "auto_replace";
+  EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
+  EXPECT_EQ(error, "--typo-mode must be off, suggest, rank or aggressive");
 #endif
 }
 

@@ -61,6 +61,12 @@ struct TypoHypothesisEvidence {
   double dictionary_hit_score{1.0};
 };
 
+// Section 12.5 dict_best and section 12.10 s1_strength of a word of the typed reading whose
+// dictionary score (learning::DictionaryStore) is `word_score`: the score over that of a Sudachi
+// word of the highest frequency, in [0, 1].
+inline constexpr double kTypoDictionaryFullScore = 1.4;
+double TypoDictionaryHitScore(double word_score);
+
 // reading_similarity_score: 1 - edit_distance / the longer reading's code points.
 double TypoReadingSimilarity(size_t edit_distance, size_t observed_codepoints,
                              size_t corrected_codepoints);

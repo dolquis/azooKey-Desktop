@@ -297,6 +297,62 @@ TEST(ConversionQualityTest, BaselineWithoutNllCountsAsNllOff) {
 #endif
 }
 
+TEST(ConversionQualityTest, BaselineWithoutTheStageTwoAndProbeKeysCountsAsTheirDefaults) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "SHA-256 uses Windows CNG and NFKC uses the Windows Normaliz API";
+#else
+  ScopedDirectory directory("azookey-conversion-quality-stage-two");
+  const auto data = directory.path() / "bench" / "data" / "eval.jsonl";
+  WriteBytes(data,
+             "{\"id\":\"a\",\"input\":\"かな\",\"expected\":\"仮名\",\"category\":[\"general\"],"
+             "\"provenance\":\"authored\"}\n");
+  ConversionQualityOptions options;
+  options.eval_path = data;
+  options.output_path = directory.path() / "result.json";
+  options.iterations = 1;
+  const auto query = [](const std::string& input, const std::string&, const std::string&) {
+    core::Candidate candidate;
+    candidate.surface = "仮名";
+    candidate.reading = input;
+    return std::vector<core::Candidate>{candidate};
+  };
+  std::string error;
+  ASSERT_TRUE(RunConversionQualityEvaluation(options, query, &error)) << error;
+  std::string text = ReadText(options.output_path);
+  const auto report = ipc::json::Parse(text);
+  ASSERT_TRUE(report && report->IsObject());
+  const auto* config = report->FindObject("config");
+  ASSERT_NE(config, nullptr);
+  EXPECT_EQ(config->at("lattice_with_model").AsString(), "off");
+  EXPECT_EQ(config->at("nll_breaker").AsString(), "product");
+  EXPECT_EQ(config->at("first_clause_probe").AsString(), "off");
+
+  // A baseline kept before these keys existed ran without stage 2 and the first-clause probe, and
+  // with the product breaker (spec section 14.1).
+  for (const std::string key : {"\"lattice_with_model\":\"off\",", "\"nll_breaker\":\"product\",",
+                                "\"first_clause_probe\":\"off\","}) {
+    const auto at = text.find(key);
+    ASSERT_NE(at, std::string::npos) << key;
+    text.erase(at, key.size());
+  }
+  const auto baseline = directory.path() / "baseline.json";
+  WriteBytes(baseline, text);
+  options.baseline_path = baseline;
+  EXPECT_TRUE(RunConversionQualityEvaluation(options, query, &error)) << error;
+  options.lattice_with_model = "k=2;band=best";
+  EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
+  EXPECT_EQ(error, "baseline is incompatible: lattice_with_model");
+  options.lattice_with_model = "off";
+  options.nll_breaker = "per_request";
+  EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
+  EXPECT_EQ(error, "baseline is incompatible: nll_breaker");
+  options.nll_breaker = "product";
+  options.first_clause_probe = "on";
+  EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
+  EXPECT_EQ(error, "baseline is incompatible: first_clause_probe");
+#endif
+}
+
 TEST(ConversionQualityTest, TypoModesPassRawKeysAndCountCorrectionsInFirstPlace) {
 #if !defined(_WIN32)
   GTEST_SKIP() << "SHA-256 uses Windows CNG and NFKC uses the Windows Normaliz API";

@@ -842,6 +842,7 @@ TEST(EngineLattice, StageTwoKeepsTheLatticePathsNllScoredBelowTheModel) {
   EXPECT_TRUE(LatticeModelCandidates(
                   engine->QueryCandidatesEx("にほんご", "", kNow, nullptr, 0, true).candidates)
                   .empty());
+  EXPECT_TRUE(seen.empty());  // A live request runs no NLL rerank.
   // A request the model fell back on gets stage 1's lattice only.
   const auto fallen = engine->QueryCandidates("にほんごです", "", kNow);
   EXPECT_FALSE(LatticeCandidates(fallen).empty());

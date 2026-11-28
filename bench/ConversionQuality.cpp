@@ -498,6 +498,7 @@ std::vector<std::string> IncompatibleBaselineKeys(const j::Value& baseline,
       "lattice_with_model",
       "nll",
       "nll_breaker",
+      "first_clause_probe",
       "eval_source",
       "profile_sha256",
       "category_filter",
@@ -513,6 +514,7 @@ std::vector<std::string> IncompatibleBaselineKeys(const j::Value& baseline,
     if (key == "nll") return j::Value("off");
     if (key == "lattice_with_model") return j::Value("off");
     if (key == "nll_breaker") return j::Value("product");
+    if (key == "first_clause_probe") return j::Value("off");
     if (key == "eval_source") return j::Value("bundled");
     if (key == "profile_sha256") return j::Value("none");
     return std::nullopt;
@@ -659,6 +661,7 @@ j::Object BuildConfig(const ConversionQualityOptions& options, std::string_view 
   config.emplace("dictionary_bundle_sha256", j::Value(options.dictionary_bundle_sha256));
   config.emplace("eval_dataset_sha256", j::Value(std::move(eval_dataset_sha256)));
   config.emplace("eval_source", j::Value(std::string(eval_source)));
+  config.emplace("first_clause_probe", j::Value(options.first_clause_probe));
   config.emplace("host_version", j::Value(options.host_version));
   config.emplace("lattice", j::Value(options.lattice));
   config.emplace("lattice_with_model", j::Value(options.lattice_with_model));

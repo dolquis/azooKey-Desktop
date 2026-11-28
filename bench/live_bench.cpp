@@ -762,6 +762,7 @@ int main(int argc, char** argv) {
   // Recorded from the engine, so the compatibility key reflects the setting it ran with.
   quality_options.nll = engine.config().nll.enabled ? "on" : "off";
   if (nll_breaker_per_request) quality_options.nll_breaker = "per_request";
+  if (first_clause_probe) quality_options.first_clause_probe = "on";
   if (profile) {
     // Spec section 15.5: only a format with [PROF] can carry the profile.
     const auto format = engine.health_snapshot().prompt_format;
@@ -886,7 +887,8 @@ int main(int argc, char** argv) {
       return 2;
     }
     if (probe) {
-      // The 750 ms is the TIP's wait for the candidate window (legacy-parity-spec section 1.2).
+      // The 750 ms is the TIP's wait for the candidate window (host-availability-spec
+      // section 8.5.2).
       const auto over = static_cast<size_t>(std::count_if(probe_sum_ms.begin(), probe_sum_ms.end(),
                                                           [](double ms) { return ms > 750.0; }));
       const auto quantile = [](const std::vector<double>& values, double fraction) {

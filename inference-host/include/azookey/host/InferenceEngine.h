@@ -481,8 +481,8 @@ class InferenceEngine {
   // of the contexts QueryCandidates gives the model conversion and NLL rerank. The Host never
   // calls it, so its requests keep the empty profile (zenzai-inference-spec section 9.4.2).
   void SetBenchInstructionProfile(std::string profile);
-  // azookey_bench only (DEV-2102): closes the NLL breaker (zenzai-inference-spec section 7.5) as a
-  // settings change does, so a run measures each request's NLL apart from the earlier requests.
+  // azookey_bench only (DEV-2102): closes the NLL breaker (neural-reranker-nll-spec section B8) as
+  // a settings change does, so a run measures each request's NLL apart from the earlier requests.
   void ResetNllBreakerForBench();
   // Test-only: receives the context QueryCandidates gives NLL rerank, whenever NLL is enabled and
   // the request is not live, before the model check. Set it before any query.

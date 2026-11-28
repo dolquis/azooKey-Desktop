@@ -4444,9 +4444,9 @@ TEST_F(DispatcherExposureTest, LearningSummaryIsAbsentUntilTraceSnapshotLoads) {
   const auto list = [&]() {
     ipc::ListLearningEntriesRequest request;
     request.store = "learning";
-    const auto response = startup_dispatcher.Dispatch(
-        MakeReq(++request_id, ipc::MessageType::ListLearningEntries,
-                ipc::BuildListLearningEntriesRequest(request)));
+    const auto response =
+        startup_dispatcher.Dispatch(MakeReq(++request_id, ipc::MessageType::ListLearningEntries,
+                                            ipc::BuildListLearningEntriesRequest(request)));
     return response ? ipc::ParseListLearningEntriesResponse(response->payload_json) : std::nullopt;
   };
 
@@ -4474,8 +4474,8 @@ TEST_F(DispatcherExposureTest, TraceForgetRecoversAfterTheLearningEntryIdDisappe
   ASSERT_EQ(trace.Stats().records, 2u);
 
   using azookey::host::LearningDataStore;
-  const auto page =
-      trace_engine.ListLearningEntries(LearningDataStore::Learning, forgotten.chosen.surface, 0, 10);
+  const auto page = trace_engine.ListLearningEntries(LearningDataStore::Learning,
+                                                     forgotten.chosen.surface, 0, 10);
   ASSERT_EQ(page.entries.size(), 1u);
   ipc::ForgetLearningEntryRequest request;
   request.store = "learning";
@@ -4492,9 +4492,9 @@ TEST_F(DispatcherExposureTest, TraceForgetRecoversAfterTheLearningEntryIdDisappe
   ASSERT_TRUE(failure);
   EXPECT_FALSE(failure->ok);
   EXPECT_EQ(failure->error, ipc::kLearningDataErrorSaveFailed);
-  EXPECT_TRUE(trace_engine
-                  .ListLearningEntries(LearningDataStore::Learning, forgotten.chosen.surface, 0, 10)
-                  .entries.empty());
+  EXPECT_TRUE(
+      trace_engine.ListLearningEntries(LearningDataStore::Learning, forgotten.chosen.surface, 0, 10)
+          .entries.empty());
   EXPECT_EQ(trace.Stats().records, 2u);
 
   ASSERT_TRUE(trace.Flush());

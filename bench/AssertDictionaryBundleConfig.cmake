@@ -125,6 +125,10 @@ run_bench(stage_two_band_alone --dict-dir "${WORK_DIR}/lattice" --lattice-band l
 expect_failure(stage_two_band_alone "--lattice-band requires --lattice-with-model")
 run_bench(stage_two_too_many --dict-dir "${WORK_DIR}/lattice" --lattice-with-model 9)
 expect_failure(stage_two_too_many "--lattice-with-model must be 1 to 8")
+# DEV-2110: the first segment's request asks the model.
+run_bench(first_clause_without_model --dict-dir "${WORK_DIR}/lattice" --first-clause-probe)
+expect_failure(first_clause_without_model
+               "--first-clause-probe requires --eval, --model and --dict-dir")
 run_bench(empty_directory --dict-dir "${WORK_DIR}/empty" --lattice off)
 expect_failure(empty_directory "--dict-dir holds no .azdic file")
 run_bench(broken_layer --dict-dir "${WORK_DIR}/broken" --lattice off)

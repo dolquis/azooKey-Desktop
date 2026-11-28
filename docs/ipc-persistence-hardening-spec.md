@@ -45,7 +45,7 @@ canonical_for: ["ユーザーデータ永続化の堅牢化", "IPC/JSON 堅牢�
   data\     learning.v2.tsv.enc / user_dict.json.enc / typo_corrections.tsv.enc（M35）/
             typo_learning.v2.db.enc（M55）/ typo_corrections.v1.tsv.bak.enc（M55）/
             auto_words.tsv.enc（M36-A）/ english_learning.v2.tsv.enc（M60）/
-            host_run_state.txt（M47）
+            reranker_trace.jsonl.enc（M56）/ host_run_state.txt（M47）
   logs\     host-YYYYMMDD.jsonl / tip-YYYYMMDD.jsonl
   models\   zenzai\
 ```
@@ -57,6 +57,7 @@ canonical_for: ["ユーザーデータ永続化の堅牢化", "IPC/JSON 堅牢�
 §2）の対象範囲は本レイアウトを正典とする。M55 の `typo_learning.v2.db.enc` と `typo_corrections.v1.tsv.bak.enc` は
 backup に入れず、typo の学習は item `typo_corrections` と `typo_patterns` として書く（`docs/learning-data-management-spec.md` §5）。ただし `host_run_state.txt`（`host-availability-spec.md` §8.5.3 の
 クラッシュ検知用の印）はユーザーデータではなく、backup の対象に含めない。
+`reranker_trace.jsonl.enc` の ZIP の扱いは [学習データ管理仕様](learning-data-management-spec.md) §5 に従う。
 拡張子 `.enc` のない旧ファイルは移行元で、移行時の `.bak` は保全する。
 
 `%LOCALAPPDATA%` は `SHGetKnownFolderPath(FOLDERID_LocalAppData, ...)` で
@@ -70,6 +71,8 @@ backup に入れず、typo の学習は item `typo_corrections` と `typo_patter
 - `--data-root` を指定した場合は、その絶対パスを config / data / logs / models の
   root とする。`--learning` / `--user-dict` の明示パスはこの root より優先する。
 - `--data-root` も指定がない場合は `%LOCALAPPDATA%\azooKey\data\...` を使う。
+- 露出トレースは、上記の順で解決した学習パスと同じディレクトリの
+  `reranker_trace.jsonl.enc` に置く（[ニューラルリランカー仕様](neural-reranker-spec.md) §6.1）。
 - 保存先決定ロジックは純粋関数として切り出し、unit test で
   「明示指定優先 / 既定パス生成 / 環境変数欠落時の挙動」を検証する。
 
@@ -155,7 +158,8 @@ payload の再文字列化は行わず、キー順序・空白・数値・escape
   `nullopt` とする。小数・指数形などの非 plain 数値形は double 経路に入るため、
   `int64_t` / `uint64_t` の変換前に exclusive upper bound を検査し、範囲外 double
   を整数へキャストしてはならない。直列化側は `request_id` / `Ping.nonce` /
-  `t_ms` / `Cancel.target_request_id` / `CommitObservation.timestamp_ms` 等の
+  `t_ms` / `Cancel.target_request_id` / `CommitObservation.timestamp_ms` /
+  `CommitObservation.shown_at_ms` 等の
   uint64 フィールドを token 保持版 `Value(uint64_t)` に渡し、2^53 超の値でも
   wire 上で丸めない。
 - **数値 codec の locale 非依存** — 数値の parse / stringify は

@@ -121,8 +121,8 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `QueryPredictions` | `docs/legacy-parity-spec.md` §3.5 |
 | `QueryCorrections` | ハンドラを持たない。応答は `docs/ipc-persistence-hardening-spec.md` §6.3 |
 | `Cancel` | 本書「Handshake 認証ゲート」（`client_id` ごとの名前空間）、`docs/romaji-batch-conversion-spec.md` §6.3.1・§6.3.2 |
-| `CommitObservation` | `docs/learning-data-management-spec.md` §12（配送保証と冪等化）、`docs/privacy-and-secure-input-spec.md` §5.1.1（学習ゲート）、`docs/inline-english-candidate-spec.md` §6.4 |
-| `CommitCorrection` | `docs/user-learning-enhancement-spec.md` §4.1 |
+| `CommitObservation` | `docs/learning-data-management-spec.md` §12（配送保証と冪等化）、`docs/privacy-and-secure-input-spec.md` §5.1.1（学習ゲート）、`docs/inline-english-candidate-spec.md` §6.4、本書「露出トレースの任意フィールド」 |
+| `CommitCorrection` | `docs/user-learning-enhancement-spec.md` §4.1、本書「露出トレースの任意フィールド」 |
 | `AddUserWord` | 本書「型ごとの処理規則」、`docs/learning-data-management-spec.md` §4.5（ロックと保存の順序） |
 | `UpdateUserWord` | ハンドラを持たない。応答は `docs/ipc-persistence-hardening-spec.md` §6.3 |
 | `RemoveUserWord` | `AddUserWord` と同じ |
@@ -153,6 +153,22 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `TransformSelectedText` | `docs/ai-backend-spec.md` §4.1、`docs/legacy-parity-spec.md` §4.4 |
 | `ImportUserDictionaryText` | `docs/user-dictionary-pos-spec.md` §7.2 |
 | `Unknown` | `docs/ipc-persistence-hardening-spec.md` §6.3 |
+
+#### 露出トレースの任意フィールド
+
+| payload | 追加フィールド | 型 | 意味 |
+|---|---|---|---|
+| `QueryCandidates` 応答 | `exposure_id` | string | Host が発行する応答 ID。候補の特徴ベクトルと派生文脈ハッシュを同じ TIP の応答に結び付ける |
+| `CommitObservation` 要求 | `exposure_id` | string | 描画した行を含む応答の ID |
+| `CommitObservation` 要求 | `shown_candidate_indices` | uint 配列 | 実際に描画した行に対応する、応答の `candidates[]` の 0 始まりの位置。表示順に並べる |
+| `CommitObservation` 要求 | `shown_at_ms` | uint64 | その行集合の表示開始時刻。既存の `timestamp_ms` と同じ Unix epoch ミリ秒 |
+| `CommitCorrection` 要求 | `target_observation_id` | string | 訂正対象の確定の `observation_id`。訂正イベント自身の `observation_id` は別に採番する |
+
+各フィールドは任意とし、Envelope は v1 のままとする。旧 Host は未知キーを無視する。
+新 Host は、旧 TIP の要求などで照合に必要な値が欠落している場合、既存の学習判定と応答を維持し、当該トレースを見送る。
+`shown_at_ms` の型不正、0、または `timestamp_ms` より後の値も同様に扱う。
+応答 ID と候補位置が同じ TIP の応答に対応しない場合も、露出は記録しない。
+描画対象、特徴量および訂正照合の規則は [ニューラルリランカー仕様](neural-reranker-spec.md) §6.1 に従う。
 
 `MessageType` に無く、spec が定義を持つ予定の型は次の 1 つである。enum へ足すときに上の表へ移す。
 

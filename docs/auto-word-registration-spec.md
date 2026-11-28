@@ -158,11 +158,11 @@ class AutoWordStore {
 同じ契約を `CommitSegmentsObservation` にも適用し、直近の候補要求から推定しない。
 詳細は `docs/privacy-and-secure-input-spec.md` §5.1.1 に従う。
 
-`CommitObservationRequest{reading,
-chosen, shown, left_context, timestamp_ms, secure, learning_allowed}` が確定読み・確定 surface を含み、
+`CommitObservationRequest` の `reading` と `chosen.surface` が確定読み・確定表記を運び、
 `Dispatcher::HandleCommitObservation` が `engine_->CommitObservation(reading,
 chosen.surface, now)` を呼ぶ。この `InferenceEngine::CommitObservation` 内に
-OOV 検出を追加する。
+OOV 検出を追加する。露出トレース用の任意フィールドは
+[TSF・Host アーキテクチャ](windows-tsf-host-architecture.md)「露出トレースの任意フィールド」を参照する。
 
 ```cpp
 void InferenceEngine::CommitObservation(reading, surface, now) {

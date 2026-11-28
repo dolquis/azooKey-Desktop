@@ -998,7 +998,9 @@ void ExpectNoExposure(const azookey::ipc::CommitObservationRequest& observation)
 class FakeCompositionAttachment {
  public:
   explicit FakeCompositionAttachment(TextServiceHarness& harness) : harness_(harness) {
-    composition_range.clone_range = &selection_range;
+    // The TIP can retain a cloned range after this fixture goes out of scope.
+    selection_range_.Attach(new OwnedSelectionRange);
+    composition_range.clone_range = selection_range_.Get();
     composition.AddRef();
     composition.range_ = &composition_range;
     harness_.service.composition_ = &composition;
@@ -1006,10 +1008,9 @@ class FakeCompositionAttachment {
   }
 
   ~FakeCompositionAttachment() {
-    // The service may cache a clone backed by one of these stack-owned ranges.
-    // Release it before the ranges leave scope, while leaving other ranges alone.
+    // Drop the composition cache entries created by this attachment.
     auto release_owned_range = [this](ITfRange*& range) {
-      if (range == &composition_range || range == &selection_range) {
+      if (range == &composition_range || range == selection_range_.Get()) {
         range->Release();
         range = nullptr;
       }
@@ -1024,10 +1025,19 @@ class FakeCompositionAttachment {
 
   FakeComposition composition;
   FakeRange composition_range;
-  FakeRange selection_range;
 
  private:
+  class OwnedSelectionRange final : public FakeRange {
+   public:
+    STDMETHODIMP_(ULONG) Release() override {
+      const ULONG remaining = FakeRange::Release();
+      if (remaining == 0) delete this;
+      return remaining;
+    }
+  };
+
   TextServiceHarness& harness_;
+  Microsoft::WRL::ComPtr<OwnedSelectionRange> selection_range_;
 };
 
 }  // namespace

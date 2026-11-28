@@ -317,7 +317,7 @@ class RerankerTraceStore::Impl {
       return queued.row->IsCommit() && queued.row->observation_id == target_id;
     });
     if (durable == commits_.end() && pending == pending_.end()) {
-      if (snapshot_ready_) return false;
+      if (stats_.snapshot_ready) return false;
       // Resolve unknown targets after loading the durable index on the worker.
       return QueueLocked(TraceRow{
           std::move(observation_id), std::move(target_id), {}, {}, std::move(accepted), ts, {}});
@@ -375,7 +375,7 @@ class RerankerTraceStore::Impl {
     }
     auto file_lock = LockFile();
     TraceSnapshot snapshot;
-    if (!file_lock || !ReadSnapshot(snapshot, false)) return SaveFailed();
+    if (!file_lock || !ReadSnapshot(snapshot)) return SaveFailed();
     const auto erased = ApplyTombstones(snapshot, {reading, surface}, &found);
     if (erased != 0) {
       std::vector<uint8_t> cipher;
@@ -564,7 +564,8 @@ class RerankerTraceStore::Impl {
     return lock;
   }
 
-  bool Quarantine() const {
+  // The caller holds the transaction and file locks through recovery.
+  bool Quarantine() {
     auto backup = path_;
     backup += ".corrupt-" + std::to_string(NowMs() / 1000);
     std::error_code error;
@@ -577,18 +578,21 @@ class RerankerTraceStore::Impl {
       return detail::ReportPersistenceFailure("trace-quarantine-exists");
     }
     std::filesystem::rename(path_, backup, error);
-    return !error || detail::ReportPersistenceFailure("trace-quarantine", error);
+    if (error) return detail::ReportPersistenceFailure("trace-quarantine", error);
+    // The old rows no longer belong to the active snapshot, even if writing
+    // a batch to the new file fails or is cancelled.
+    tombstones_.clear();
+    PublishSnapshot({}, std::nullopt);
+    return true;
   }
 
-  bool ReadSnapshot(TraceSnapshot& snapshot, bool quarantine) const {
+  bool ReadSnapshot(TraceSnapshot& snapshot) {
     std::error_code error;
     const auto size = std::filesystem::file_size(path_, error);
     if (error == std::errc::no_such_file_or_directory) return true;
     if (error) return detail::ReportPersistenceFailure("trace-stat", error);
     if (!crypto_.IsAvailable()) return detail::ReportPersistenceFailure("trace-crypto-unavailable");
-    if (size > kTraceReadLimit || size == 0) {
-      return quarantine ? Quarantine() : detail::ReportPersistenceFailure("trace-read-size");
-    }
+    if (size > kTraceReadLimit || size == 0) return Quarantine();
     std::ifstream input(path_, std::ios::binary);
     std::vector<uint8_t> cipher(static_cast<size_t>(size));
     if (!input.read(reinterpret_cast<char*>(cipher.data()), static_cast<std::streamsize>(size))) {
@@ -606,7 +610,7 @@ class RerankerTraceStore::Impl {
     if (!parsed) {
       snapshot.rows.clear();
       detail::ReportPersistenceFailure(decrypted ? "trace-parse" : "trace-decrypt");
-      return quarantine && Quarantine();
+      return Quarantine();
     }
     snapshot.size_bytes = static_cast<size_t>(size);
     return true;
@@ -690,7 +694,7 @@ class RerankerTraceStore::Impl {
     oldest_published_ms_ =
         oldest == snapshot.rows.end() ? std::nullopt : std::optional(oldest->timestamp);
     std::lock_guard lock(state_mutex_);
-    snapshot_ready_ = true;
+    stats_.snapshot_ready = true;
     commits_.swap(commits);
     observation_ids_.swap(ids);
     stats_.records = static_cast<uint64_t>(snapshot.rows.size());
@@ -712,16 +716,14 @@ class RerankerTraceStore::Impl {
                          (!oldest_published_ms_ || *oldest_published_ms_ >= cutoff) &&
                          stats_.records <= options_.max_records &&
                          stats_.size_bytes <= options_.max_ciphertext_bytes;
-      if (snapshot_ready_ && clean &&
+      if (stats_.snapshot_ready && clean &&
           (mode == FlushMode::Initial || !CanRecordLocked() || pending_.empty())) {
         return true;
       }
     }
     auto file_lock = LockFile();
     TraceSnapshot snapshot;
-    // A forget retry needs the original rows to verify the exact pair. Preserve
-    // the ciphertext and keep the deletion request if it still cannot be read.
-    if (!file_lock || !ReadSnapshot(snapshot, tombstones_.empty())) return SaveFailed();
+    if (!file_lock || !ReadSnapshot(snapshot)) return SaveFailed();
     const auto erased = ApplyTombstones(snapshot);
     std::vector<QueuedRow> batch;
     uint64_t epoch = 0;
@@ -797,7 +799,6 @@ class RerankerTraceStore::Impl {
   bool enabled_{};
   bool learning_allowed_{};
   bool stop_{};
-  bool snapshot_ready_{};
   RerankerTraceStats stats_;
   std::unordered_map<std::string, std::pair<std::string, std::string>> commits_;
   std::unordered_set<std::string> observation_ids_;

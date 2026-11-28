@@ -31,6 +31,7 @@ struct RerankerTraceStats {
   uint64_t records{};
   uint64_t size_bytes{};
   uint64_t retention_days{30};
+  bool snapshot_ready{};
 };
 
 struct RerankerTraceOptions {

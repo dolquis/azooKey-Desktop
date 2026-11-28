@@ -1838,8 +1838,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleListLearningEntries(const ipc::En
   res.total = page.total;
   if (*store == LearningDataStore::Learning) {
     const auto stats = engine_->ExposureTraceStats();
-    res.exposure_trace =
-        ipc::ExposureTraceSummary{stats.records, stats.size_bytes, stats.retention_days};
+    if (stats.snapshot_ready) {
+      res.exposure_trace =
+          ipc::ExposureTraceSummary{stats.records, stats.size_bytes, stats.retention_days};
+    }
   }
   for (auto& entry : page.entries) {
     res.entries.push_back({std::move(entry.id), std::move(entry.channel), std::move(entry.reading),

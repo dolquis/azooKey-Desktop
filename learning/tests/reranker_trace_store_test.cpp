@@ -438,6 +438,62 @@ TEST_F(RerankerTraceStoreTest, FailedForgetRetriesExactPairsWithoutRecording) {
   EXPECT_EQ(rows[1].GetString("observation_id"), "other-surface");
 }
 
+TEST_F(RerankerTraceStoreTest, CorruptSnapshotIsQuarantinedDuringForgetAndRetry) {
+  SwitchableTraceCrypto crypto;
+  RerankerTraceStore store(path_, crypto, options_);
+  store.SetRecording(true, true);
+  ASSERT_TRUE(store.Enqueue(Exposure("forgotten", "synthetic-chosen")));
+  ASSERT_TRUE(store.Enqueue(Exposure("retained", "synthetic-keep")));
+  ASSERT_TRUE(store.Flush());
+  crypto.fail.store(true);
+  ASSERT_FALSE(store.Forget("synthetic-reading", "synthetic-chosen"));
+  crypto.fail.store(false);
+
+  constexpr std::string_view invalid_json = "invalid-json\n";
+  const std::vector<uint8_t> invalid_json_bytes(invalid_json.begin(), invalid_json.end());
+  std::vector<uint8_t> malformed;
+  ASSERT_TRUE(crypto.Encrypt(invalid_json_bytes, malformed));
+  const std::string corrupt_bytes(malformed.begin(), malformed.end());
+  WriteBytes(path_, corrupt_bytes);
+  const auto backup = Sidecar(".corrupt-1700000000");
+  ASSERT_TRUE(store.Enqueue(Exposure("next", "synthetic-chosen")));
+  ASSERT_TRUE(store.Flush());
+  EXPECT_EQ(ReadBytes(backup), corrupt_bytes);
+  const auto rows = ReadRows(path_, crypto);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows[0].GetString("observation_id"), "next");
+
+  ASSERT_TRUE(store.Reset());
+  EXPECT_FALSE(fs::exists(backup));
+  WriteBytes(path_, "invalid-ciphertext");
+  ASSERT_TRUE(store.Forget("synthetic-reading", "synthetic-chosen"));
+  EXPECT_EQ(ReadBytes(backup), "invalid-ciphertext");
+  EXPECT_FALSE(fs::exists(path_));
+  ASSERT_TRUE(store.Reset());
+  EXPECT_FALSE(fs::exists(backup));
+}
+
+TEST_F(RerankerTraceStoreTest, FailedForgetKeepsNewObservationOfTheSamePair) {
+  SwitchableTraceCrypto crypto;
+  RerankerTraceStore store(path_, crypto, options_);
+  store.SetRecording(true, true);
+  ASSERT_TRUE(store.Enqueue(Exposure("old", "synthetic-chosen")));
+  // A second row makes Forget rewrite the snapshot. It expires before retry.
+  ASSERT_TRUE(store.Enqueue(Exposure("aging", "synthetic-keep", kNowMs - 30 * kDayMs)));
+  ASSERT_TRUE(store.Flush());
+  ASSERT_EQ(store.Stats().records, 2u);
+  crypto.fail.store(true);
+  ASSERT_FALSE(store.Forget("synthetic-reading", "synthetic-chosen"));
+  ASSERT_TRUE(store.Enqueue(Exposure("new", "synthetic-chosen", kNowMs + 1)));
+
+  now_.store(kNowMs + 1);
+  crypto.fail.store(false);
+  ASSERT_TRUE(store.Flush());
+  const auto rows = ReadRows(path_, crypto);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows[0].GetString("observation_id"), "new");
+}
+
 TEST_F(RerankerTraceStoreTest, ResetFailureKeepsMainAndInvalidatesPending) {
   const auto temp = Sidecar(".tmp.11.22.33");
   const auto backup = Sidecar(".corrupt-123");

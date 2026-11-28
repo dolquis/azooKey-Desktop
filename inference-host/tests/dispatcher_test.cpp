@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iterator>
 #include <map>
@@ -3886,17 +3887,22 @@ class ExposureTestConverter final : public azookey::core::IConverter {
 
 class ExposureTestCrypto final : public azookey::learning::ByteCrypto {
  public:
+  explicit ExposureTestCrypto(std::function<void()> before_decrypt = {})
+      : before_decrypt_(std::move(before_decrypt)) {}
+
   bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
-    return crypto_.Encrypt(plain, cipher);
+    return !reject_encryption.load() && crypto_.Encrypt(plain, cipher);
   }
 
   bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
-    return !reject_decryption.load() && crypto_.Decrypt(cipher, plain);
+    if (before_decrypt_) before_decrypt_();
+    return crypto_.Decrypt(cipher, plain);
   }
 
-  std::atomic<bool> reject_decryption{false};
+  std::atomic<bool> reject_encryption{false};
 
  private:
+  std::function<void()> before_decrypt_;
   azookey::learning::test::TestByteCrypto crypto_;
 };
 
@@ -4408,40 +4414,93 @@ TEST_F(DispatcherExposureTest, LearningSummaryIsIndependentOfSearchAndForgetRemo
   EXPECT_EQ(trace.Stats().records, 0u);
 }
 
-TEST_F(DispatcherExposureTest, TraceForgetRecoversAfterTheLearningEntryIdDisappears) {
+TEST_F(DispatcherExposureTest, LearningSummaryIsAbsentUntilTraceSnapshotLoads) {
+  using namespace std::chrono_literals;
   trace_engine.SetExposureTracePolicy(true, true);
   const auto issued = Query();
   ASSERT_TRUE(issued.exposure_id);
   ASSERT_FALSE(issued.candidates.empty());
-  ASSERT_TRUE(SendCommit(CommitRequest(issued, 0, "forget-by-id", {0})));
+  ASSERT_TRUE(SendCommit(CommitRequest(issued, 0, "summary-before-restart", {0})));
   ASSERT_TRUE(trace.Flush());
-  ASSERT_EQ(trace.Stats().records, 1u);
+  const auto startup_path = temp_directory.path() / "startup-trace.jsonl.enc";
+  ASSERT_TRUE(std::filesystem::copy_file(trace_path, startup_path));
+
+  std::promise<void> started;
+  auto initial_read = started.get_future();
+  std::promise<void> release;
+  auto may_read = release.get_future();
+  std::atomic<bool> first_read{true};
+  ExposureTestCrypto startup_crypto([&] {
+    if (!first_read.exchange(false)) return;
+    started.set_value();
+    EXPECT_EQ(may_read.wait_for(5s), std::future_status::ready);
+  });
+  azookey::learning::RerankerTraceStore startup_trace(startup_path, startup_crypto, TraceOptions());
+  azookey::host::InferenceEngine startup_engine(std::make_unique<ExposureTestConverter>(), nullptr,
+                                                EngineSettings());
+  startup_engine.SetRerankerTraceStore(&startup_trace);
+  azookey::host::Dispatcher startup_dispatcher(&startup_engine, &scheduler, &user_dict,
+                                               DefaultDispatcherConfig());
+  const auto list = [&]() {
+    ipc::ListLearningEntriesRequest request;
+    request.store = "learning";
+    const auto response = startup_dispatcher.Dispatch(
+        MakeReq(++request_id, ipc::MessageType::ListLearningEntries,
+                ipc::BuildListLearningEntriesRequest(request)));
+    return response ? ipc::ParseListLearningEntriesResponse(response->payload_json) : std::nullopt;
+  };
+
+  EXPECT_EQ(initial_read.wait_for(5s), std::future_status::ready);
+  const auto loading = list();
+  release.set_value();
+  ASSERT_TRUE(loading && loading->ok);
+  EXPECT_FALSE(loading->exposure_trace);
+  startup_trace.WaitForPublication();
+  const auto loaded = list();
+  ASSERT_TRUE(loaded && loaded->ok && loaded->exposure_trace);
+  EXPECT_EQ(loaded->exposure_trace->records, 1u);
+  EXPECT_EQ(loaded->exposure_trace->size_bytes, std::filesystem::file_size(startup_path));
+}
+
+TEST_F(DispatcherExposureTest, TraceForgetRecoversAfterTheLearningEntryIdDisappears) {
+  trace_engine.SetExposureTracePolicy(true, true);
+  const auto issued = Query();
+  ASSERT_TRUE(issued.exposure_id);
+  ASSERT_GE(issued.candidates.size(), 2u);
+  const auto forgotten = CommitRequest(issued, 0, "forget-by-id", {0});
+  ASSERT_TRUE(SendCommit(forgotten));
+  ASSERT_TRUE(SendCommit(CommitRequest(issued, 1, "retain", {1})));
+  ASSERT_TRUE(trace.Flush());
+  ASSERT_EQ(trace.Stats().records, 2u);
 
   using azookey::host::LearningDataStore;
-  const auto page = trace_engine.ListLearningEntries(LearningDataStore::Learning, "", 0, 10);
+  const auto page =
+      trace_engine.ListLearningEntries(LearningDataStore::Learning, forgotten.chosen.surface, 0, 10);
   ASSERT_EQ(page.entries.size(), 1u);
   ipc::ForgetLearningEntryRequest request;
   request.store = "learning";
   request.id = page.entries.front().id;
-  trace_crypto.reject_decryption.store(true);
+  trace_crypto.reject_encryption.store(true);
   const auto response = target.Dispatch(MakeReq(++request_id, ipc::MessageType::ForgetLearningEntry,
                                                 ipc::BuildForgetLearningEntryRequest(request)));
-  // A second transient failure during retry also leaves the encrypted snapshot in place.
+  // A second failed rewrite still leaves the last valid snapshot in place.
   EXPECT_FALSE(trace.Flush());
   EXPECT_TRUE(std::filesystem::exists(trace_path));
-  trace_crypto.reject_decryption.store(false);
+  trace_crypto.reject_encryption.store(false);
   ASSERT_TRUE(response);
   const auto failure = ipc::ParseForgetLearningEntryResponse(response->payload_json);
   ASSERT_TRUE(failure);
   EXPECT_FALSE(failure->ok);
   EXPECT_EQ(failure->error, ipc::kLearningDataErrorSaveFailed);
-  EXPECT_TRUE(
-      trace_engine.ListLearningEntries(LearningDataStore::Learning, "", 0, 10).entries.empty());
-  EXPECT_EQ(trace.Stats().records, 1u);
+  EXPECT_TRUE(trace_engine
+                  .ListLearningEntries(LearningDataStore::Learning, forgotten.chosen.surface, 0, 10)
+                  .entries.empty());
+  EXPECT_EQ(trace.Stats().records, 2u);
 
   ASSERT_TRUE(trace.Flush());
-  EXPECT_EQ(trace.Stats().records, 0u);
-  EXPECT_FALSE(std::filesystem::exists(trace_path));
+  const auto rows = ReadTrace();
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows[0].GetString("observation_id"), "retain");
 }
 
 TEST_F(DispatcherExposureTest, FailedTraceDeletionRollsBackLearningButInvalidatesPending) {

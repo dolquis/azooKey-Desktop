@@ -28,6 +28,7 @@
 #include "azookey/learning/FileLock.h"
 #include "azookey/learning/PersistenceDiagnostics.h"
 #include "azookey/logging/Phase.h"
+#include "azookey/reranker/FeatureExtractor.h"
 
 namespace azookey::host {
 
@@ -268,10 +269,12 @@ void DedupMergedCandidates(std::vector<core::Candidate>& candidates) {
     const bool replace = PreferMergedCandidate(candidate, *existing);
     if (replace) {
       PreserveTechnicalTag(candidate, *existing);
+      core::PreserveRerankSignals(candidate, *existing);
       AppendDebugTag(candidate.debug_info, "dup:" + existing->debug_info);
       *existing = std::move(candidate);
     } else {
       PreserveTechnicalTag(*existing, candidate);
+      core::PreserveRerankSignals(*existing, candidate);
       AppendDebugTag(existing->debug_info, "dup:" + candidate.debug_info);
     }
   }
@@ -1071,6 +1074,7 @@ std::vector<core::Candidate> InferenceEngine::LatticeCandidatesLocked(
         0.1, 1.0 - (std::min)(0.9, static_cast<double>(result.paths[i].cost - best) / scale));
     candidate.source = core::CandidateSource::SystemDictionary;
     candidate.debug_info = std::string(kLatticeDebugPrefix) + std::to_string(i + 1);
+    candidate.rerank_signals.lattice_segment_count = result.paths[i].segments.size();
     candidates.push_back(std::move(candidate));
   }
   return candidates;
@@ -1099,6 +1103,7 @@ std::optional<core::Candidate> InferenceEngine::UserWordPathLocked(
   candidate.score = (std::max)(0.1, model_best - 0.01);
   candidate.source = core::CandidateSource::SystemDictionary;
   candidate.debug_info = std::string(kUserWordPathDebug);
+  candidate.rerank_signals.lattice_segment_count = result.paths.front().segments.size();
   return candidate;
 }
 
@@ -1445,6 +1450,12 @@ void InferenceEngine::SetNllContextObserverForTests(
   nll_context_observer_for_tests_ = std::move(hook);
 }
 
+void InferenceEngine::SetTinyRerankerFeatureObserverForTests(
+    TinyRerankerFeatureObserverForTests hook) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  tiny_reranker_feature_observer_for_tests_ = std::move(hook);
+}
+
 bool InferenceEngine::AddUserWord(const learning::UserWord& word,
                                   const UserDictionaryEditOptions& options) {
   return EditUserDictionary(
@@ -1459,6 +1470,24 @@ bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string&
                                      const UserDictionaryEditOptions& options) {
   return EditUserDictionary([&](learning::UserDictionary& dict) { return dict.Remove(word, ruby); },
                             options);
+}
+
+void InferenceEngine::ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
+                                                       const std::atomic<bool>* cancel) const {
+  if (!tiny_reranker_feature_observer_for_tests_ ||
+      (cancel && cancel->load(std::memory_order_relaxed))) {
+    return;
+  }
+  std::vector<std::array<float, 12>> features;
+  features.reserve(candidates.size());
+  for (auto& candidate : candidates) {
+    auto& signals = candidate.rerank_signals;
+    if (signals.candidate_length == 0) {
+      signals.candidate_length = core::ComputeCandidateLength(candidate.surface);
+    }
+    features.push_back(reranker::ExtractFeaturesV1(signals, {}));
+  }
+  tiny_reranker_feature_observer_for_tests_(candidates, features);
 }
 
 std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
@@ -2214,6 +2243,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
         c.score = w.value.value_or(config.user_word_default_score);
         c.source = core::CandidateSource::UserDictionary;
         c.debug_info = "user-dict";
+        c.rerank_signals.dictionary_score = c.score;
+        c.rerank_signals.candidate_length = core::ComputeCandidateLength(c.surface);
+        c.rerank_signals.is_user_dict = true;
         merged.push_back(std::move(c));
       }
     }
@@ -2510,6 +2542,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   std::vector<core::Candidate> result;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    ObserveTinyRerankerFeaturesLocked(merged, cancel);
     result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec, cancel);
   }
   if (canceled()) {
@@ -2584,6 +2617,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
           if (found.empty()) continue;
           word.candidate = std::move(found.front());
           word.candidate.debug_info = kTypoCorrectionMark;
+          word.candidate.rerank_signals.typo_confidence = word.evidence.confidence;
+          word.candidate.rerank_signals.is_typo_corrected = true;
           word.evidence.reading_similarity =
               TypoReadingSimilarity(hypothesis.edit_distance, *reading_length,
                                     CountCodepoints(hypothesis.reading).value_or(*reading_length));
@@ -2632,6 +2667,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
             candidate.debug_info = kTypoCorrectionMark;
             candidate.description = head->description;
             candidate.score = head->score;
+            candidate.rerank_signals.typo_confidence = head->rerank_signals.typo_confidence;
+            candidate.rerank_signals.is_typo_corrected = head->rerank_signals.is_typo_corrected;
+            candidate.rerank_signals.candidate_length =
+                core::ComputeCandidateLength(candidate.surface);
             result.insert(result.begin() + static_cast<std::ptrdiff_t>(at), std::move(candidate));
             // Keep to typo_max_reading_hypotheses words, a lead included, as placed above.
             size_t marked = 0;
@@ -2770,9 +2809,11 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(
   auto dictionary_predictions =
       DictionaryCandidates(dictionaries_, kana, learning::LookupMode::PredictivePrefix,
                            now_epoch_sec, 32, true, config_.user_word_default_score);
+  ObserveTinyRerankerFeaturesLocked(dictionary_predictions, cancel);
   dictionary_predictions =
       ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec, cancel);
   if (rerank_canceled()) return {};
+  ObserveTinyRerankerFeaturesLocked(candidates, cancel);
   candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec, cancel);
   if (rerank_canceled()) return {};
   if (rerank_start)
@@ -2856,6 +2897,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
     candidates = converter->Correct(kana, hint, conversion_context);
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
+  ObserveTinyRerankerFeaturesLocked(candidates, nullptr);
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 

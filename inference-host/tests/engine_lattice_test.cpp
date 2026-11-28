@@ -826,7 +826,7 @@ TEST(EngineLattice, StageTwoKeepsTheLatticePathsNllScoredBelowTheModel) {
   EXPECT_TRUE(lowest.front().debug_info.starts_with(std::string(kLatticeModelPrefix) + "2;"));
   EXPECT_DOUBLE_EQ(lowest.front().score, (std::max)(0.1, model_lowest - 0.02));
 
-  // Without NLL, live, or the lattice off, stage 2 adds nothing and NLL is not asked.
+  // Without NLL, live, or stage 2 off, stage 2 adds nothing and NLL is not asked.
   seen.clear();
   auto without_nll = config;
   without_nll.nll.enabled = false;

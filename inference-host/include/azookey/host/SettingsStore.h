@@ -94,6 +94,7 @@ struct RuntimeSettings {
   }
   NllConfig nll;
   reranker::TinyRerankerConfig tiny_reranker;
+  bool exposure_trace_enabled{};
   DictionaryLayerConfig dictionary;
   std::string input_mode{"hiragana"};
   bool live_conversion{false};
@@ -203,6 +204,7 @@ class SettingsStore {
     // learnPersonalPatterns is false or typo correction is off (enabled false
     // or mode off), stops ObserveTypo from accumulating pairs.
     bool typo_learning{false};
+    bool exposure_trace_enabled{};
   };
   // Hold through the learning operation. Reload publishes under this same lock,
   // independently of model loading and the caller's config serialization lock.
@@ -248,6 +250,7 @@ class SettingsStore {
   core::PrivacyPolicy privacy_policy_{false, false, true};
   bool privacy_mode_secure_{false};
   bool typo_learning_{true};
+  bool exposure_trace_enabled_{};
   std::atomic<bool> homophone_notes_{false};
   RuntimeSettings settings_;
   SettingsLoadResult last_result_;

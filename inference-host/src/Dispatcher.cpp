@@ -1274,7 +1274,17 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
   const auto engine_config = engine_->config();
   const auto rewriters = engine_config.rewriters;
+  std::optional<uint64_t> exposure_generation;
+  if (!parsed->live && parsed->emoji_trigger.empty() && parsed->remaining_reading.empty()) {
+    const auto privacy =
+        settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+    exposure_generation = engine_->BeginExposureCapture(
+        (!privacy || privacy->exposure_trace_enabled) &&
+            LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy)),
+        parsed->secure || (privacy && privacy->policy.secure));
+  }
   std::vector<core::Candidate> candidates;
+  std::vector<InferenceEngine::ExposureFeature> exposure_features;
   std::string corrected_reading;
   std::optional<core::MixedRomajiSegment> mixed_first;
   std::vector<ipc::CandidateField> mixed_front;
@@ -1322,6 +1332,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     MixedConversionOptions as_typed;
     as_typed.typo_correction = false;
     as_typed.secure = parsed->secure;
+    as_typed.capture_exposure_features = exposure_generation.has_value();
     // DEV-1734: the candidate window also weighs the other reading of an
     // ambiguous "nn" + vowel. Per-key queries, a secure request (which the Host
     // does not correct, typo-correction-learning-spec section 12.12.2) and an
@@ -1345,6 +1356,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     MixedConversionOptions plain;
     plain.typo_correction = !parsed->secure;
     plain.secure = parsed->secure;
+    plain.capture_exposure_features = exposure_generation.has_value();
     if (!parsed->secure) plain.raw_keys = parsed->raw_keys;
     const auto* conversion = first_segment          ? &first_segment_options
                              : IsInlineSplit(split) ? &as_typed
@@ -1360,6 +1372,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
                                   ? std::optional{queried.candidates.front()}
                                   : std::nullopt;
     candidates = std::move(queried.candidates);
+    exposure_features = std::move(queried.exposure_features);
     corrected_reading = std::move(queried.corrected_reading);
     // Under auto_replace the conversion ran on the corrected reading, so the
     // rewriters have to key off the same reading or they would look up the
@@ -1475,6 +1488,30 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   AddHomophoneNotes(res.candidates);
   res.partial = false;
   res.corrected_reading = std::move(corrected_reading);
+  if (exposure_generation && !exposure_features.empty()) {
+    std::vector<std::optional<std::array<float, 12>>> features(res.candidates.size());
+    for (size_t i = 0; i < res.candidates.size(); ++i) {
+      const auto& candidate = res.candidates[i];
+      // M63 insertions carry segments, including when replacing an ordinary
+      // row with the same surface. English and rewriter rows are ineligible.
+      if (!candidate.segments.empty() || IsEnglishObservation(candidate.reading, candidate.tag) ||
+          candidate.source == "symbol" || candidate.source == "emoji")
+        continue;
+      const auto match =
+          std::find_if(exposure_features.begin(), exposure_features.end(), [&](const auto& row) {
+            return row.surface == candidate.surface && row.reading == candidate.reading &&
+                   SourceToWire(row.source) == candidate.source;
+          });
+      if (match != exposure_features.end()) features[i] = match->values;
+    }
+    const auto privacy =
+        settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+    if ((!privacy || privacy->exposure_trace_enabled) &&
+        LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy)))
+      res.exposure_id =
+          engine_->PublishExposure(*exposure_generation, client_id_, parsed->left_context,
+                                   res.candidates, std::move(features));
+  }
   trace.Finish(core::EtwResult::Success, res.candidates.size());
   return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
 }
@@ -1799,6 +1836,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleListLearningEntries(const ipc::En
   }
   auto page = engine_->ListLearningEntries(*store, parsed->query, parsed->offset, parsed->limit);
   res.total = page.total;
+  if (*store == LearningDataStore::Learning) {
+    const auto stats = engine_->ExposureTraceStats();
+    if (stats.snapshot_ready) {
+      res.exposure_trace =
+          ipc::ExposureTraceSummary{stats.records, stats.size_bytes, stats.retention_days};
+    }
+  }
   for (auto& entry : page.entries) {
     res.entries.push_back({std::move(entry.id), std::move(entry.channel), std::move(entry.reading),
                            std::move(entry.surface), entry.weight, entry.last_updated_epoch_sec,
@@ -2418,7 +2462,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
                                         parsed->observation_id);
     } else if (engine_->CommitObservation(
                    parsed->reading, parsed->chosen.surface, NowSec(), parsed->observation_id,
-                   parsed->app ? parsed->app->process_name : std::string(), parsed->left_context)) {
+                   parsed->app ? parsed->app->process_name : std::string(), parsed->left_context,
+                   !privacy || privacy->exposure_trace_enabled ? &*parsed : nullptr,
+                   &req.payload_json, client_id_)) {
       // M63-B (mixed-english-auto-conversion-spec section 11): the English the
       // composition was shown first, turned down.
       engine_->RecordRejectedEnglish(parsed->shown, parsed->chosen.surface, NowSec());
@@ -2439,10 +2485,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitCorrection(const ipc::Envel
   if (auto parsed = ipc::ParseCommitCorrectionRequest(req.payload_json);
       parsed &&
       LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy))) {
-    engine_->CommitCorrection(parsed->reading, parsed->rejected_surface, parsed->selected_surface,
-                              NowSec(), parsed->observation_id,
-                              parsed->app ? parsed->app->process_name : std::string(),
-                              parsed->left_context);
+    engine_->CommitCorrection(
+        parsed->reading, parsed->rejected_surface, parsed->selected_surface, NowSec(),
+        parsed->observation_id, parsed->app ? parsed->app->process_name : std::string(),
+        parsed->left_context, !privacy || privacy->exposure_trace_enabled ? &*parsed : nullptr);
     res.ok = true;
   }
   return MakeResponse(req, ipc::BuildCommitObservationResponse(res));
@@ -2614,9 +2660,21 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
   // An invalid reload publishes secure (fail closed) without applying the
   // engine config. Update both privacy gates before that return and release the
   // settings privacy lock before taking the engine's locks.
-  const bool privacy_secure = settings_store_->LockPrivacyPolicy().privacy_mode_secure;
+  bool privacy_secure;
+  bool exposure_learning_allowed;
+  bool exposure_enabled;
+  {
+    const auto privacy = settings_store_->LockPrivacyPolicy();
+    privacy_secure = privacy.privacy_mode_secure;
+    exposure_learning_allowed = !privacy.policy.secure && privacy.policy.learning_allowed;
+    exposure_enabled = privacy.exposure_trace_enabled;
+  }
   engine_->SetTinyRerankerPrivacyMode(privacy_secure);
   engine_->SetTypoWritesSuspended(privacy_secure);
+  engine_->SetExposureTracePolicy(load_result.status == SettingsLoadStatus::Invalid
+                                      ? engine_->config().exposure_trace_enabled
+                                      : exposure_enabled,
+                                  exposure_learning_allowed);
   core::CrashReporting::SetConsent(load_result.settings.crash_report_consent == "local"
                                        ? core::CrashConsent::Local
                                        : core::CrashConsent::Off);

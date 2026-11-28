@@ -238,10 +238,13 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairSnapshot(learning::Lea
                                                                    const std::string& surface) {
   LearningSnapshots snapshots;
   learning::LearningStore* selected = nullptr;
+  learning::RerankerTraceStore* exposure_trace = nullptr;
   bool in_store = false;
   {
     std::scoped_lock lock(state_mutex_, english_mutex_);
     snapshots = SnapshotLearningStoresLocked();
+    InvalidateExposuresLocked();
+    exposure_trace = exposure_trace_store_;
     for (auto& [target, snapshot] : snapshots) {
       if (target == &store) {
         in_store = snapshot.Forget(reading, surface);
@@ -258,9 +261,13 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairSnapshot(learning::Lea
   bool legacy_removed = false;
   bool legacy_ok = false;
   bool saved = false;
+  bool exposure_saved = true;
+  bool exposure_removed = false;
   try {
     legacy_ok = selected && selected->RemoveFromLegacyFile(reading, surface, &legacy_removed);
     saved = SaveLearningSnapshots(snapshots);
+    if (exposure_trace)
+      exposure_saved = exposure_trace->Forget(reading, surface, &exposure_removed);
   } catch (...) {
     std::scoped_lock lock(state_mutex_, english_mutex_);
     learning_erasure_in_progress_ = false;
@@ -276,8 +283,9 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairSnapshot(learning::Lea
     if (model_converter_) model_converter_->Forget(reading, surface);
   }
   if (in_store && &store == store_) RefreshPersonaLocked();
-  if (!legacy_ok || !saved) return ForgetOutcome::SaveFailed;
-  return in_store || legacy_removed ? ForgetOutcome::Forgotten : ForgetOutcome::NotFound;
+  if (!legacy_ok || !saved || !exposure_saved) return ForgetOutcome::SaveFailed;
+  return in_store || legacy_removed || exposure_removed ? ForgetOutcome::Forgotten
+                                                        : ForgetOutcome::NotFound;
 }
 
 bool InferenceEngine::IngestTrendingWords(const std::vector<learning::AutoWord>& words,
@@ -412,6 +420,7 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
 // the old rows back in memory and saves them again.
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannels() {
   LearningSnapshots snapshots;
+  learning::RerankerTraceStore* exposure_trace = nullptr;
   {
     std::scoped_lock lock(state_mutex_, english_mutex_);
     for (auto* store : {store_, english_store_}) {
@@ -419,6 +428,8 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannels() {
     }
     if (!store_ && !english_store_) return ResetOutcome::Unavailable;
     snapshots = SnapshotLearningStoresLocked();
+    InvalidateExposuresLocked();
+    exposure_trace = exposure_trace_store_;
   }
   bool copies_removed = false;
   bool saved = false;
@@ -431,7 +442,8 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannels() {
     if (copies_removed) {
       auto before = snapshots;
       for (auto& [target, snapshot] : snapshots) snapshot.PrepareFullReset();
-      saved = SaveLearningSnapshots(snapshots) && (!store_ || store_->ClearLegacyFile());
+      saved = SaveLearningSnapshots(snapshots) && (!store_ || store_->ClearLegacyFile()) &&
+              (!exposure_trace || exposure_trace->Reset());
       if (!saved) {
         for (size_t i = 0; i < snapshots.size(); ++i) {
           snapshots[i].second.RestoreAfterFailedFullReset(std::move(before[i].second));

@@ -117,7 +117,8 @@
     "tinyNeuralEnabled": false,
     "tinyNeuralModelPath": "",
     "tinyNeuralTimeoutMs": 15,
-    "tinyNeuralFailureThreshold": 3
+    "tinyNeuralFailureThreshold": 3,
+    "exposureTraceEnabled": false
   },
   "autoUpdate": {
     "enabled": false,

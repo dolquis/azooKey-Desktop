@@ -1,7 +1,9 @@
 #pragma once
 
+#include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,6 +32,7 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
              winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher, Host host);
   // Called each time the pane is shown; the first call lists the first store.
   void OnShown();
+  void SetExposureTraceSetting(std::optional<std::filesystem::path> path, bool enabled);
   // The "入力の傾向" tab's body, which PersonaPane builds into.
   winrt::Microsoft::UI::Xaml::Controls::StackPanel PersonaSection() const {
     return persona_section_;
@@ -64,6 +67,8 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
       winrt::hstring title, winrt::Windows::Foundation::IInspectable content,
       winrt::hstring primary_text);
   void RenderEntries();
+  winrt::fire_and_forget SaveExposureTraceOptIn(bool enabled);
+  void ShowExposureTraceSummary(const std::optional<azookey::ipc::ExposureTraceSummary>& summary);
   void UpdatePager();
   void SetBusy(bool busy);
   void RecoverFromFailure();
@@ -78,6 +83,11 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   winrt::Microsoft::UI::Xaml::Controls::StackPanel persona_section_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::InfoBar status_bar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel entries_section_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::StackPanel exposure_trace_setting_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::ToggleSwitch exposure_trace_toggle_{nullptr};
+  std::optional<std::filesystem::path> exposure_trace_settings_path_;
+  bool exposure_trace_enabled_{};
+  bool exposure_trace_saving_{};
   // The user dictionary tab's add form; hidden on the other tabs.
   winrt::Microsoft::UI::Xaml::Controls::StackPanel add_section_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox add_reading_box_{nullptr};
@@ -91,6 +101,7 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   winrt::Microsoft::UI::Xaml::Controls::Button search_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button reset_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel entries_panel_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::TextBlock exposure_trace_text_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBlock page_text_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button previous_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button next_button_{nullptr};

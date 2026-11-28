@@ -22,7 +22,8 @@ std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStor
                                                   std::string_view reading,
                                                   learning::LookupMode mode, uint64_t now_epoch_sec,
                                                   size_t limit, bool include_user,
-                                                  double user_word_default_score) {
+                                                  double user_word_default_score,
+                                                  DictionaryCategoryMasks* categories) {
   if (limit == 0) return {};
   learning::LookupContext ctx;
   ctx.mode = mode;
@@ -50,6 +51,10 @@ std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStor
           .is_user_dict = (entry.sources & kUserLayer) != 0,
           .is_neologism = (entry.category_mask &
                            learning::CategoryBit(learning::DictionaryCategory::Neologism)) != 0}});
+    if (categories) {
+      const auto& candidate = result.back();
+      categories->emplace(std::pair{candidate.reading, candidate.surface}, entry.category_mask);
+    }
     if (result.size() == limit) break;
   }
   return result;

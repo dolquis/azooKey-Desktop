@@ -594,6 +594,50 @@ TEST(SettingsDocumentTest, HomophoneNotesSurvivesAnUnrelatedSaveAndOtherValuesAr
   }
 }
 
+TEST(SettingsDocumentTest, ExposureTraceOptInRoundTripsWithoutWritingOtherSettingValues) {
+  ScopedTempDirectory temp("azookey_settings_exposure_trace");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"liveConversion":true,"logLevel":"warn",
+      "model":{"enabled":false,"selectedPath":"stored.gguf","backendPreference":"cpu"},
+      "privacy":{"crashReportConsent":"local"},
+      "reranker":{"tinyNeuralEnabled":true}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_EQ(loaded.status, azookey::settings::SettingsDocumentStatus::Loaded);
+  EXPECT_FALSE(loaded.settings.exposure_trace_enabled);
+
+  ASSERT_TRUE(azookey::settings::SaveExposureTraceSetting(path, true).ok);
+  loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_TRUE(loaded.settings.exposure_trace_enabled);
+  EXPECT_FALSE(loaded.settings.model_enabled);
+  EXPECT_EQ(loaded.settings.model_selected_path, "stored.gguf");
+  EXPECT_EQ(loaded.settings.model_backend_preference, std::optional<std::string>{"cpu"});
+  EXPECT_EQ(loaded.settings.log_level, "warn");
+  EXPECT_EQ(loaded.settings.crash_report_consent, "local");
+  EXPECT_EQ(loaded.settings.values.at("liveConversion"), azookey::settings::SettingValue{true});
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  EXPECT_TRUE(azookey::settings::LoadSettingsDocument(path).settings.exposure_trace_enabled);
+
+  // The form was loaded while opted in. Saving it after an opt-out leaves the new switch value.
+  ASSERT_TRUE(azookey::settings::SaveExposureTraceSetting(path, false).ok);
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  EXPECT_FALSE(azookey::settings::LoadSettingsDocument(path).settings.exposure_trace_enabled);
+  const auto root = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(root);
+  const auto* reranker = root->Find("reranker");
+  ASSERT_NE(reranker, nullptr);
+  EXPECT_EQ(reranker->GetBool("exposureTraceEnabled"), std::optional<bool>{false});
+  EXPECT_EQ(reranker->GetBool("tinyNeuralEnabled"), std::optional<bool>{true});
+}
+
+TEST(SettingsDocumentTest, ExposureTraceOptInIgnoresInvalidValues) {
+  ScopedTempDirectory temp("azookey_settings_invalid_exposure_trace");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"reranker":{"exposureTraceEnabled":"true"}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_FALSE(loaded.settings.exposure_trace_enabled);
+  EXPECT_FALSE(loaded.warnings.empty());
+}
+
 TEST(SettingsDocumentTest, SavesModelSettingsWithoutDroppingTipBracketConfiguration) {
   const auto dir = TestDir("azookey_settings_brackets");
   const auto path = dir / "settings.json";

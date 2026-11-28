@@ -427,6 +427,10 @@ ctest --preset windows-debug --no-tests=error
   （`learning.tsv.enc`、`english_learning.tsv.enc`）を削除して再起動する。
   トレースの保存先と付随ファイルの定義は [ニューラルリランカー仕様](neural-reranker-spec.md) §6.1 を参照する。
   Host の実行中に消すと、メモリ上の学習や保留中のトレースが次の保存で書き戻される。
+- **露出トレースが増えない**。学習タブの opt-in と学習の許可を確認する。構造化ログの
+  `reranker_trace_skipped` の `reason` は、許可・応答の失効・描画行の照合などで見送った理由を示す。
+  `reranker_trace_storage` の `dpapi_encrypt_failed` は暗号化の失敗、`save_failed` は保存処理の失敗、
+  `limit_evicted` は上限による除去を示す。これらのイベントに読み・表記・文脈は含まれない。
 - **D-010 の legacy cleanup 待ち**: `details.legacy_retained=true` は v2 と
   `learning.tsv.enc` の併存を表す。v2 が読める場合は warning、読めない場合は error を優先する。
   Host は次の成功した学習保存で cleanup を再試行する。保存時の lock 競合、復号失敗、

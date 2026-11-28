@@ -911,6 +911,8 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   controls_loaded_ = false;
   can_save_ = result.status != azookey::settings::SettingsDocumentStatus::LockUnavailable &&
               result.status != azookey::settings::SettingsDocumentStatus::ReadError;
+  learning_pane_->SetExposureTraceSetting(can_save_ ? settings_path_ : std::nullopt,
+                                          result.settings.exposure_trace_enabled);
   // The load message says a save rewrites the file without the invalid entries.
   repair_pending_ = azookey::settings::SaveRepairsLoadedDocument(result);
   saved_settings_ = result.settings;

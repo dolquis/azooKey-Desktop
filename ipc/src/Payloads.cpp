@@ -1907,6 +1907,14 @@ std::string BuildListLearningEntriesResponse(const ListLearningEntriesResponse& 
   j::Array entries;
   for (const auto& e : p.entries) entries.push_back(LearningEntryToJson(e));
   o.emplace("entries", j::Value(std::move(entries)));
+  if (p.exposure_trace) {
+    const auto& summary = *p.exposure_trace;
+    j::Object trace;
+    trace.emplace("records", j::Value(summary.records));
+    trace.emplace("size_bytes", j::Value(summary.size_bytes));
+    trace.emplace("retention_days", j::Value(summary.retention_days));
+    o.emplace("exposure_trace", j::Value(std::move(trace)));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -1924,6 +1932,14 @@ std::optional<ListLearningEntriesResponse> ParseListLearningEntriesResponse(
     // arrays of optional elements.
     for (const auto& entry : *entries) {
       if (auto e = LearningEntryFromJson(entry)) p.entries.push_back(std::move(*e));
+    }
+  }
+  if (const auto* trace = v->Find("exposure_trace")) {
+    const auto records = trace->GetUInt("records");
+    const auto size_bytes = trace->GetUInt("size_bytes");
+    const auto retention_days = trace->GetUInt("retention_days");
+    if (records && size_bytes && retention_days) {
+      p.exposure_trace = ExposureTraceSummary{*records, *size_bytes, *retention_days};
     }
   }
   return p;

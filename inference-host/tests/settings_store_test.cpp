@@ -443,6 +443,33 @@ TEST(SettingsStoreTest, TinyRerankerSettingsClampAndReachEngineConfig) {
   EXPECT_EQ(store.Reload().settings.tiny_reranker, azookey::reranker::TinyRerankerConfig{});
 }
 
+TEST(SettingsStoreTest, ExposureTraceOptInDefaultsOffAndUpdatesEngineAndPrivacyGuard) {
+  ScopedTempDirectory temp("azookey_settings_exposure_trace");
+  const auto path = temp.path() / "settings.json";
+  azookey::host::SettingsStore store(path);
+  EXPECT_FALSE(store.Load().settings.exposure_trace_enabled);
+  EXPECT_FALSE(store.LockPrivacyPolicy().exposure_trace_enabled);
+
+  WriteText(path, R"({"reranker":{"exposureTraceEnabled":true}})");
+  auto settings = store.Reload().settings;
+  EXPECT_TRUE(settings.exposure_trace_enabled);
+  EXPECT_TRUE(store.LockPrivacyPolicy().exposure_trace_enabled);
+  auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, settings);
+  EXPECT_TRUE(config.exposure_trace_enabled);
+  EXPECT_FALSE(config.tiny_reranker.enabled);
+
+  WriteText(path, R"({"reranker":{"exposureTraceEnabled":false,"tinyNeuralEnabled":true}})");
+  settings = store.Reload().settings;
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
+  EXPECT_FALSE(config.exposure_trace_enabled);
+  EXPECT_FALSE(store.LockPrivacyPolicy().exposure_trace_enabled);
+  EXPECT_TRUE(config.tiny_reranker.enabled);
+
+  WriteText(path, R"({"reranker":{"exposureTraceEnabled":"true"}})");
+  EXPECT_FALSE(store.Reload().settings.exposure_trace_enabled);
+  EXPECT_FALSE(store.LockPrivacyPolicy().exposure_trace_enabled);
+}
+
 TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   ScopedTempDirectory temp("azookey_settings_partial");
   const auto& dir = temp.path();

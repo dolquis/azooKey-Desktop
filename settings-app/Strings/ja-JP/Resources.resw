@@ -511,12 +511,15 @@
   <data name="LearningError_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
   <data name="Learning_Title" xml:space="preserve"><value>学習</value></data>
   <data name="Learning_Description" xml:space="preserve"><value>azooKey が学習した内容を確認し、忘れさせたり、バックアップしたりできます。</value></data>
+  <data name="Learning_ExposureTraceOptIn" xml:space="preserve"><value>候補の露出トレースを記録する</value></data>
+  <data name="Learning_ExposureTraceOptInDescription" xml:space="preserve"><value>学習を許可しているときに、表示された候補と確定・訂正をこの PC に保存します。</value></data>
   <data name="Learning_ProblemTitle" xml:space="preserve"><value>学習データの操作に失敗しました</value></data>
   <data name="Learning_SearchPlaceholder" xml:space="preserve"><value>読みまたは表記で検索</value></data>
   <data name="Learning_SearchButton" xml:space="preserve"><value>検索</value></data>
   <data name="Learning_PreviousPage" xml:space="preserve"><value>前へ</value></data>
   <data name="Learning_NextPage" xml:space="preserve"><value>次へ</value></data>
   <data name="Learning_NoEntries" xml:space="preserve"><value>該当する項目はありません。</value></data>
+  <data name="Learning_ExposureTraceSummary" xml:space="preserve"><value>露出トレース：{records} 件 / {capacity} / 保持期間 {days} 日</value></data>
   <data name="Learning_Col_Reading" xml:space="preserve"><value>読み</value></data>
   <data name="Learning_Col_Surface" xml:space="preserve"><value>候補</value></data>
   <data name="Learning_Col_LastUsed" xml:space="preserve"><value>最終使用</value></data>

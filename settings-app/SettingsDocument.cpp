@@ -79,7 +79,7 @@ j::Object SanitizeReranker(const j::Object& input, std::vector<std::string>* war
   j::Object output;
   for (const auto& [key, value] : input) {
     bool valid = false;
-    if (key == "nllRerankEnabled" || key == "tinyNeuralEnabled")
+    if (key == "nllRerankEnabled" || key == "tinyNeuralEnabled" || key == "exposureTraceEnabled")
       valid = value.IsBool();
     else if (key == "tinyNeuralModelPath")
       valid = value.IsString();
@@ -610,6 +610,8 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
   if (const auto it = root.find("logLevel"); it != root.end() && it->second.IsString()) {
     settings.log_level = it->second.AsString();
   }
+  if (const auto* enabled = FindPath(root, kExposureTraceEnabledPath); enabled && enabled->IsBool())
+    settings.exposure_trace_enabled = enabled->AsBool();
   settings.dictionary = ExtractDictionarySettings(root);
   settings.dictionary_loaded = settings.dictionary;
   if (const auto it = root.find("profilesByApp"); it != root.end() && it->second.IsObject()) {
@@ -678,6 +680,46 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
     }
   }
   return settings;
+}
+
+// The caller holds the shared settings file lock through the final replacement.
+std::optional<j::Object> ReadSettingsForSave(const std::filesystem::path& path,
+                                             SettingsSaveResult& result) {
+  SettingsDocumentStatus read_status = SettingsDocumentStatus::Missing;
+  std::optional<std::string> read_error;
+  auto root = ReadAndSanitize(path, &read_status, &read_error, &result.warnings);
+  if (read_status == SettingsDocumentStatus::ReadError) {
+    result.error = read_error.value_or("failed to read settings.json");
+    return std::nullopt;
+  }
+  if (read_status == SettingsDocumentStatus::Invalid) {
+    result.quarantined_path = QuarantineInvalidFile(path, &result.error);
+    if (!result.quarantined_path) return std::nullopt;
+    result.warnings.push_back("invalid settings.json was quarantined before save");
+  }
+  return root;
+}
+
+void ReplaceSettingsFile(const std::filesystem::path& path, j::Object root,
+                         SettingsSaveResult& result) {
+  if (const auto it = root.find("openAiApiKey"); it != root.end() && it->second.IsString() &&
+                                                 !it->second.AsString().empty() &&
+                                                 it->second.AsString().rfind("dpapi:", 0) != 0) {
+    const auto protected_key = azookey::learning::ProtectSecret(it->second.AsString());
+    if (!protected_key) {
+      result.error = "failed to protect OpenAI API key";
+      return;
+    }
+    it->second = j::Value(protected_key.value);
+  }
+
+  std::string serialized = j::Stringify(j::Value(std::move(root)));
+  serialized.push_back('\n');
+  if (!azookey::learning::WriteTextFileAtomically(path, serialized)) {
+    result.error = "failed to atomically replace settings.json";
+    return;
+  }
+  result.ok = true;
 }
 
 }  // namespace
@@ -755,18 +797,9 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
     return result;
   }
 
-  SettingsDocumentStatus read_status = SettingsDocumentStatus::Missing;
-  std::optional<std::string> read_error;
-  auto root = ReadAndSanitize(path, &read_status, &read_error, &result.warnings);
-  if (read_status == SettingsDocumentStatus::ReadError) {
-    result.error = read_error.value_or("failed to read settings.json");
-    return result;
-  }
-  if (read_status == SettingsDocumentStatus::Invalid) {
-    result.quarantined_path = QuarantineInvalidFile(path, &result.error);
-    if (!result.quarantined_path) return result;
-    result.warnings.push_back("invalid settings.json was quarantined before save");
-  }
+  auto document = ReadSettingsForSave(path, result);
+  if (!document) return result;
+  auto& root = *document;
 
   j::Object model;
   if (const auto it = root.find("model"); it != root.end() && it->second.IsObject()) {
@@ -849,24 +882,25 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
       }
       root["openAiApiKey"] = j::Value(protected_key.value);
     }
-  } else if (const auto it = root.find("openAiApiKey"); it != root.end() &&
-             it->second.IsString() && !it->second.AsString().empty() &&
-             it->second.AsString().rfind("dpapi:", 0) != 0) {
-    const auto protected_key = azookey::learning::ProtectSecret(it->second.AsString());
-    if (!protected_key) {
-      result.error = "failed to protect OpenAI API key";
-      return result;
-    }
-    root["openAiApiKey"] = j::Value(protected_key.value);
   }
+  ReplaceSettingsFile(path, std::move(root), result);
+  return result;
+}
 
-  std::string serialized = j::Stringify(j::Value(std::move(root)));
-  serialized.push_back('\n');
-  if (!azookey::learning::WriteTextFileAtomically(path, serialized)) {
-    result.error = "failed to atomically replace settings.json";
+SettingsSaveResult SaveExposureTraceSetting(const std::filesystem::path& path, bool enabled,
+                                            std::chrono::milliseconds lock_timeout) {
+  SettingsSaveResult result;
+  const auto lock = azookey::learning::AcquireExclusiveFileLockForPath(path, lock_timeout);
+  if (!lock) {
+    result.error = "settings.json is busy; no changes were written";
     return result;
   }
-  result.ok = true;
+  auto root = ReadSettingsForSave(path, result);
+  if (!root) return result;
+  if (enabled || FindPath(*root, kExposureTraceEnabledPath)) {
+    SetPath(&*root, kExposureTraceEnabledPath, j::Value(enabled));
+  }
+  ReplaceSettingsFile(path, std::move(*root), result);
   return result;
 }
 

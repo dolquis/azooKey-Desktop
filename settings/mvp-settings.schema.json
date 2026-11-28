@@ -518,7 +518,8 @@
         "tinyNeuralEnabled": { "type": "boolean", "default": false },
         "tinyNeuralModelPath": { "type": "string", "default": "" },
         "tinyNeuralTimeoutMs": { "type": "integer", "default": 15, "minimum": 10, "maximum": 20 },
-        "tinyNeuralFailureThreshold": { "type": "integer", "default": 3, "minimum": 1, "maximum": 10 }
+        "tinyNeuralFailureThreshold": { "type": "integer", "default": 3, "minimum": 1, "maximum": 10 },
+        "exposureTraceEnabled": { "type": "boolean", "default": false }
       },
       "additionalProperties": false
     },

@@ -4802,6 +4802,75 @@ TEST(EngineTypoCorrectionTest, AForgottenPatternLeavesTheIndex) {
   EXPECT_EQ(denki_label(), "もしかして: でんき");
 }
 
+// Section 12.16 (DEV-2150 plan X): the first candidate of the conversion of the frame's first
+// reading goes before that word, with its reading and label, and the frame keeps to
+// maxReadingHypotheses words.
+TEST(EngineTypoCorrectionTest, TheFramesFirstReadingIsConvertedAgain) {
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  for (const uint32_t max_words : {3u, 2u}) {
+    SCOPED_TRACE(max_words);
+    cfg.typo_max_reading_hypotheses = max_words;
+    TypoHypothesisEngine f(cfg, {{"てんき", "天気"}, {"でんき", "電機"}, {"てんぎ", "天儀"}});
+    const auto result = f.engine->QueryCandidatesEx("てんき", "", kNowBase, nullptr);
+    ASSERT_GE(result.candidates.size(), 3u);
+    EXPECT_EQ(result.candidates[0].surface, "天気");
+    const auto& added = result.candidates[1];
+    const auto& head = result.candidates[2];
+    EXPECT_EQ(added.surface, head.reading == "でんき" ? "電機" : "天儀");
+    EXPECT_EQ(added.reading, head.reading);
+    EXPECT_EQ(added.debug_info, "typo-correction");
+    EXPECT_EQ(added.description, "もしかして: " + head.reading);
+    EXPECT_EQ(head.surface, head.reading == "でんき" ? "電気" : "転義");
+    EXPECT_EQ(f.Suggested("てんき").size(), size_t{max_words});
+  }
+}
+
+// A conversion whose first candidate is shown already (here the word itself) or is written in
+// kana alone (a reading without a word) adds nothing.
+TEST(EngineTypoCorrectionTest, AShownOrKanaReconversionAddsNothing) {
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "rank";
+  for (const auto& words : std::vector<std::vector<std::pair<std::string, std::string>>>{
+           {{"てんき", "天気"}}, {{"てんき", "天気"}, {"でんき", "電気"}, {"てんぎ", "転義"}}}) {
+    SCOPED_TRACE(words.size());
+    TypoHypothesisEngine f(cfg, words);
+    auto suggested = f.Suggested("てんき");
+    std::sort(suggested.begin(), suggested.end());
+    EXPECT_EQ(suggested, (std::vector<std::string>{"転義", "電気"}));
+  }
+}
+
+// Sections 12.5 and 12.10 (DEV-2150): dict_best and s1_strength follow the score of the typed
+// reading's word. A weak user word lets the hypotheses in, and one below S_STRONG lets a
+// confident pattern lead under aggressive.
+TEST(EngineTypoCorrectionTest, TheTypedWordsScoreGradesActivationAndTheLead) {
+  azookey::host::EngineConfig cfg;
+  const auto add_tenki = [](TypoHypothesisEngine& f, std::optional<double> value) {
+    azookey::learning::UserWord tenki;
+    tenki.word = "天気";
+    tenki.ruby = "てんき";
+    tenki.value = value;
+    ASSERT_TRUE(f.engine->AddUserWord(tenki));
+  };
+  cfg.typo_correction_mode = "rank";
+  {
+    TypoHypothesisEngine f(cfg);
+    add_tenki(f, 0.3);
+    EXPECT_EQ(f.Suggested("てんき").size(), 2u);
+  }
+  cfg.typo_correction_mode = "aggressive";
+  for (const double value : {1.5, 1.0}) {
+    SCOPED_TRACE(value);
+    TypoHypothesisEngine f(cfg);
+    add_tenki(f, value);
+    LearnDenki(f, 8);
+    const auto result = f.engine->QueryCandidatesEx("てんき", "", kNowBase, nullptr);
+    ASSERT_FALSE(result.candidates.empty());
+    EXPECT_EQ(result.candidates.front().surface, value == 1.0 ? "電気" : "天気");
+  }
+}
+
 // ---- M36-A: new word mining ----
 
 TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending) {

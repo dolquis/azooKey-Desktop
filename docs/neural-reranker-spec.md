@@ -195,14 +195,11 @@ runtime FeatureExtractor は v1 / v2 で別ビルダーを持ち、ONNX のメ�
 
 ### 5.3 ONNX export
 
-PyTorch / scikit-learn で学習 → ONNX export。配置先:
-
-```
-%LOCALAPPDATA%\azooKey\models\tiny_reranker.onnx
-```
-
-または bundled として `models/` 配下に同梱（M28 MSIX 同梱可）。
-モデルパスは `settings.reranker.tinyNeuralModelPath` で上書き可能。
+PyTorch / scikit-learn で学習したモデルを ONNX に export する。Host は
+`reranker.tinyNeuralModelPath` の明示パス、`%LOCALAPPDATA%\azooKey\models\tiny_reranker.onnx`、
+Host 実行ファイルに隣接する `models/tiny_reranker.onnx` の順に解決する。
+明示パスは絶対パスに限る。無効な場合は他のパスを探索せず `load_failed` とする。
+明示パスが空の場合は、既定の候補のうち最初に見つかる通常ファイルを使う。
 
 ### 5.4 特徴量の重要度と重み付け（決定）
 
@@ -228,6 +225,8 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
 - **生スコアの尺度**: `zenzai_score` は生成時の総 logprob を対象トークン数で
   割った値。`dictionary_score` は `DictionaryCandidates` が受け取る
   `DictionaryEntry::score` の値。どちらも Host で標準化や再スケールは行わない。
+  Engine が直接作るユーザー辞書候補の `dictionary_score` には、語の明示スコアを使い、
+  省略時は `user_word_default_score` を使う。
   `user_frequency` と `recency_score` は Host が供給する `UserSignals` の値を使う。
 - **欠損特徴の既定値**: Zenzai の平均 logprob が無い場合や有限でない場合は
   `zenzai_score` を −10.0 とする。
@@ -289,6 +288,8 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
     特徴（`user_frequency` / `recency_score`）の供給に使うが、露出・dwell・訂正
     ペアの情報は持たない。
   - プライバシー方針（§13）を `learning.tsv` と揃える（local 限定・secure 除外）。
+  - v1 の `typo_confidence` と `is_typo_corrected` は、補正候補が適用点より後に加わるため、
+    推論時も学習時もそれぞれ既定値の 0.0 と false を使う。
 - **強負例は露出トレースの訂正レコードを源とする**: M54 v1 の集約 TSV は単一
   `surface` + `event_type` + `context_hash` のみで、`rejected_surface` /
   `accepted_surface` のペアや event timestamp を durable に持たない（ペア保持は
@@ -354,9 +355,9 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 | 出力 | rerank_score per candidate |
 | timeout | 既定 15ms（範囲 10〜20ms、`tinyNeuralTimeoutMs`、範囲外は clamp） |
 | fallback | 失敗時は reranker なしで返す（candidate 順序維持） |
-| 実行頻度 | 通常変換ごと |
+| 適用経路 | 通常・ライブ・混在変換、予測、訂正（secure 要求を除く） |
 | backend | ONNX Runtime の CPU EP（§7.3） |
-| バッチ | 全候補を 1 forward で処理 |
+| バッチ | 適用直前のスコア順で最大 30 件を選び、1 forward で処理。同点は入力順で決め、31 件目以降の加算は 0 |
 
 ### 7.1 失敗 fallback
 
@@ -392,18 +393,28 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
   1〜2ms で完了するため、timeout は**病的な stall（ONNX session の一時的ハング等）
   に対する安全弁**であり、通常 path の p95 を支配しない。これにより roadmap M56 の
   「p95 latency 悪化 +10ms 以内」を脅かさない。
+  開始時に要求の deadline までの残り時間が tiny の timeout より短ければ、forward を始めずにスキップする。
+  watchdog は期限後の出力を破棄し、実行中の forward に停止を通知する。
+  要求の deadline が先に来るか同時ならスキップし、tiny 自身の timeout が先に来た場合に限って
+  `timeout` として数える。前の forward がまだ実行中なら新しい forward は始めない。
+  前の要求が tiny 自身の timeout で終わった場合は、新しい要求も `timeout` として数える。
+  取り消しや要求の deadline で終わった場合は、まだ実行中の forward の開始から tiny 自身の timeout に
+  達するまではスキップし、達した後は新しい要求ごとに `timeout` として数える。スキップは失敗回数に含めない。
+  このスキップは下記の fallback reason にも含めない。
 - **ロード失敗は即時無効化（breaker とは別経路）**: ONNX load 失敗時は §7.1 の
   とおり当該セッションで reranker を**即時無効化**し、`reason=load_failed` で
   fallback する。使えるセッションが残らず後続のリクエスト失敗を生まないため、
   circuit breaker の連続カウントには**載せない**。次回モデル再ロード（設定変更・
   Host 再起動）で再評価する。
 - **連続失敗の circuit breaker**: **runtime の失敗**（推論例外 `infer_error` /
-  timeout `timeout`）が**連続 `tinyNeuralFailureThreshold`=3 回**に達したら、当該
+  timeout `timeout`）が**連続 `tinyNeuralFailureThreshold` 回**に達したら、当該
   セッションで reranker を**無効化**し（runtime 状態）、以降は fallback（candidate
   順序維持）で返す。次回モデル再ロード / セッション再初期化で再有効化する。これは
   M57（`docs/modernbert-ja-scoring-spec.md` §5.4）の circuit breaker と同じ runtime
   安全パターンであり、ユーザー設定 `tinyNeuralEnabled` とは独立した内部フラグである。
+  連続失敗は要求単位で数え、予測の最初のバッチが失敗したら次のバッチを実行せず、どちらかが失敗した要求では両方の加算を破棄する。
   `load_failed`（上記）と `invalid_input`（下記、入力起因）は breaker に載せない。
+  閾値は既定 3、範囲 1〜10 とし、範囲外は clamp する。
 - **部分適用**: 入力 NaN / Inf を含む候補は当該候補のみ skip し、他候補には rerank を
   適用する（§7.1）。全候補が skip された場合は `reason=invalid_input` で順序維持して
   返す（circuit breaker の連続失敗にはカウントしない＝入力データ起因のため）。
@@ -444,7 +455,7 @@ M56 の `tiny_reranker.onnx` と M57 の `modernbert-ja-70m` の ONNX モデル�
 
 ## 8. 設定スキーマ
 
-`settings/mvp-settings.schema.json` に追加:
+`settings/mvp-settings.schema.json` の `reranker` ブロックの既定値:
 
 ```json
 {
@@ -464,34 +475,29 @@ M56 の `tiny_reranker.onnx` と M57 の `modernbert-ja-70m` の ONNX モデル�
   導入前と等価であること（§11 の回帰対象）。ユーザー設定 OFF による非適用は
   `reason=disabled` で記録する（§7.2）。
 - `tinyNeuralTimeoutMs`: 範囲 10〜20（§7.2）。範囲外は clamp。
-- `tinyNeuralFailureThreshold`: §7.2 の circuit breaker 閾値（既定 3）。
+- `tinyNeuralModelPath`: 明示パス、ユーザー領域、同梱モデルの順に解決する（§5.3）。
+  明示パスは絶対パスに限る。無効なら `load_failed` とし、ほかの候補は探索しない。
+- `tinyNeuralFailureThreshold`: §7.2 の circuit breaker 閾値。既定 3、範囲 1〜10。
+  範囲外は clamp。
 - `reranker.modernbert*`（`modernbertEnabled` / `modernbertTimeoutMs` 等）は M57 が使う。
   キー・既定値・範囲の正典は `docs/modernbert-ja-scoring-spec.md` §7。
 - §6.2 の学習パイプラインパラメータ（`trainNegativesPerSample` /
   `correctionWindowMs` / `minDwellMs` 等）はオフライン用であり、本 runtime schema
   には登録しない。
-- 本ブロックの `tinyNeural*` は、M56 が `settings/mvp-settings.schema.json` の `reranker` へ
-  追加する予定のキーであり、v1.0 の schema には無い（M56 / M57 は v1.0 後トラック）。
 
 ## 9. スコア統合
 
-`final_score` の式は本節が定義する。M56 の rerank_score（`tiny_score`）はその構成要素の 1 つで、
-初期重みは以下とし、M52 ベンチ（`docs/conversion-quality-benchmark-spec.md`）の評価で校正する:
+M56 は適用点の候補スコアに上限付きの項を加える。`score_before_tiny` は、候補生成・統合と、
+条件を満たす経路の NLL 補正を反映したスコアとする。
 
 ```
-final_score =
-  normalize(zenzai_score)       * 0.35
-+ normalize(dictionary_score)   * 0.15
-+ normalize(user_score)         * 0.20
-+ normalize(typo_score)         * 0.10
-+ normalize(tiny_score)         * 0.15
-+ normalize(modernbert_score)   * 0.05
-+ hard_bonus
-- hard_penalty
+score_after_tiny = score_before_tiny + 0.15 * clamp(rerank_score, 0, 1)
 ```
 
-これらの重みは **手動値ではなく LightGBM / logistic regression で
-学習**することを推奨する（評価は M52 で実施）。
+係数 0.15 は tiny 項の初期重みを引き継ぎ、v1 の sigmoid 出力による加算を最大 0.15 に収める。
+非適用時の加算は 0 とする。加算後に既存の `ApplyRerankerOrRaw` とタグ加点を行う。
+M57 を適用する場合は `0.05 * normalize(modernbert_score)` を加える。適用条件と fallback は
+`docs/modernbert-ja-scoring-spec.md` §4 と §8 に従う。重みの校正には M52 ベンチを使う。
 
 本節は `final_score` 式の正典であり、`docs/modernbert-ja-scoring-spec.md` §8、
 `docs/zenzai-inference-spec.md` §7.5、`docs/app-profile-spec.md` §7、`docs/neural-reranker-nll-spec.md` §B6.3 から参照される。
@@ -515,7 +521,8 @@ final_score =
   NaN / Inf と欠損値の扱い
 - unit: 既定 OFF（`tinyNeuralEnabled=false`）で ONNX セッションを生成せず、候補列・
   `final_score` が Track A 導入前と等価（§8）
-- unit: ONNX load 失敗時の fallback
+- unit: ランタイムなし、ロード失敗、secure 要求での fallback
+- unit: 最大 30 件の選定・同点順、加算の上限、出力の件数不一致や非有限値での全件 fallback
 - unit: timeout 時の fallback
 - unit: 連続失敗で circuit breaker が開き、再ロードで閉じる（§7.2）
 - integration: M52 ベンチで top1 +3% / p95 latency +10ms 以内

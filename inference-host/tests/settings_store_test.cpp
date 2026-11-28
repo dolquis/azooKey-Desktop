@@ -422,6 +422,27 @@ TEST(SettingsStoreTest, NllSettingsClampAndReachEngineConfig) {
   EXPECT_EQ(store.Reload().settings.nll, azookey::host::NllConfig{});
 }
 
+TEST(SettingsStoreTest, TinyRerankerSettingsClampAndReachEngineConfig) {
+  ScopedTempDirectory temp("azookey_settings_tiny_reranker");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"reranker":{"tinyNeuralEnabled":true,"tinyNeuralModelPath":"tiny.onnx",
+      "tinyNeuralTimeoutMs":99,"tinyNeuralFailureThreshold":-5}})");
+  azookey::host::SettingsStore store(path);
+  const auto result = store.Load();
+  ASSERT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, result.settings);
+  EXPECT_TRUE(config.tiny_reranker.enabled);
+  EXPECT_EQ(config.tiny_reranker.model_path, "tiny.onnx");
+  EXPECT_EQ(config.tiny_reranker.timeout_ms, 20);
+  EXPECT_EQ(config.tiny_reranker.failure_threshold, 1);
+
+  WriteText(path, R"({"reranker":{"tinyNeuralEnabled":"true","tinyNeuralModelPath":3,
+      "tinyNeuralTimeoutMs":18.5,"tinyNeuralFailureThreshold":null}})");
+  EXPECT_EQ(store.Reload().settings.tiny_reranker, azookey::reranker::TinyRerankerConfig{});
+  WriteText(path, "{}");
+  EXPECT_EQ(store.Reload().settings.tiny_reranker, azookey::reranker::TinyRerankerConfig{});
+}
+
 TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   ScopedTempDirectory temp("azookey_settings_partial");
   const auto& dir = temp.path();

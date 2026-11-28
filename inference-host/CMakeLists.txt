@@ -107,7 +107,8 @@ target_link_libraries(azookey_host
     azookey_learning
     azookey_ipc
     azookey_project_options
-  PRIVATE azookey_reranker azookey_project_warnings
+    azookey_reranker
+  PRIVATE azookey_project_warnings
 )
 target_compile_definitions(azookey_host PUBLIC AZOOKEY_BACKEND_DEFAULT="${AZOOKEY_BACKEND}")
 if(AZOOKEY_WITH_LLAMA_CPP)

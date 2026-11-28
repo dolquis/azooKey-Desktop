@@ -113,7 +113,11 @@
     "nllTopK": 8,
     "nllWeight": 0.15,
     "nllBudgetMs": 20,
-    "nllFailureThreshold": 3
+    "nllFailureThreshold": 3,
+    "tinyNeuralEnabled": false,
+    "tinyNeuralModelPath": "",
+    "tinyNeuralTimeoutMs": 15,
+    "tinyNeuralFailureThreshold": 3
   },
   "autoUpdate": {
     "enabled": false,

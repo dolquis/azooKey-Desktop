@@ -27,6 +27,7 @@
 #endif
 
 #include "../../learning/tests/TestByteCrypto.h"
+#include "../../reranker/tests/MockTinyRerankerRuntime.h"
 #include "IpcTestData.h"
 #include "ScopedTempDirectory.h"
 #include "azookey/core/BatchConversionChunker.h"
@@ -1238,6 +1239,70 @@ TEST_F(DispatcherTest, QueryCandidatesAddsEnglishCandidatesOnlyWhenAsked) {
     if (c.tag == kEnglish) without_dictionary.push_back(c.surface);
   }
   EXPECT_EQ(without_dictionary, english);
+}
+
+TEST_F(DispatcherTest, SecureCandidateLiveAndBatchRequestsNeverCallTinyReranker) {
+  using namespace std::chrono_literals;
+  EnableEventPrivacy(dispatcher);
+  auto config = engine.config();
+  config.tiny_reranker.enabled = true;
+  const auto path = temp_directory.path() / "tiny.onnx";
+  std::ofstream(path).put('x');
+  config.tiny_reranker.model_path = azookey::core::PathToUtf8(path);
+  engine.ApplyConfig(config);
+  auto forwards = std::make_shared<std::atomic<int>>(0);
+  auto mock = std::make_shared<azookey::reranker::test::MockTinyRerankerRuntime>(
+      [forwards](auto rows, const auto&) {
+        ++*forwards;
+        return std::vector<float>(rows.size(), 1.0f);
+      });
+  int loads = 0;
+  engine.SetTinyRerankerRuntimeFactoryForTests(
+      [&](const auto&) {
+        ++loads;
+        return mock;
+      },
+      2s);
+
+  ipc::QueryCandidatesRequest candidates;
+  candidates.reading = "にほん";
+  ipc::QueryLiveConversionRequest live{"にほん", ""};
+  ipc::QueryBatchConversionRequest batch;
+  batch.reading = "にほん";
+  candidates.secure = true;
+  live.secure = true;
+  batch.secure = true;
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9010, ipc::MessageType::QueryCandidates,
+                                          ipc::BuildQueryCandidatesRequest(candidates))));
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9011, ipc::MessageType::QueryLiveConversion,
+                                          ipc::BuildQueryLiveConversionRequest(live))));
+  const auto query_batch = [&](uint64_t id) {
+    const auto response = dispatcher.Dispatch(MakeReq(
+        id, ipc::MessageType::QueryBatchConversion, ipc::BuildQueryBatchConversionRequest(batch)));
+    ASSERT_TRUE(response.has_value());
+    const auto parsed = ipc::ParseQueryBatchConversionResponse(response->payload_json);
+    ASSERT_TRUE(parsed.has_value());
+    ASSERT_EQ(parsed->segments.size(), 1u);
+    EXPECT_FALSE(parsed->segments.front().candidates.empty());
+  };
+  query_batch(9012);
+  EXPECT_EQ(loads, 0);
+  EXPECT_EQ(forwards->load(), 0);
+  candidates.secure = false;
+  live.secure = false;
+  batch.secure = false;
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9013, ipc::MessageType::QueryCandidates,
+                                          ipc::BuildQueryCandidatesRequest(candidates))));
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9014, ipc::MessageType::QueryLiveConversion,
+                                          ipc::BuildQueryLiveConversionRequest(live))));
+  EXPECT_EQ(loads, 1);
+  EXPECT_EQ(forwards->load(), 2);
+  query_batch(9015);
+  EXPECT_EQ(forwards->load(), 3);
+  engine.SetTinyRerankerPrivacyMode(true);
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(9016, ipc::MessageType::QueryCandidates,
+                                          ipc::BuildQueryCandidatesRequest(candidates))));
+  EXPECT_EQ(forwards->load(), 3);
 }
 
 // DEV-1689 (M60 spec sections 4.1 and 6.2): the romaji is the user's input, so

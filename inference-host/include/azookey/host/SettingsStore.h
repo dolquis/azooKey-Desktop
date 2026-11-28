@@ -93,6 +93,7 @@ struct RuntimeSettings {
     return app_profiles ? *app_profiles : defaults;
   }
   NllConfig nll;
+  reranker::TinyRerankerConfig tiny_reranker;
   DictionaryLayerConfig dictionary;
   std::string input_mode{"hiragana"};
   bool live_conversion{false};

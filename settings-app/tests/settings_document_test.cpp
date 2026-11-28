@@ -468,7 +468,9 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
     "backendPreference": "cuda",
     "unknownRoot": 1,
     "reranker": {"nllRerankEnabled": true, "nllTopK": 8, "nllWeight": 0.15,
-                 "nllBudgetMs": 20, "nllFailureThreshold": 3, "unknown": true},
+                 "nllBudgetMs": 20, "nllFailureThreshold": 3,
+                 "tinyNeuralEnabled": true, "tinyNeuralModelPath": "tiny.onnx",
+                 "tinyNeuralTimeoutMs": 5, "tinyNeuralFailureThreshold": 100, "unknown": true},
     "promptPrefixByApp": {"Code.exe": "code", "bad": false},
     "model": {
       "enabled": true,
@@ -515,12 +517,16 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   EXPECT_FALSE(root.contains("unknownRoot"));
   ASSERT_TRUE(root.contains("reranker"));
   const auto& reranker = root.at("reranker").AsObject();
-  EXPECT_EQ(reranker.size(), 5u);
+  EXPECT_EQ(reranker.size(), 9u);
   EXPECT_TRUE(reranker.at("nllRerankEnabled").AsBool());
   EXPECT_EQ(reranker.at("nllTopK").AsNumber(), 8);
   EXPECT_EQ(reranker.at("nllWeight").AsNumber(), 0.15);
   EXPECT_EQ(reranker.at("nllBudgetMs").AsNumber(), 20);
   EXPECT_EQ(reranker.at("nllFailureThreshold").AsNumber(), 3);
+  EXPECT_TRUE(reranker.at("tinyNeuralEnabled").AsBool());
+  EXPECT_EQ(reranker.at("tinyNeuralModelPath").AsString(), "tiny.onnx");
+  EXPECT_EQ(reranker.at("tinyNeuralTimeoutMs").AsNumber(), 10);
+  EXPECT_EQ(reranker.at("tinyNeuralFailureThreshold").AsNumber(), 10);
   EXPECT_FALSE(root.contains("backendPreference"));
   ASSERT_TRUE(root.contains("promptPrefixByApp"));
   EXPECT_EQ(root.at("promptPrefixByApp").AsObject().size(), 1u);

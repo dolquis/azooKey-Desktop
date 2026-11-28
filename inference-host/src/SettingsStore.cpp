@@ -225,6 +225,15 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
     if (weight != reranker->end() && weight->second.IsNumber())
       settings.nll.weight = weight->second.AsNumber();
     settings.nll = ClampNllConfig(settings.nll);
+    auto& tiny = settings.tiny_reranker;
+    tiny.enabled = ReadBool(*reranker, "tinyNeuralEnabled", tiny.enabled);
+    tiny.model_path = ReadString(*reranker, "tinyNeuralModelPath", tiny.model_path);
+    tiny.timeout_ms = ReadClampedInt32(*reranker, "tinyNeuralTimeoutMs", tiny.timeout_ms,
+                                       azookey::reranker::kTinyTimeoutMinMs,
+                                       azookey::reranker::kTinyTimeoutMaxMs);
+    tiny.failure_threshold =
+        ReadClampedInt32(*reranker, "tinyNeuralFailureThreshold", tiny.failure_threshold,
+                         azookey::reranker::kTinyFailureMin, azookey::reranker::kTinyFailureMax);
   }
   settings.input_mode =
       ReadEnum(object, "inputMode", settings.input_mode, {"hiragana", "alnum_half", "alnum_full"});
@@ -696,6 +705,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
   config.rewriters.symbol_path = core::Utf8Path(settings.symbol_data_path);
   config.rewriters.emoji_path = core::Utf8Path(settings.emoji_data_path);
   config.nll = ClampNllConfig(settings.nll);
+  config.tiny_reranker = reranker::ClampTinyRerankerConfig(settings.tiny_reranker);
   // Sampled at most once, and only when a setting depends on the power source.
   std::optional<InferenceThreadEnvironment> sampled_environment;
   const auto sample_environment = [&]() -> const InferenceThreadEnvironment& {

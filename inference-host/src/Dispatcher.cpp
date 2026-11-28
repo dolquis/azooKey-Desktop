@@ -562,6 +562,7 @@ std::vector<ipc::CandidateField> MixedCandidates(
     options.deadline = deadline;
     options.typo_correction = false;
     options.nll = false;
+    options.secure = request.secure;
     auto result =
         engine.QueryCandidatesEx(mixed.reading, request.left_context, NowSec(), cancel,
                                  request.max_candidates, false, telemetry, tag_boosts, &options);
@@ -647,6 +648,7 @@ std::optional<ipc::QueryLiveConversionResponse> MixedLiveConversion(
   MixedConversionOptions options;
   options.english_ranges = mixed.english_ranges;
   options.typo_correction = false;
+  options.secure = request.secure;
   const auto candidate = engine.QueryLiveConversion(mixed.reading, request.context, NowSec(),
                                                     cancel, telemetry, &options);
   if (!candidate) return std::nullopt;
@@ -1319,6 +1321,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // typed, so no corrected reading comes back with its segments.
     MixedConversionOptions as_typed;
     as_typed.typo_correction = false;
+    as_typed.secure = parsed->secure;
     // DEV-1734: the candidate window also weighs the other reading of an
     // ambiguous "nn" + vowel. Per-key queries, a secure request (which the Host
     // does not correct, typo-correction-learning-spec section 12.12.2) and an
@@ -1341,6 +1344,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // privacy_mode_secure stops the correction in the engine.
     MixedConversionOptions plain;
     plain.typo_correction = !parsed->secure;
+    plain.secure = parsed->secure;
     if (!parsed->secure) plain.raw_keys = parsed->raw_keys;
     const auto* conversion = first_segment          ? &first_segment_options
                              : IsInlineSplit(split) ? &as_typed
@@ -1568,6 +1572,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   // typo-correction-learning-spec section 12.12.2: a secure request is converted as typed.
   MixedConversionOptions as_requested;
   as_requested.typo_correction = !parsed->secure;
+  as_requested.secure = parsed->secure;
   const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
                                                       cancel.get(), trace.context(), &as_requested);
   const bool canceled = cancel->load(std::memory_order_acquire);
@@ -2259,6 +2264,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     // typo-correction-learning-spec section 12.12.2: a secure batch is converted as typed.
     MixedConversionOptions as_requested;
     as_requested.typo_correction = !parsed->secure;
+    as_requested.secure = parsed->secure;
     for (const auto& reading : chunks) {
       if (cancel->load(std::memory_order_acquire)) break;
       auto candidates =
@@ -2605,11 +2611,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
 
   std::lock_guard<std::mutex> lock(*config_.update_config_mutex);
   const auto load_result = settings_store_->Reload();
-  // typo-correction-learning-spec section 12.12.2: before the invalid return
-  // below, since an invalid reload publishes secure (fail closed) without
-  // applying any config. Read first, so that the privacy lock is not held
-  // into the engine.
+  // An invalid reload publishes secure (fail closed) without applying the
+  // engine config. Update both privacy gates before that return and release the
+  // settings privacy lock before taking the engine's locks.
   const bool privacy_secure = settings_store_->LockPrivacyPolicy().privacy_mode_secure;
+  engine_->SetTinyRerankerPrivacyMode(privacy_secure);
   engine_->SetTypoWritesSuspended(privacy_secure);
   core::CrashReporting::SetConsent(load_result.settings.crash_report_consent == "local"
                                        ? core::CrashConsent::Local

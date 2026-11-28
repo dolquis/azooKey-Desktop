@@ -1402,7 +1402,7 @@ M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
 | `P_lowconf`（§12.10） | 0.50 | — | overcorrection 率（aggressive） |
 | `minConfidenceForRanking`（§12.14） | 0.70 | `< minConfidenceForTopCandidate` | FP 率（rank） |
 | `minConfidenceForTopCandidate`（§12.14） | 0.90 | `> minConfidenceForRanking` | overcorrection 率（aggressive） |
-| `D_FULL`（§12.5/§12.10） | 1.4 | `D_FULL > 0`。頻度が最大の Sudachi の語の辞書スコア（頻度 + 層の優先度 + 完全一致の加点 − 1）に合わせ、その語で `dict_best` と `s1_strength` が 1 になる | top5 accuracy（rank）、overcorrection 率（aggressive） |
+| `D_FULL`（§12.5/§12.10） | 1.4 | `D_FULL > 0`。頻度が最大の Sudachi の語の辞書スコア（頻度 + 層の優先度 + 完全一致の加点 + カテゴリの補正 − 1。カテゴリの補正が 1 の語で 1.0 + 0.30 + 0.10 + 1 − 1）に合わせ、その語で `dict_best` と `s1_strength` が 1 になる | top5 accuracy（rank）、overcorrection 率（aggressive） |
 | `personal_cost_reduction`（§12.4.1） | 0.5 | `0 <= personal_cost_reduction <= 1` | top5 accuracy（rank） |
 | `HYP_MAX_READING` / `HYP_MAX_KEYS`（§12.4） | 10 / 20 | `HYP_MAX_READING > LEN_MIN`。読みがこのコードポイント数を、または `raw_keys` がこのキー数を超えると、`rank` / `aggressive` でも仮説を作らず v1 の読みの組だけを引く。設定キーではない | 候補表示の p95 と top5 accuracy（rank） |
 
@@ -1416,6 +1416,9 @@ M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
   該当するのは `accept_weight` / `reject_weight` / `B_rec` / `B_app` / `P_reject`、
   `minConfidenceForTopCandidate`、warm-up の `typo_min_count`（§12.11）。これらは表の既定を使う。
   運用での校正は、`typo_accept` / `typo_reject` を記録する経路（DEV-2197）ができてから行う。
+  空のストアには v1 の組も個人パターンも無く、`rank` で補正の候補が第一候補にならないので、`rank` の
+  `typo_false_positive_rate` は変換の候補が 0 件の読みを除いて 0 となる。FP 率を指標とする定数（`S_WEAK`、`G_GAP`、`LEN_MIN`、
+  `minConfidenceForRanking`）も、ベンチの FP 率では校正できない。
 - `rank` / `aggressive` では、v2 枠（§12.7）を置いたあと、枠の先頭の語の読みを 1 回だけ変換し直し、その第一候補を
   枠の先頭に足す。足すのは、その候補がまだ候補に無く（枠の先頭の語そのものを含む）、かなだけで書かれていないときだけとする。
   足した候補は先頭の語と同じ「もしかして: <読み>」の表示を持ち、枠は `maxReadingHypotheses` 語に保つ（あふれた

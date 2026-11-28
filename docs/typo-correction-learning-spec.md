@@ -1061,8 +1061,8 @@ overcorrection_penalty =
 - 係数 `P_*` / `S_STRONG` は初期値であり M52（`typo_overcorrection_rate`）で
   校正する（§12.16）。
 - Host は `dictionary_hit_score` を 1 とする（§12.4.4 で語のある仮説だけが残る）。仮説の語の辞書スコアで仮説を
-  並べると、層の優先度が高い語（新語辞書のカタカナ語、技術用語）が正解の読みの語を押し出すため、仮説の順位は
-  `reading_similarity` だけで決める。`s1_strength` は、元の top1 が
+  並べると、層の優先度が高い語（新語辞書のカタカナ語、技術用語）が正解の読みの語を押し出すため、仮説の語の辞書
+  スコアは `typo_score` に入れない。`s1_strength` は、元の top1 が
   元の読みの辞書の語ならその辞書スコアを `D_FULL`（§12.16）で割って `[0, 1]` に収めた値、そうでなければ 0 とする。
   `context_score` と `app_factor_typo` は 1.0 とする。
   個人パターンの confidence（§12.2）は、照会の時点の §12.9 の値で、app bonus を含めない。

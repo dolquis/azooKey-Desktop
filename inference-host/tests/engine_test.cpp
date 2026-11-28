@@ -4826,18 +4826,44 @@ TEST(EngineTypoCorrectionTest, TheFramesFirstReadingIsConvertedAgain) {
   }
 }
 
-// A conversion whose first candidate is shown already (here the word itself) or is written in
-// kana alone (a reading without a word) adds nothing.
+// A conversion whose first candidate is written in kana alone or is shown already (here the word
+// itself) adds nothing.
 TEST(EngineTypoCorrectionTest, AShownOrKanaReconversionAddsNothing) {
   azookey::host::EngineConfig cfg;
   cfg.typo_correction_mode = "rank";
   for (const auto& words : std::vector<std::vector<std::pair<std::string, std::string>>>{
-           {{"てんき", "天気"}}, {{"てんき", "天気"}, {"でんき", "電気"}, {"てんぎ", "転義"}}}) {
+           {{"てんき", "天気"}, {"でんき", "デンキ"}, {"てんぎ", "てんぎー"}},
+           {{"てんき", "天気"}, {"でんき", "電気"}, {"てんぎ", "転義"}}}) {
     SCOPED_TRACE(words.size());
     TypoHypothesisEngine f(cfg, words);
     auto suggested = f.Suggested("てんき");
     std::sort(suggested.begin(), suggested.end());
     EXPECT_EQ(suggested, (std::vector<std::string>{"転義", "電気"}));
+  }
+}
+
+// Under aggressive a word that leads is not the frame's head, and it counts toward
+// maxReadingHypotheses: the frame's word that the reconversion pushes past the cap leaves.
+TEST(EngineTypoCorrectionTest, AnAggressiveLeadIsNotReconvertedAndCountsTowardTheCap) {
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "aggressive";
+  for (const uint32_t max_words : {3u, 2u}) {
+    SCOPED_TRACE(max_words);
+    cfg.typo_max_reading_hypotheses = max_words;
+    TypoHypothesisEngine f(cfg, {{"てんき", "天気"}, {"でんき", "電機"}, {"てんぎ", "天儀"}});
+    LearnDenki(f, 8);
+    const auto result = f.engine->QueryCandidatesEx("てんき", "", kNowBase, nullptr);
+    std::vector<std::string> surfaces;
+    for (const auto& c : result.candidates) surfaces.push_back(c.surface);
+    const std::vector<std::string> expected =
+        max_words == 3 ? std::vector<std::string>{"電気", "天気", "天儀", "転義"}
+                       : std::vector<std::string>{"電気", "天気", "天儀"};
+    ASSERT_GE(surfaces.size(), expected.size());
+    surfaces.resize(expected.size());
+    EXPECT_EQ(surfaces, expected);
+    ASSERT_GE(result.candidates.size(), 3u);
+    EXPECT_EQ(result.candidates[2].reading, "てんぎ");
+    EXPECT_EQ(result.candidates[2].description, "もしかして: てんぎ");
   }
 }
 

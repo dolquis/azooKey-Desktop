@@ -229,10 +229,11 @@ Host 実行ファイルに隣接する `models/tiny_reranker.onnx` の順に解�
   省略時は `user_word_default_score` を使う。
   `user_frequency` と `recency_score` は Host が供給する `UserSignals` の値を使う。
 - **学習由来の 2 特徴量**: 候補生成時点のスナップショットから、候補の
-  `(reading, surface)` に一致する学習ストアの全 app 行（大域行を含む）を取る。
+  `(reading, surface)` に一致する、かなの学習チャネルの全 app 行（大域行を含む）を取る。
   行 `i` の `f_i` を `ln(1 + commit_count_i)`、`r_i` を
   [ユーザー学習強化仕様](user-learning-enhancement-spec.md) §5 の半減期と
-  `last_updated_epoch_sec_i` による時間減衰とする。基準時刻は候補生成時の epoch 秒とする。
+  `last_updated_epoch_sec_i` による時間減衰とする。半減期を選ぶカテゴリは候補の
+  `category_mask` から取得し、基準時刻は候補生成時の epoch 秒とする。
 
   ```text
   user_frequency = Σ f_i
@@ -241,6 +242,7 @@ Host 実行ファイルに隣接する `models/tiny_reranker.onnx` の順に解�
 
   一致する行が無いか分母が 0 なら両方とも 0.0 とする。app 補正と訂正ペナルティは
   この 2 特徴量に含めない。Host は同じ集約関数で推論と露出トレースに値を供給する。
+  bundled v1 の合成露出では両特徴量を 0 とし、標準化ではそのまま通す。
 - **欠損特徴の既定値**: Zenzai の平均 logprob が無い場合や有限でない場合は
   `zenzai_score` を −10.0 とする。
   `dictionary_score`、`user_frequency`、`recency_score`、`typo_confidence` は
@@ -283,36 +285,44 @@ bundled 学習データの概念例である。個人の露出トレースのフ
 
 - **記録対象**は、確定直前に連続して描画されたネイティブ候補窓の行のうち、
   単一の `CommitObservation` に対応する Host 応答の行とする。
-  複数文節の確定、予測、TIP のローカル候補、TSF がアプリに描画を委ねた候補窓は対象外とする。
+  複数文節の確定、予測、英語の候補、TIP のローカル候補、TSF がアプリに描画を委ねた候補窓は対象外とする。
   TIP は当該の行集合が描画された時刻を取得し、同じ行集合の再描画ではその時刻を維持する。
   表示行が変わるか一度閉じた窓を表示し直したときは、新たな描画時刻を使う。
 - **照合**には Host が発行する応答 ID と、最終応答の候補配列内の位置を使う。
   TIP は表示行の参照を UI を閉じる前に確保し、確定に成功したときに送る。再送でも参照と時刻は同じ値を使う。
   既存学習が使う `shown[]` の契約を保ち、露出は描画した行の参照から確定する。
   wire の任意フィールドと欠落時の扱いは [TSF・Host アーキテクチャ](windows-tsf-host-architecture.md)「露出トレースの任意フィールド」に従う。
-- **特徴量とハッシュ**は候補生成時に保持する。Host は生成時の `ExtractFeaturesV1` の 12 次元ベクトルと、
-  `learning::ContextHash` で算出した `left_context_hash` を応答 ID に結び付け、一時的に保持する。
+- **特徴量とハッシュ**は候補生成時に保持する。Host は §7 の適用点での上位 30 件を上限として、
+  `ExtractFeaturesV1` の 12 次元ベクトルを保持する。候補ごとのベクトルと
+  `learning::ContextHash` で算出した `left_context_hash` を応答 ID に結び付ける。
   保持する応答の件数と有効期間に上限を設け、照合できなくなった場合は記録を見送る。
-  文脈ハッシュは [ユーザー学習強化仕様](user-learning-enhancement-spec.md) §8.1、M54 の 2 特徴量は §5.4 に従う。
+  文脈ハッシュは [ユーザー学習強化仕様](user-learning-enhancement-spec.md) §8.1、M54 の 2 特徴量は本書 §5.4 に従う。
+  適用点の後に追加される Host 候補（英語、絵文字、句読点、typo 補正など）や 31 件目以降の候補など、
+  生成時のベクトルを保持していない表示行はトレースから除外する。残った行に選んだ候補が無ければ確定を記録しない。
   確定時の学習更新を特徴量へ混ぜない。v1 の `typo_confidence` と `is_typo_corrected` は、補正候補が
   適用点より後に加わるため、推論・トレースともに既定値の 0.0 と false を使う。
 - **記録の許可**は `reranker.exposureTraceEnabled` が true かつ既存の `LearningAllowed` が真の場合に限る。
-  Host は候補要求と、確定・訂正の受理時に判定する。確定と訂正は既存の `observation_id` の重複排除を通った分を記録する。
-  opt-in や Host の学習許可を解除したときは、保留中のレコードの保存も止める。
+  Host は候補要求と、確定・訂正の受理時に判定する。確定と訂正は `observation_id` が非空で、
+  既存の重複排除を通った分を記録する。訂正は `target_observation_id` も非空でなければならない。
+  opt-in を解除したときは、保留中のレコードと応答 ID に結び付けた一時保持を破棄する。
+  Host の学習許可を解除したときは、保留中のレコードの保存を止める。
+  保存済みのスナップショットは、opt-in の解除後も期限切れの処理や全削除で消えるまで保持する。
 
 露出トレースに正例・負例・強負例の根拠を保持する。1 件の確定レコードは
 `observation_id`、`left_context_hash`、`reading`、`chosen_surface`、
 表示順の `shown_surfaces[]` と対応する `features[]`、`shown_at_ms`、`commit_ts` を持つ。
+`shown_surfaces[]` と `features[]` は長さと順序をそろえ、同じ添字で同じ候補を表す。
 確定時刻 `commit_ts` は `CommitObservation.timestamp_ms` に由来し、表示時刻と同じ
 Unix epoch ミリ秒で保持する。`dwell_ms = commit_ts - shown_at_ms` を §6.2 の滞留時間判定に使う。
 
-訂正レコードは `observation_id`、元確定の `target_observation_id`、`event_type`
-（`correction_reject` または `correction_accept`）、`rejected_surface`、
-置換を確認できる場合の `accepted_surface`、`correction_ts` を持つ。
+訂正レコードは `observation_id`、元確定の `target_observation_id`、元確定の `reading`、
+`event_type`、`rejected_surface`、`correction_ts` を持つ。
 `correction_ts` は `CommitCorrection.timestamp_ms` の Unix epoch ミリ秒とする。
-Host は元確定の ID がトレースにある場合に限って訂正を記録する。読み、表記、時刻の近さによる照合は行わない。
-置換先の無い undo は `correction_reject` として、確認できた別表記への置換は拒否と受理の組として記録する。
-undo は元確定の正例を取り消す。強負例には別表記への置換の確認と §6.2 の時刻窓を要する。
+Host は保存済みまたは保留中の確定レコードに元確定の ID が一致する場合に限って訂正を記録する。
+読み、表記、時刻の近さによる照合は行わない。
+undo は `event_type=correction_reject` の 1 レコードとする。再変換による別表記への置換は、
+`rejected_surface` と `accepted_surface` を持つ `event_type=correction_accept` の 1 レコードとする。
+元確定は書き換えずに保持し、正例の取り消しは §6.2 のラベル付けで行う。
 
 #### 保存と削除
 
@@ -320,14 +330,20 @@ undo は元確定の正例を取り消す。強負例には別表記への置換
   既定は `%LOCALAPPDATA%\azooKey\data\reranker_trace.jsonl.enc` とする。
   JSONL 全体を単一のスナップショットとしてユーザースコープ DPAPI で暗号化し、既存の atomic replace で更新する。
   平文へのフォールバックは設けず、チャンクのローテーションは行わない。
-- 保持上限は 10,000 レコード、暗号化後 16 MiB、30 日とする。起動時・保存時・定期処理で期限切れを除き、
-  件数または容量が上限を超える分は古いレコードから落とす。レコードの新旧には `commit_ts` または
-  `correction_ts` を使う。
+- 付随ファイルは atomic replace の途中の一時ファイルと破損時の退避ファイルを指す。
+  復号または解析に失敗した場合は、元の暗号化ファイルを
+  `<ファイル名>.corrupt-<epoch 秒>` に退避してから空のトレースで始める。
+  退避に失敗したら保存を止め、元ファイルを保つ。
+  作り直す前に元ファイルを暗号化したまま保全する点は、
+  [typo 学習ストアの復旧規則](typo-correction-learning-spec.md) §12.8 の解析破損時と同じとする。
+- 保持上限は 10,000 レコード、暗号化後 16 MiB、30 日とする。件数は確定・訂正をそれぞれレコード単位で数える。
+  起動時・保存時・定期処理で期限切れを除き、件数または容量が上限を超える分は古いレコードから落とす。
+  期限と上限は opt-in や学習の許可にかかわらず適用する。レコードの新旧には `commit_ts` または `correction_ts` を使う。
 - 保留キューは件数・バイト数に上限を設け、Host が背景でまとめて保存する。暗号化とファイル I/O は
   変換のロックの外で行い、同じ保存先への更新と削除を直列化する。保存に失敗したら直前のファイルを保つ。
   バッチの保存が確定する前にクラッシュすると、未保存分が失われることがある。
-- 設定アプリでの集計表示・全削除・ZIP の範囲は
-  [学習データ管理仕様](learning-data-management-spec.md) §3・§4.6・§5 に従う。
+- 設定アプリでの集計表示、忘却、全削除、ZIP の範囲は
+  [学習データ管理仕様](learning-data-management-spec.md) §3・§4.2・§4.6・§5 に従う。
 
 #### 学習データの用途
 
@@ -352,31 +368,30 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 追加の採否・整形ルール:
 
 - **重複排除**: dedup キーは文脈源によって使い分ける。
-  - **個人（M54 由来）データ**: M54 / M46 は raw `left_context` を永続化せず
-    `context_hash` のみを保持する（`user-learning-enhancement-spec.md` §8.1、
-    SHA-256 上位 4 bytes・復元不能）。したがって dedup キーは
-    `(context_hash, input, candidate)` とする。`context_hash` は衝突を許容する
-    弱い 4-byte シグネチャ（同 §8.1）のため、集約は**近似的**であることを許容する。
+  - **個人の露出データ**: 候補生成時に算出した `left_context_hash` を使い、
+    `(left_context_hash, reading, candidate)` をキーとする。§6.1 で定める 4-byte ハッシュは
+    衝突し得るため、集約は近似とする。
   - **bundled コーパス生成（§6.1）**: 公開コーパスから生成するため raw 文脈が
     得られる。`(normalize(left_context), input, candidate)` を使う。
   - 集約後、label を多数決でまとめ、出現回数を frequency 系特徴の補強に使う。
+    bundled v1 の `user_frequency` と `recency_score` は本書 §5.4 のとおり 0 とする。
 - **滞留時間ゲート**: 候補ウィンドウ表示から確定までが極端に短い（誤確定の疑い、
   既定 `minDwellMs`=120 未満）サンプルは正例から除外する。判定には露出トレース
   （§6.1）の `dwell_ms = commit_ts - shown_at_ms` を用いる（`shown_at_ms` を
   持たない bundled 合成データでは本ゲートを適用しない）。
 - **セッション境界**: bundled コーパス生成では `left_context` をその確定時点の
   **確定済みテキスト**とし、後続編集の影響を混ぜない（§7 推論時の context 定義と
-  一致させる）。個人データでは M54 が確定時点の `context_hash` を保持するため
-  同等の境界が保たれる（raw 文脈は使わない）。
+  一致させる）。個人データでは、表示した候補を生成した要求の `left_context_hash` を
+  確定レコードに結び付ける（§6.1）。確定時に文脈を取り直さない。
 - **クラス不均衡**: 正例 1 に対し負例が多くなるため、学習時に負例をサブサンプル
   （または class weight）で調整する。比率は M52 ベンチで校正する。
 - **強負例の loss 重み**: 強負例は通常負例より大きい loss 重み（既定 2.0）を与える。
   値は M52 ベンチで校正する。
 - **secure 除外**: §13 のとおり M46 secure 中は学習データを**収集しない**
   （正例・負例・訂正イベントすべて）。
-- **bundled と個人の分離**: bundled モデルは §6.1 の公開コーパス由来のみ。個人の
-  `correction_events` 由来データは reranker のローカル fine-tune（v2 で検討）の範囲に留め、
-  bundled 学習には混ぜない。
+- **bundled と個人の分離**: bundled モデルは §6.1 の公開コーパス由来の合成露出だけを使う。
+  個人の確定・訂正レコードは、候補生成時の `left_context_hash` に基づく露出データとして
+  ローカル fine-tune（v2 で検討）に用途を限る。
 
 > 上記の `trainNegativesPerSample` / `correctionWindowMs` / `minDwellMs` /
 > 強負例 loss 重み・class weight は**オフライン学習パイプラインのパラメータ**

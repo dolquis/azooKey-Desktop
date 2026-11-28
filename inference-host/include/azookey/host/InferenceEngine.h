@@ -751,7 +751,7 @@ class InferenceEngine {
                                    const std::vector<std::string>& released, uint64_t now_epoch_sec,
                                    size_t max_records, double min_weight);
   void ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
-                                        const std::atomic<bool>* cancel) const;
+                                         const std::atomic<bool>* cancel) const;
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec,

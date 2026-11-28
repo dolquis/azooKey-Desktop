@@ -1473,7 +1473,7 @@ bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string&
 }
 
 void InferenceEngine::ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
-                                                       const std::atomic<bool>* cancel) const {
+                                                        const std::atomic<bool>* cancel) const {
   if (!tiny_reranker_feature_observer_for_tests_ ||
       (cancel && cancel->load(std::memory_order_relaxed))) {
     return;

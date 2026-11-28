@@ -420,10 +420,13 @@ ctest --preset windows-debug --no-tests=error
   テストには一時ディレクトリ内の合成データだけを使い、実ユーザーデータを渡さない。
 - **学習暴走**: `learning_alpha` を下げる（既定 0.8）。学習を消すときは設定アプリの「全削除」
   （`ResetLearningStore`、`store=learning`。`docs/learning-data-management-spec.md` §4.6）を使う。
-  かなと英語の学習チャネルと M7 ファイルの全行が消える。ファイルを手で消す場合は、Host を終了してから
-  `%LOCALAPPDATA%\azooKey\data\` の `learning.v2.tsv.enc`、`english_learning.v2.tsv.enc` と、
-  残っていれば M7 ファイル（`learning.tsv.enc`、`english_learning.tsv.enc`）を削除して再起動する。
-  Host の実行中に消すと、メモリ上の学習が次の flush で書き戻される。
+  かなと英語の学習チャネル、M7 ファイルの全行に加え、訂正を含む露出トレースの本体・付随ファイル・保留分が消える。
+  ファイルを手で消す場合は、Host を終了してから
+  `%LOCALAPPDATA%\azooKey\data\` の `learning.v2.tsv.enc`、`english_learning.v2.tsv.enc`、
+  `reranker_trace.jsonl.enc` とその付随ファイル、および残っている M7 ファイル
+  （`learning.tsv.enc`、`english_learning.tsv.enc`）を削除して再起動する。
+  トレースの保存先と付随ファイルの定義は [ニューラルリランカー仕様](neural-reranker-spec.md) §6.1 を参照する。
+  Host の実行中に消すと、メモリ上の学習や保留中のトレースが次の保存で書き戻される。
 - **D-010 の legacy cleanup 待ち**: `details.legacy_retained=true` は v2 と
   `learning.tsv.enc` の併存を表す。v2 が読める場合は warning、読めない場合は error を優先する。
   Host は次の成功した学習保存で cleanup を再試行する。保存時の lock 競合、復号失敗、

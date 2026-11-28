@@ -355,7 +355,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書（`typoCorrectionMode` は `typoCorrection` を含む実効値を示す） | M35 | 即時 | `typo-correction-learning-spec.md`（§8・§12.14） |
 | `typoCorrection` | object | 下位キーの既定に従う | 辞書（`learnPersonalPatterns` だけ。ほかの下位キーは保存時保持。`typoCorrection.mode` は辞書ペインで `typoCorrectionMode` を変えたときに一緒に書く） | M55 | 即時 | `typo-correction-learning-spec.md` §12.14 |
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
-| `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-spec.md` §8、`neural-reranker-nll-spec.md` §B9 |
+| `reranker` | object | 下位キーの既定に従う | 学習（学習候補タブの `exposureTraceEnabled`。ほかの下位キーは保存時保持） | M56 | 即時 | `neural-reranker-spec.md` §8、`neural-reranker-nll-spec.md` §B9 |
 | `privacy` | object | 下位キーの既定に従う | プライバシー | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
 | `privacy.externalAiConsent` | bool | `false` | AI サービス（OpenAI の節の先頭。`aiBackend` によらず常に操作できる） | M16 | 即時 | `ai-backend-spec.md` §14.2 / `privacy-and-secure-input-spec.md` §5.2 |
 | `profilesByApp` | map<string,object> | `{}` | アプリ別（追加・編集・削除。保存は読み込み時と異なるときだけ、オブジェクト全体を書く） | M48 | 即時 | `app-profile-spec.md` §4 |
@@ -548,7 +548,8 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`azdic-physical-layer-spec.md` §15.14） |
 | `privacy.*` | — | M30（プライバシーペイン） |
 | `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |
-| `reranker.*` | — | 専用 UI を持たない（`neural-reranker-spec.md` §8、`neural-reranker-nll-spec.md` §B9） |
+| `reranker.exposureTraceEnabled` | — | M56（学習候補タブで露出記録のスイッチを表示。`neural-reranker-spec.md` §8） |
+| `reranker` のほかの下位キー | — | 専用 UI を持たない（`neural-reranker-spec.md` §8、`neural-reranker-nll-spec.md` §B9） |
 | `typoCorrection.learnPersonalPatterns` | — | M55（辞書ペイン。`typoCorrection.mode` は辞書ペインの `typoCorrectionMode` と一緒に書く。`typo-correction-learning-spec.md` §12.14） |
 | `typoCorrection` のほかの下位キー | — | 専用 UI を持たない（`enabled` は `off` として示し、`rank` / `aggressive`、`maxReadingHypotheses`、信頼度の 2 キーは出さない。`keyboardLayout` は値が `auto` だけ、`disableInSecretApps` は `true` 固定） |
 | ユーザー辞書の内容（設定キーではない。`user_dict.json.enc`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却。ほかの IME の辞書の取り込みは M71-A。`user-dictionary-pos-spec.md` §8） | M30（語の編集、単独の書き出し、既定で入る語） |

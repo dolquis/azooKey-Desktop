@@ -46,6 +46,7 @@ canonical_for: ["学習データ可視化とバックアップ"]
 | `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\data\auto_words.tsv` | M36-A | M34 で `.enc` |
 | `english_learning.tsv` | `%LOCALAPPDATA%\azooKey\data\english_learning.tsv` | M60（英単語候補の確定。`docs/inline-english-candidate-spec.md` §5） | `learning.tsv` と同じ `.enc` |
 | `english_learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\english_learning.v2.tsv`（`learning.v2.tsv` と同じ v2 形式。移行と M7 形式の削除の規則も同じ） | M60 | `learning.tsv` と同じ `.enc` |
+| 露出トレース | `%LOCALAPPDATA%\azooKey\data\reranker_trace.jsonl.enc`（解決済み学習パスと同じディレクトリ） | M56 | ユーザースコープ DPAPI（[ニューラルリランカー仕様](neural-reranker-spec.md) §6.1） |
 
 プロセス終了時にこれらのデータが保存される範囲は §11 で定める。
 
@@ -83,6 +84,9 @@ canonical_for: ["学習データ可視化とバックアップ"]
   読み・候補・最終使用（ローカル日付）・タグの表示、個別の忘却を持つ。応答の `weight` は内部の数値なので
   表示しない。忘却は確認ダイアログを経てから `ForgetLearningEntry` を `id` で送る。
   「全削除」は検索から離し、タブの末尾に置く。
+- 「学習候補」タブには、露出トレースの保存件数、暗号化後の容量、保持期間を表示する（§4.1）。
+  表示はストア全体の集計に限り、検索や個別の忘却の一覧にはトレース本文を載せない。
+  このタブに露出記録の opt-in スイッチを置く（[ニューラルリランカー仕様](neural-reranker-spec.md) §8）。
 - 「入力の傾向」タブ: `QueryPersona` の 4 比率と、算出の基になった確定の回数・算出時刻を読み取り専用で示す
   （§15）。Host が capability `persona` を告知しないときは「この変換エンジンは未対応です」と示す。
 - ユーザー辞書のタブだけは、上の操作に加えて「読み」「語」の 2 欄と「追加」ボタンを持つ
@@ -162,6 +166,11 @@ Response（host → settings-app）:
 ページネーション（`limit` / `offset`）必須。エントリ数が多くなる学習
 ストアでも UI 応答を保つ。`limit` は 500 で頭打ちにし、`total` は検索に一致した全件数を返す。
 
+`store: "learning"` の応答には、露出トレースの集計を任意の `exposure_trace` オブジェクトで返す。
+`records` は保存済みレコード数、`size_bytes` は暗号化済みファイルのバイト数、
+`retention_days` は保持日数とし、いずれも非負整数とする。検索条件やページにかかわらず同じ集計を返す。
+保存ファイルが無い場合は件数と容量を 0 とする。オブジェクトが欠落する応答は集計を表示しない。
+
 - **並び**: 学習チャネル、読み、表記の昇順。
 - **学習チャネル**: `learning` ストアはかな（`kana`）と英語（`english`、DEV-1196）の
   2 つの `LearningStore` を列挙し、各 entry にチャネル名を持たせる。英語のチャネルには、M63 の
@@ -225,6 +234,11 @@ Response:
 忘却した組は、前方一致の `min_score` の値によらず予測に出さない。
 変換器がメモリに持つ同じ組の確定履歴も消す。辞書由来の候補は元のスコアと属性に戻し、
 確定だけで追加された候補は除く。ほかの組の履歴は保つ。
+
+設定アプリの `ForgetLearningEntry` と TIP の Forget キー操作で学習の組を忘れるときは、
+露出トレースの保存済み・保留中の両方から、同じ読みと表記に一致するレコードも削除する。
+確定レコードでは `reading` と `chosen_surface`、訂正レコードでは `reading` と
+`rejected_surface` または `accepted_surface` を照合する。
 
 v2 の保存・読み戻し検証後は M7 ファイル（`learning.tsv.enc`）を削除する
 （`user-learning-enhancement-spec.md` §3.1）。検証や削除に失敗して M7 ファイルが残っている場合は、
@@ -380,7 +394,7 @@ counts のキーは archive の item 名（§5.1）である。
 
 | `store` | 消す範囲 |
 |---|---|
-| `learning` | かなと英語の学習チャネルの全行と、M7 ファイル（§4.2）の全行。各チャネルの v2 ファイルの破損時の複写（`.corrupt-*`。`docs/user-learning-enhancement-spec.md` §3.1） |
+| `learning` | かなと英語の学習チャネルの全行と、M7 ファイル（§4.2）の全行。各チャネルの v2 ファイルの破損時の複写（`.corrupt-*`。`docs/user-learning-enhancement-spec.md` §3.1）。訂正を含む露出トレースの本体、付随ファイル、保留分 |
 | `user_dict` | ユーザー辞書の全単語と、解釈できない平文の移行元を隔離したファイル（`user_dict.json.corrupt.<stamp>`） |
 | `typo` | タイプミス補正の全ペア。v2 で消す表、v1 の退避、v2 の破損時の複写は `docs/typo-correction-learning-spec.md` §12.8「学習の削除」 |
 | `auto_word` | 新語候補の全行。`rejected` も消えるので、断った語も再び候補になりうる。確定から派生して英単語辞書に入った語（追加語の journal、overlay、コンパクション済みの base、退避した journal。`docs/inline-english-candidate-spec.md` §4.8） |
@@ -399,7 +413,11 @@ counts のキーは archive の item 名（§5.1）である。
 3. 各チャネルを空にして v2 ファイルへ保存する。この保存では破損時の複写を作らない。解析できなかった行も
    全削除で消すものだからである（`docs/user-learning-enhancement-spec.md` §3.1）。
 4. M7 ファイルの全行を除く。v2 ファイルが先にあるので、M7 ファイルが学習の唯一の写しになる時点は無い。
-5. 手順 3 か 4 が失敗したら、全チャネルを手順 3 の前の内容へ戻して保存し直し、`save_failed` を返す。
+5. 露出トレースの背景書き込みと直列化し、保留キューを破棄して露出 ID を失効させる。
+   付随ファイルを消してからスナップショット本体を削除する。全削除より前の保留分や再送からトレースを作り直さない。
+6. 手順 3〜5 が失敗したら、全チャネルを手順 3 の前の内容へ戻して保存し直し、`save_failed` を返す。
+   手順 5 の失敗後も保留キューと露出 ID は失効したままとする。トレース本体は保ち、
+   削除済みの付随ファイルは、手順 2 の複写と同様に復元の対象外とする。
    保存し直しにも失敗したチャネルは、戻した内容をメモリに持ち、次の flush で再び保存する。
    解析できなかった行を読んだチャネルのうち、手順 3 の保存が失敗したものは、v2 ファイルにその行が残っている。
    このチャネルの保存し直し（と次の flush）では、保存の前に破損時の複写を作り直す
@@ -409,6 +427,8 @@ counts のキーは archive の item 名（§5.1）である。
 このため `save_failed` の後も Host が提示する学習の内容は変わらない。
 `learning` のリセット成功時は、変換器がメモリに持つ確定履歴も全て消す。
 保存に失敗したリセットでは、変換器の履歴を保つ。
+露出トレースを認識しない旧 Host に戻した場合、その Host の全削除では
+`reranker_trace.jsonl.enc` とその付随ファイルが残る。
 `typo` の全削除は、Host の `privacy_mode_secure` で書込みを止めている間（§4.2）も止めず、通常どおり成功・失敗を返す。
 `auto_word` の忘却・全削除と新語の承認・却下は、writer の mutex を保持してメモリ上の写しを変更・保存する。
 保存成功時だけ表を公開する。同時操作はその後に進むため、失敗時に承認・却下を上書きしない。
@@ -428,6 +448,9 @@ TSV が無く `.bin` だけの英単語辞書では、追加語の記録（journ
 返す。忘却（§4.2）は隔離したファイルに及ばない。
 
 ## 5. バックアップ形式
+
+ZIP のエクスポート・インポートに露出トレースを含めない。`learning` を選んだ場合も、
+書き出しと取り込みは集約学習チャネルを対象とし、露出トレースは独立して管理する。
 
 ```
 azookey-backup-YYYYMMDD-HHMMSS.zip
@@ -932,6 +955,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/host-availability-spec.md` §8.5.3）、TIP（入力インジケーターのメニューによる `liveConversion` / `predictionEnabled` の 2 キーだけ。`docs/tsf-deep-integration-spec.md` §4.5） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
 | `learning.v2.tsv.enc`（v2 移行前は `learning.tsv.enc` を読むだけ） | Host のみ | Host、`lookup` CLI、`azookey_bench --personal-eval`（`LoadReadOnly` でロックを取らずに読み、書き換えない。`docs/conversion-quality-benchmark-spec.md` §15.2） | Host 内で直列化（debounce flush、`docs/user-learning-enhancement-spec.md` §3.1.1）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
 | `english_learning.v2.tsv.enc`（v2 移行前は `english_learning.tsv.enc` を読むだけ） | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
+| `reranker_trace.jsonl.enc` | Host のみ | Host | 保存先ごとに読み込み、更新、削除を直列化し、保存は atomic replace（[ニューラルリランカー仕様](neural-reranker-spec.md) §6.1） |
 | `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/host-availability-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
 | `typo_learning.v2.db.enc`（v2 移行前は `typo_corrections.tsv.enc`。移行後の `typo_corrections.v1.tsv.bak.enc` を含む） | Host のみ（`docs/typo-correction-learning-spec.md` §12.8） | Host | Host 内で直列化し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace（`WriteProtectedText`。論理パスは `docs/typo-correction-learning-spec.md` §12.8「パス」） |
 | `auto_words.tsv.enc` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | `AcquireExclusiveFileLockForPath` + atomic replace。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |

@@ -115,14 +115,14 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 |---|---|
 | `Handshake` | 本書「型ごとの処理規則」「Handshake 認証ゲート」「設定（SettingsStore）」（応答が載せる TIP 向け設定）、`docs/host-availability-spec.md` §8.2（`host_generation_id`）、`docs/app-profile-spec.md` §3.1（`app_profile` / `candidate_tag`）、`docs/romaji-batch-conversion-spec.md` §6.3.2（`oob_cancel`）・§6.4.3（`commit_segments`）、`docs/typo-correction-learning-spec.md` §12.13（`raw_keys`） |
 | `LoadModel` | 本書「型ごとの処理規則」、`docs/copilot-pc-backend-spec.md` §4.4（backend の指定と降格）、`docs/host-availability-spec.md` §8.5.3（SafeMode での拒否） |
-| `QueryCandidates` | `docs/app-profile-spec.md` §3.1・§7（`app` と `tag`）、`docs/inline-english-candidate-spec.md` §6.2（`raw_romaji` / `english_candidates`）、`docs/mixed-english-auto-conversion-spec.md` §9.1（`mixed_english`）、`docs/dynamic-punctuation-spec.md` §7.1・§7.2（`auto_punctuation` / `punctuation_style` / `segments`）、`docs/candidate-rewriter-spec.md` §8.4（`emoji_trigger`）・§9.5（`max_candidates` との適用順）、`docs/typo-correction-learning-spec.md` §7（`corrected_reading`）・§12.13（`raw_keys` / `typo_correction_mode`）、`docs/legacy-parity-spec.md` §5.4（`alt_readings`）、`docs/privacy-and-secure-input-spec.md` §5.1.1（`secure` / `learning_allowed`）、`docs/segment-editing-spec.md` §5（先頭文節の要求と残りの読み） |
+| `QueryCandidates` | `docs/app-profile-spec.md` §3.1・§7（`app` と `tag`）、`docs/inline-english-candidate-spec.md` §6.2（`raw_romaji` / `english_candidates`）、`docs/mixed-english-auto-conversion-spec.md` §9.1（`mixed_english`）、`docs/dynamic-punctuation-spec.md` §7.1・§7.2（`auto_punctuation` / `punctuation_style` / `segments`）、`docs/candidate-rewriter-spec.md` §8.4（`emoji_trigger`）・§9.5（`max_candidates` との適用順）、`docs/typo-correction-learning-spec.md` §7（`corrected_reading`）・§12.13（`raw_keys` / `typo_correction_mode`）、`docs/legacy-parity-spec.md` §5.4（`alt_readings`）、`docs/privacy-and-secure-input-spec.md` §5.1.1（`secure` / `learning_allowed`）、`docs/segment-editing-spec.md` §5（先頭文節の要求と残りの読み）、本書「露出トレースの任意フィールド」 |
 | `QueryLiveConversion` | `docs/legacy-parity-spec.md` §2.2 |
 | `QueryBatchConversion` | `docs/romaji-batch-conversion-spec.md` §6・§7、`docs/inline-english-candidate-spec.md` §6.7、`docs/ai-backend-spec.md` §4.2（`ai-cleanup`） |
 | `QueryPredictions` | `docs/legacy-parity-spec.md` §3.5 |
 | `QueryCorrections` | ハンドラを持たない。応答は `docs/ipc-persistence-hardening-spec.md` §6.3 |
 | `Cancel` | 本書「Handshake 認証ゲート」（`client_id` ごとの名前空間）、`docs/romaji-batch-conversion-spec.md` §6.3.1・§6.3.2 |
-| `CommitObservation` | `docs/learning-data-management-spec.md` §12（配送保証と冪等化）、`docs/privacy-and-secure-input-spec.md` §5.1.1（学習ゲート）、`docs/inline-english-candidate-spec.md` §6.4 |
-| `CommitCorrection` | `docs/user-learning-enhancement-spec.md` §4.1 |
+| `CommitObservation` | `docs/learning-data-management-spec.md` §12（配送保証と冪等化）、`docs/privacy-and-secure-input-spec.md` §5.1.1（学習ゲート）、`docs/inline-english-candidate-spec.md` §6.4、本書「露出トレースの任意フィールド」 |
+| `CommitCorrection` | `docs/user-learning-enhancement-spec.md` §4.1、本書「露出トレースの任意フィールド」 |
 | `AddUserWord` | 本書「型ごとの処理規則」、`docs/learning-data-management-spec.md` §4.5（ロックと保存の順序） |
 | `UpdateUserWord` | ハンドラを持たない。応答は `docs/ipc-persistence-hardening-spec.md` §6.3 |
 | `RemoveUserWord` | `AddUserWord` と同じ |
@@ -153,6 +153,28 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `TransformSelectedText` | `docs/ai-backend-spec.md` §4.1、`docs/legacy-parity-spec.md` §4.4 |
 | `ImportUserDictionaryText` | `docs/user-dictionary-pos-spec.md` §7.2 |
 | `Unknown` | `docs/ipc-persistence-hardening-spec.md` §6.3 |
+
+#### 露出トレースの任意フィールド
+
+| payload | 追加フィールド | 型 | 意味 |
+|---|---|---|---|
+| `QueryCandidates` 応答 | `exposure_id` | string | 露出記録が許可された候補要求に限り Host が返す応答 ID。候補の特徴ベクトルと派生文脈ハッシュを同じ TIP の応答に結び付ける |
+| `CommitObservation` 要求 | `exposure_id` | string | 描画した行を含む応答の ID |
+| `CommitObservation` 要求 | `shown_candidate_indices` | uint 配列 | 実際に描画した行に対応する、応答の `candidates[]` の 0 始まりの位置。表示順に並べる。Host は生成時の特徴ベクトルがある行だけをトレースに使う |
+| `CommitObservation` 要求 | `shown_at_ms` | uint64 | その行集合の表示開始時刻。既存の `timestamp_ms` と同じ Unix epoch ミリ秒 |
+| `CommitCorrection` 要求 | `target_observation_id` | string | 訂正対象の確定の `observation_id`。訂正イベント自身の `observation_id` は別に採番する |
+
+各フィールドは任意とし、Envelope は v1 のままとする。旧 Host は未知キーを無視する。
+新 Host は、旧 TIP の要求などで照合に必要な値が欠落している場合、既存の学習判定と応答を維持し、当該トレースを見送る。
+以下の場合も露出だけを見送る。
+
+- `shown_at_ms` の型が不正、値が 0、または `timestamp_ms` より後。
+- `exposure_id` が文字列でない、空、または同じ TIP に発行した応答に一致しない。
+- `shown_candidate_indices` の型が不正、位置に重複がある、位置が応答の `candidates[]` の範囲外、
+  または配列の長さがその候補数を超える。
+- 確定・訂正の `observation_id` が空、または訂正の `target_observation_id` が空。
+
+描画対象、特徴量および訂正照合の規則は [ニューラルリランカー仕様](neural-reranker-spec.md) §6.1 に従う。
 
 `MessageType` に無く、spec が定義を持つ予定の型は次の 1 つである。enum へ足すときに上の表へ移す。
 

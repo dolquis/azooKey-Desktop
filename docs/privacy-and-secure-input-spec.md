@@ -386,9 +386,14 @@ TIP は非 secure 入力で、composition または選択範囲の開始位置�
 
 左文脈はローカルの TIP → Host IPC の候補要求に限って渡す。候補要求には、候補照会・
 ライブ変換に加え、予測の照会（`QueryPredictions`。`docs/legacy-parity-spec.md` §3.5）を含む。
-private の入力でも送る。外部 AI への送信、
-ログ本文への記録、別用途への再利用はしない。再変換の選択範囲と候補キャッシュにも
-同じ secure 判定を適用する（`docs/tsf-deep-integration-spec.md` §1.2）。
+private の入力でも送る。生の左文脈は外部 AI への送信、ログ本文への記録、別用途への再利用に使わない。
+再変換の選択範囲と候補キャッシュにも同じ secure 判定を適用する（`docs/tsf-deep-integration-spec.md` §1.2）。
+
+別用途への再利用に対する例外は、露出トレースのための派生ハッシュの算出に限る。
+露出トレースの opt-in と学習許可を満たす候補要求では、Host が
+[ユーザー学習強化仕様](user-learning-enhancement-spec.md) §8.1 の方式で派生ハッシュを算出し、
+候補応答の ID に結び付ける。露出レコードに使う文脈情報はこの派生ハッシュに限る。
+記録対象は [ニューラルリランカー仕様](neural-reranker-spec.md) §6.1 に従う。
 
 ## 6. UI 表示
 

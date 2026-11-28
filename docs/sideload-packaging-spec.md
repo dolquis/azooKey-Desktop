@@ -1203,6 +1203,9 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 入力を変更しない `LearningStore::LoadReadOnly`（`lookup` CLI が使う）は、旧平文を同じ形式で
 解析し、移行しない。
 ユーザー辞書、誤字補正、新語のストアも同じ保護境界に従う。
+露出トレース `reranker_trace.jsonl.enc` は、JSONL のスナップショット全体に
+ユーザースコープ DPAPI と原子的な置換を適用する。平文からの移行と平文への
+フォールバックは設けない。保存と削除は [ニューラルリランカー仕様](neural-reranker-spec.md) §6.1 に従う。
 
 ### 9.4 移行
 

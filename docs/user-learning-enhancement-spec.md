@@ -84,7 +84,7 @@ v2 は同じディレクトリの別ファイルに保存し、保存の検証�
 - 学習データの全削除（`docs/learning-data-management-spec.md` §4.6）は、この複写（`<ファイル名>.corrupt-*`）も消す。
   複写は読み込みに使わないが、学習の内容を持つので、残すと全削除の後も学習が残るためである。
   全削除の保存は、解析できない行を読んだ後でも複写を作らない。その行も全削除で消すものだからである。
-  全削除が失敗して元へ戻すときの複写の扱いは、同 §4.6 の手順 5 による。
+  全削除が失敗して元へ戻すときの複写の扱いは、同 §4.6 の手順 6 による。
 - ファイルや import から読んだ値には上限を設ける（weight は 1e9、各回数は 1e9）。
   merge の加算も上限で止める。
 - weight は、読み戻すと同じ double になる最短の表記で書く。保存と読み込みを繰り返しても値がずれない。
@@ -285,6 +285,7 @@ TIP は次のときに送る。
 | `left_context` | str | 文節より前の確定済みテキスト。`context_hash` の入力 |
 | `timestamp_ms` | uint | 送信時刻 |
 | `observation_id` | str | 再送の重複排除キー。訂正イベントごとに固有の値とし、訂正対象の確定に付けた id を再利用しない（Host は `CommitObservation` と同じ集合で重複を判定する） |
+| `target_observation_id` | str（任意） | 露出トレースのための元確定 ID。照合と欠落時の規則は [TSF・Host アーキテクチャ](windows-tsf-host-architecture.md)「露出トレースの任意フィールド」に従う |
 | `secure` / `learning_allowed` | bool | `CommitObservation` と同じ event privacy。欠落時は `true` / `false` |
 | `app` | `{process_name, window_class}`（任意） | 前面アプリ。欠落時は大域行に記録する |
 

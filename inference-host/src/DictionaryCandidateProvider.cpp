@@ -36,10 +36,12 @@ std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStor
   for (const auto& entry : store.Lookup(reading, ctx)) {
     const bool local = entry.source >= learning::LayerId::User;
     result.push_back(
-        {entry.surface, mode == learning::LookupMode::Exact ? std::string(reading) : entry.reading,
+        {entry.surface,
+         mode == learning::LookupMode::Exact ? std::string(reading) : entry.reading,
          entry.score,
          local ? core::CandidateSource::UserDictionary : core::CandidateSource::SystemDictionary,
-         "dictionary", "",
+         "dictionary",
+         "",
          (entry.category_mask & kTechnicalCategories) ? core::CandidateTag::Technical
                                                       : core::CandidateTag::None,
          {.dictionary_score = entry.score,
@@ -47,7 +49,7 @@ std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStor
           .is_named_entity = (entry.category_mask & kNamedEntityCategories) != 0,
           .is_user_dict = (entry.sources & kUserLayer) != 0,
           .is_neologism = (entry.category_mask &
-                          learning::CategoryBit(learning::DictionaryCategory::Neologism)) != 0}});
+                           learning::CategoryBit(learning::DictionaryCategory::Neologism)) != 0}});
     if (result.size() == limit) break;
   }
   return result;

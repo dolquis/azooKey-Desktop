@@ -1,5 +1,3 @@
-#include "azookey/reranker/FeatureExtractor.h"
-
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -9,6 +7,7 @@
 #include <string>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/reranker/FeatureExtractor.h"
 
 namespace azookey::reranker {
 namespace {

@@ -161,7 +161,7 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `QueryCandidates` 応答 | `exposure_id` | string | 露出記録が許可された候補要求に限り Host が返す応答 ID。候補の特徴ベクトルと派生文脈ハッシュを同じ TIP の応答に結び付ける |
 | `CommitObservation` 要求 | `exposure_id` | string | 描画した行を含む応答の ID |
 | `CommitObservation` 要求 | `shown_candidate_indices` | uint 配列 | 実際に描画した行に対応する、応答の `candidates[]` の 0 始まりの位置。表示順に並べる。Host は生成時の特徴ベクトルがある行だけをトレースに使う |
-| `CommitObservation` 要求 | `shown_at_ms` | uint64 | その行集合の表示開始時刻。既存の `timestamp_ms` と同じ Unix epoch ミリ秒 |
+| `CommitObservation` 要求 | `shown_at_ms` | uint64 | その行集合の表示開始時刻。既存の `timestamp_ms` と同じ Unix epoch ミリ秒。同じ行集合とは、同じ候補応答の同じ候補位置を同じ順に表示した行をいう。 |
 | `CommitCorrection` 要求 | `target_observation_id` | string | 訂正対象の確定の `observation_id`。訂正イベント自身の `observation_id` は別に採番する |
 
 各フィールドは任意とし、Envelope は v1 のままとする。旧 Host は未知キーを無視する。

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -231,6 +232,8 @@ struct QueryCandidatesResponse {
   // Empty means no correction was applied, which is also how an older host that
   // omits the field decodes.
   std::string corrected_reading;
+  // M56: identifies this response's original candidates array for the TIP.
+  std::optional<std::string> exposure_id;
 };
 
 // request_id travels in the Envelope, as with QueryCandidates.
@@ -382,6 +385,11 @@ struct CommitObservationRequest {
   // Foreground app at commit (M54 app rows, DEV-1184). Absent means unknown,
   // which records the global row.
   std::optional<AppIdentity> app;
+  // M56: the native display time (Unix epoch milliseconds) and the zero-based
+  // positions of rendered rows in the identified QueryCandidates response.
+  std::optional<uint64_t> shown_at_ms;
+  std::optional<std::string> exposure_id;
+  std::optional<std::vector<uint32_t>> shown_candidate_indices;
 };
 
 struct CommitObservationResponse {
@@ -434,6 +442,8 @@ struct CommitCorrectionRequest {
   bool secure{true};
   bool learning_allowed{false};
   std::optional<AppIdentity> app;
+  // M56: the original commit's observation_id, distinct from this event's ID.
+  std::optional<std::string> target_observation_id;
 };
 
 std::string BuildCommitCorrectionRequest(const CommitCorrectionRequest& p);
@@ -613,7 +623,10 @@ std::optional<QueryBatchConversionResponse> ParseQueryBatchConversionResponse(
 std::optional<ReverseConvertRequest> ParseReverseConvertRequest(const std::string& json);
 std::optional<ReverseConvertResponse> ParseReverseConvertResponse(const std::string& json);
 std::optional<CancelPayload> ParseCancel(const std::string& json);
-std::optional<CommitObservationRequest> ParseCommitObservationRequest(const std::string& json);
+// The response count is available only after resolving exposure_id. Without it,
+// the decoder can validate the indices' form but not their bounds in that array.
+std::optional<CommitObservationRequest> ParseCommitObservationRequest(
+    const std::string& json, std::optional<std::size_t> exposure_candidate_count = std::nullopt);
 std::optional<CommitObservationResponse> ParseCommitObservationResponse(const std::string& json);
 std::optional<AddUserWordRequest> ParseAddUserWordRequest(const std::string& json);
 std::optional<AddUserWordResponse> ParseAddUserWordResponse(const std::string& json);

@@ -1,7 +1,9 @@
 #include "azookey/ipc/Payloads.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
+#include <unordered_set>
 #include <utility>
 
 #include "azookey/ipc/Json.h"
@@ -95,6 +97,40 @@ std::optional<j::Value> ParseObject(const std::string& s) {
   auto v = j::Parse(s);
   if (!v || !v->IsObject()) return std::nullopt;
   return v;
+}
+
+std::optional<std::string> NonemptyString(const j::Value& object, std::string_view key) {
+  auto value = object.GetString(key);
+  if (value && value->empty()) return std::nullopt;
+  return value;
+}
+
+template <class UInt>
+std::optional<UInt> ParseUnsignedToken(const j::Value& value) {
+  if (!value.IsNumber()) return std::nullopt;
+  const auto& token = value.AsNumberValue().token;
+  const auto* end = token.data() + token.size();
+  UInt number{};
+  const auto [ptr, error] = std::from_chars(token.data(), end, number);
+  if (error != std::errc{} || ptr != end) return std::nullopt;
+  return number;
+}
+
+std::optional<std::vector<uint32_t>> ParseShownCandidateIndices(
+    const j::Value& object, std::optional<std::size_t> candidate_count) {
+  const auto* array = object.GetArray("shown_candidate_indices");
+  if (!array || (candidate_count && array->size() > *candidate_count)) return std::nullopt;
+
+  std::vector<uint32_t> indices;
+  std::unordered_set<uint32_t> seen;
+  for (const auto& item : *array) {
+    const auto index = ParseUnsignedToken<uint32_t>(item);
+    if (!index || (candidate_count && *index >= *candidate_count) || !seen.insert(*index).second) {
+      return std::nullopt;
+    }
+    indices.push_back(*index);
+  }
+  return indices;
 }
 
 }  // namespace
@@ -600,6 +636,7 @@ std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p) {
   if (!p.corrected_reading.empty()) {
     o.emplace("corrected_reading", j::Value(p.corrected_reading));
   }
+  if (p.exposure_id && !p.exposure_id->empty()) o.emplace("exposure_id", j::Value(*p.exposure_id));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -619,6 +656,9 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
     for (const auto& e : *arr) {
       if (auto c = CandidateFromJson(e)) p.candidates.push_back(std::move(*c));
     }
+    // Omitting malformed rows preserves the old UI behavior but makes the
+    // decoded positions unsafe to use as original response indices.
+    if (p.candidates.size() == arr->size()) p.exposure_id = NonemptyString(*v, "exposure_id");
   }
   p.partial = v->GetBool("partial").value_or(false);
   p.segments = LiveSegmentsFromJson(*v);
@@ -944,10 +984,21 @@ std::string BuildCommitObservationRequest(const CommitObservationRequest& p) {
   o.emplace("secure", j::Value(p.secure));
   o.emplace("learning_allowed", j::Value(p.learning_allowed));
   AppToJson(p.app, o);
+  if (p.shown_at_ms) o.emplace("shown_at_ms", j::Value(*p.shown_at_ms));
+  if (p.exposure_id && !p.exposure_id->empty()) o.emplace("exposure_id", j::Value(*p.exposure_id));
+  if (p.shown_candidate_indices) {
+    j::Array indices;
+    indices.reserve(p.shown_candidate_indices->size());
+    for (uint32_t index : *p.shown_candidate_indices) {
+      indices.emplace_back(static_cast<uint64_t>(index));
+    }
+    o.emplace("shown_candidate_indices", j::Value(std::move(indices)));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
 
-std::optional<CommitObservationRequest> ParseCommitObservationRequest(const std::string& json) {
+std::optional<CommitObservationRequest> ParseCommitObservationRequest(
+    const std::string& json, std::optional<std::size_t> exposure_candidate_count) {
   auto v = ParseObject(json);
   if (!v) return std::nullopt;
   CommitObservationRequest p;
@@ -972,6 +1023,12 @@ std::optional<CommitObservationRequest> ParseCommitObservationRequest(const std:
   p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
   // Absent for TIPs that predate DEV-1184: unknown app, recorded on the global row.
   p.app = AppFromJson(*v);
+  if (const auto* field = v->Find("shown_at_ms")) {
+    const auto shown_at = ParseUnsignedToken<uint64_t>(*field);
+    if (shown_at && *shown_at > 0 && *shown_at <= p.timestamp_ms) p.shown_at_ms = shown_at;
+  }
+  p.exposure_id = NonemptyString(*v, "exposure_id");
+  p.shown_candidate_indices = ParseShownCandidateIndices(*v, exposure_candidate_count);
   return p;
 }
 
@@ -1054,6 +1111,9 @@ std::string BuildCommitCorrectionRequest(const CommitCorrectionRequest& p) {
   o.emplace("secure", j::Value(p.secure));
   o.emplace("learning_allowed", j::Value(p.learning_allowed));
   AppToJson(p.app, o);
+  if (p.target_observation_id && !p.target_observation_id->empty()) {
+    o.emplace("target_observation_id", j::Value(*p.target_observation_id));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -1085,6 +1145,7 @@ std::optional<CommitCorrectionRequest> ParseCommitCorrectionRequest(const std::s
   p.secure = v->GetBool("secure").value_or(true);
   p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
   p.app = AppFromJson(*v);
+  p.target_observation_id = NonemptyString(*v, "target_observation_id");
   return p;
 }
 

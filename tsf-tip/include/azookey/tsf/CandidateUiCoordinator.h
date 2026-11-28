@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -84,6 +85,11 @@ class CandidateUiCoordinator {
   HRESULT EndUI();
 
   bool IsShowing() const { return showing_; }
+  std::optional<CandidateWindow::NativeCandidateExposure> GetNativeCandidateExposure() const {
+    if (!showing_ || !tip_draws_) return std::nullopt;
+    return own_window_.GetNativeCandidateExposure();
+  }
+  void InvalidateNativeCandidateExposure() { own_window_.InvalidateNativeCandidateExposure(); }
 
   // Prediction mode of the same window (native-ui-spec §4.2). Predictions never
   // reach the ITfCandidateListUIElement (§5.2), so the TIP draws them even where

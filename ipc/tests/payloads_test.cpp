@@ -890,6 +890,149 @@ TEST(PayloadsTest, CommitObservationPreservesLargeTimestamp) {
   EXPECT_EQ(parsed->timestamp_ms, 9007199254740993ULL);
 }
 
+TEST(PayloadsTest, QueryCandidatesExposureIdIsOptionalAndRequiresStablePositions) {
+  using namespace azookey::ipc;
+  QueryCandidatesResponse response;
+  response.candidates = {{"日本語", "にほんご", 1.0, "dictionary"}};
+  const auto legacy_wire = BuildQueryCandidatesResponse(response);
+  EXPECT_FALSE(json::Parse(legacy_wire)->Find("exposure_id"));
+  const auto legacy = ParseQueryCandidatesResponse(legacy_wire);
+  ASSERT_TRUE(legacy);
+  EXPECT_FALSE(legacy->exposure_id);
+
+  response.exposure_id = "exposure-1";
+  const auto wire = BuildQueryCandidatesResponse(response);
+  ASSERT_TRUE(json::Parse(wire));
+  EXPECT_EQ(json::Parse(wire)->GetString("exposure_id"), response.exposure_id);
+  const auto decoded = ParseQueryCandidatesResponse(wire);
+  ASSERT_TRUE(decoded);
+  EXPECT_EQ(decoded->exposure_id, response.exposure_id);
+
+  for (const auto* bad_id : {R"("")", "42", "false", "null", "[]"}) {
+    SCOPED_TRACE(bad_id);
+    const auto parsed = ParseQueryCandidatesResponse(
+        std::string(R"({"exposure_id":)") + bad_id +
+        R"(,"candidates":[{"surface":"日本語","reading":"にほんご"}]})");
+    ASSERT_TRUE(parsed);
+    ASSERT_EQ(parsed->candidates.size(), 1u);
+    EXPECT_FALSE(parsed->exposure_id);
+  }
+
+  const auto compacted = ParseQueryCandidatesResponse(
+      R"({"exposure_id":"exposure-1","candidates":[{},{"surface":"日本語","reading":"にほんご"}]})");
+  ASSERT_TRUE(compacted);
+  ASSERT_EQ(compacted->candidates.size(), 1u);
+  EXPECT_EQ(compacted->candidates[0].surface, "日本語");
+  EXPECT_FALSE(compacted->exposure_id);
+}
+
+TEST(PayloadsTest, CommitObservationExposureIsOptionalAndPreservesLargeTime) {
+  using namespace azookey::ipc;
+  CommitObservationRequest req;
+  req.reading = "にほんご";
+  req.chosen = {"日本語", req.reading, 1.0, "dictionary"};
+  req.shown = {req.chosen};
+  req.timestamp_ms = 9007199254740995ULL;
+  req.observation_id = "tip-1:7";
+  req.secure = false;
+  req.learning_allowed = true;
+  const auto legacy_wire = BuildCommitObservationRequest(req);
+  const auto legacy_object = json::Parse(legacy_wire);
+  ASSERT_TRUE(legacy_object);
+  EXPECT_FALSE(legacy_object->Find("shown_at_ms"));
+  EXPECT_FALSE(legacy_object->Find("exposure_id"));
+  EXPECT_FALSE(legacy_object->Find("shown_candidate_indices"));
+  const auto legacy = ParseCommitObservationRequest(legacy_wire);
+  ASSERT_TRUE(legacy);
+  EXPECT_FALSE(legacy->shown_at_ms);
+  EXPECT_FALSE(legacy->exposure_id);
+  EXPECT_FALSE(legacy->shown_candidate_indices);
+
+  req.shown_at_ms = 9007199254740993ULL;
+  req.exposure_id = "exposure-1";
+  req.shown_candidate_indices = std::vector<uint32_t>{3, 0, 2};
+  const auto wire = BuildCommitObservationRequest(req);
+  EXPECT_NE(wire.find("\"shown_at_ms\":9007199254740993"), std::string::npos);
+  const auto decoded = ParseCommitObservationRequest(wire);
+  ASSERT_TRUE(decoded);
+  EXPECT_EQ(decoded->shown_at_ms, req.shown_at_ms);
+  EXPECT_EQ(decoded->exposure_id, req.exposure_id);
+  EXPECT_EQ(decoded->shown_candidate_indices, req.shown_candidate_indices);
+  EXPECT_EQ(decoded->timestamp_ms, req.timestamp_ms);
+  EXPECT_EQ(decoded->observation_id, req.observation_id);
+  EXPECT_EQ(decoded->chosen.surface, req.chosen.surface);
+  ASSERT_EQ(decoded->shown.size(), 1u);
+  EXPECT_EQ(decoded->shown[0].surface, req.shown[0].surface);
+  EXPECT_FALSE(decoded->secure);
+  EXPECT_TRUE(decoded->learning_allowed);
+}
+
+TEST(PayloadsTest, CommitObservationDiscardsInvalidExposureFields) {
+  using namespace azookey::ipc;
+  const auto valid = json::Parse(
+      R"({"reading":"にほんご","chosen":{"surface":"日本語","reading":"にほんご"},)"
+      R"("timestamp_ms":100,"observation_id":"tip-1:7","secure":false,"learning_allowed":true,)"
+      R"("shown_at_ms":99,"exposure_id":"exposure-1","shown_candidate_indices":[2,0]})");
+  ASSERT_TRUE(valid);
+  const auto parse_replacement = [&](const char* key, const char* value) {
+    auto object = valid->AsObject();
+    object.insert_or_assign(key, *json::Parse(value));
+    return ParseCommitObservationRequest(json::Stringify(json::Value(std::move(object))));
+  };
+
+  for (const auto* bad_time :
+       {R"("99")", "false", "null", "-1", "0", "101", "99.5", "99e0", "18446744073709551616"}) {
+    SCOPED_TRACE(bad_time);
+    const auto parsed = parse_replacement("shown_at_ms", bad_time);
+    ASSERT_TRUE(parsed);
+    EXPECT_FALSE(parsed->shown_at_ms);
+    EXPECT_EQ(parsed->exposure_id, std::optional<std::string>("exposure-1"));
+    EXPECT_TRUE(parsed->shown_candidate_indices);
+    EXPECT_FALSE(parsed->secure);
+    EXPECT_TRUE(parsed->learning_allowed);
+  }
+  for (const auto* bad_id : {R"("")", "42", "false", "null", "[]"}) {
+    SCOPED_TRACE(bad_id);
+    const auto parsed = parse_replacement("exposure_id", bad_id);
+    ASSERT_TRUE(parsed);
+    EXPECT_FALSE(parsed->exposure_id);
+    EXPECT_EQ(parsed->shown_at_ms, 99u);
+    EXPECT_TRUE(parsed->shown_candidate_indices);
+  }
+  for (const auto* bad_indices :
+       {R"("2,0")", "null", "[2,2]", "[-1]", "[0.5]", R"(["0"])", "[false]", "[4294967296]"}) {
+    SCOPED_TRACE(bad_indices);
+    const auto parsed = parse_replacement("shown_candidate_indices", bad_indices);
+    ASSERT_TRUE(parsed);
+    EXPECT_FALSE(parsed->shown_candidate_indices);
+    EXPECT_EQ(parsed->exposure_id, std::optional<std::string>("exposure-1"));
+    EXPECT_EQ(parsed->shown_at_ms, 99u);
+    EXPECT_EQ(parsed->chosen.surface, "日本語");
+  }
+}
+
+TEST(PayloadsTest, CommitObservationExposurePositionsCanBeBoundedByTheOriginalResponse) {
+  using namespace azookey::ipc;
+  const auto wire =
+      R"({"reading":"にほんご","chosen":{"surface":"日本語","reading":"にほんご"},"shown":[],)"
+      R"("timestamp_ms":100,"shown_at_ms":99,"exposure_id":"exposure-1",)"
+      R"("shown_candidate_indices":[2,0]})";
+  const auto whole_response = ParseCommitObservationRequest(wire, 3u);
+  ASSERT_TRUE(whole_response);
+  EXPECT_TRUE(whole_response->shown.empty());
+  EXPECT_EQ(whole_response->shown_candidate_indices, (std::vector<uint32_t>{2, 0}));
+
+  for (const auto response_count : {1u, 2u}) {
+    SCOPED_TRACE(response_count);
+    const auto decoded = ParseCommitObservationRequest(wire, response_count);
+    ASSERT_TRUE(decoded);
+    EXPECT_FALSE(decoded->shown_candidate_indices);
+    EXPECT_EQ(decoded->exposure_id, std::optional<std::string>("exposure-1"));
+    EXPECT_EQ(decoded->shown_at_ms, 99u);
+    EXPECT_EQ(decoded->chosen.surface, "日本語");
+  }
+}
+
 // DEV-1184 M54 app rows: both commit requests carry the foreground app, and a
 // TIP that omits it (or predates the field) decodes as "unknown app".
 TEST(PayloadsTest, CommitRequestsCarryTheAppAndDefaultToUnknown) {
@@ -1272,6 +1415,46 @@ TEST(PayloadsTest, CommitCorrectionRoundTripsBothKinds) {
   ASSERT_TRUE(parsed_reconvert.has_value());
   EXPECT_EQ(parsed_reconvert->kind, kCorrectionKindReconvert);
   EXPECT_EQ(parsed_reconvert->selected_surface, std::optional<std::string>("漢字"));
+}
+
+TEST(PayloadsTest, CommitCorrectionTargetObservationIdIsOptional) {
+  using namespace azookey::ipc;
+  CommitCorrectionRequest request;
+  request.kind = kCorrectionKindUndo;
+  request.reading = "かんじ";
+  request.rejected_surface = "幹事";
+  request.observation_id = "tip-1:4";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto legacy_wire = BuildCommitCorrectionRequest(request);
+  EXPECT_FALSE(json::Parse(legacy_wire)->Find("target_observation_id"));
+  const auto legacy = ParseCommitCorrectionRequest(legacy_wire);
+  ASSERT_TRUE(legacy);
+  EXPECT_FALSE(legacy->target_observation_id);
+
+  request.target_observation_id = "tip-1:3";
+  const auto wire = BuildCommitCorrectionRequest(request);
+  ASSERT_TRUE(json::Parse(wire));
+  EXPECT_EQ(json::Parse(wire)->GetString("target_observation_id"), request.target_observation_id);
+  const auto decoded = ParseCommitCorrectionRequest(wire);
+  ASSERT_TRUE(decoded);
+  EXPECT_EQ(decoded->target_observation_id, request.target_observation_id);
+  EXPECT_EQ(decoded->observation_id, request.observation_id);
+  EXPECT_EQ(decoded->kind, kCorrectionKindUndo);
+  EXPECT_FALSE(decoded->selected_surface);
+  EXPECT_FALSE(decoded->secure);
+  EXPECT_TRUE(decoded->learning_allowed);
+
+  for (const auto* bad_id : {R"("")", "42", "null", "{}"}) {
+    SCOPED_TRACE(bad_id);
+    const auto invalid = ParseCommitCorrectionRequest(
+        std::string(R"({"kind":"reconvert","reading":"かんじ","rejected_surface":"幹事",)"
+                    R"("selected_surface":"漢字","target_observation_id":)") +
+        bad_id + "}");
+    ASSERT_TRUE(invalid);
+    EXPECT_FALSE(invalid->target_observation_id);
+    EXPECT_EQ(invalid->selected_surface, std::optional<std::string>("漢字"));
+  }
 }
 
 TEST(PayloadsTest, CommitCorrectionDeniesPrivacyByDefaultAndRejectsInconsistentKinds) {

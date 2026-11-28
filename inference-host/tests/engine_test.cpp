@@ -2366,6 +2366,30 @@ TEST(InferenceEngineTest, ZenzaiConvertRejectsPrivateUseGenerationsDirectly) {
   std::remove(model_path.c_str());
 }
 
+TEST(InferenceEngineTest, ZenzaiConvertLeavesTheFeatureMissingForNonFiniteLogprobs) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const std::string model_path = TempPath("azookey_nonfinite_logprob_convert.gguf");
+  WriteMinimalGguf(model_path);
+  azookey::host::ZenzaiRuntimeOptions runtime_options;
+  runtime_options.mock_candidates_for_tests = true;
+  auto loaded = azookey::host::LoadZenzaiGgufModel(model_path, runtime_options);
+  std::remove(model_path.c_str());
+  ASSERT_TRUE(loaded.ok);
+  azookey::host::ZenzaiModelConverter converter(std::move(loaded), nullptr);
+
+  const auto candidates = converter.Convert("ひゆうげん", {});
+  ASSERT_EQ(candidates.size(), 2U);
+  for (const auto& candidate : candidates) {
+    SCOPED_TRACE(candidate.surface);
+    EXPECT_EQ(candidate.source, azookey::core::CandidateSource::Model);
+    EXPECT_FALSE(candidate.rerank_signals.zenzai_avg_logprob.has_value());
+  }
+}
+
 TEST(InferenceEngineTest, ZenzaiGenerationWithControlMarkersNeverReachesCandidates) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

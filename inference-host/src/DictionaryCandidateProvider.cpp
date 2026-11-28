@@ -45,7 +45,7 @@ std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStor
          (entry.category_mask & kTechnicalCategories) ? core::CandidateTag::Technical
                                                       : core::CandidateTag::None,
          {.dictionary_score = entry.score,
-          .candidate_length = core::CountCandidateCodepoints(entry.surface),
+          .candidate_length = core::ComputeCandidateLength(entry.surface),
           .is_named_entity = (entry.category_mask & kNamedEntityCategories) != 0,
           .is_user_dict = (entry.sources & kUserLayer) != 0,
           .is_neologism = (entry.category_mask &

@@ -36,11 +36,30 @@ TEST(FeatureExtractorTest, MatchesFeaturesV1GoldenFixture) {
     ASSERT_TRUE(name.has_value());
     ASSERT_TRUE(surface.has_value());
     SCOPED_TRACE(*name);
+    for (const auto& [key, value] : row.AsObject()) {
+      if (key == "name" || key == "surface") {
+        ASSERT_TRUE(value.IsString()) << key;
+      } else if (key == "expected") {
+        ASSERT_TRUE(value.IsArray()) << key;
+      } else if (key == "lattice_segment_count") {
+        const auto count = row.GetUInt(key);
+        ASSERT_TRUE(count && *count <= (std::numeric_limits<size_t>::max)()) << key;
+      } else if (key == "zenzai_avg_logprob" || key == "dictionary_score" ||
+                 key == "typo_confidence" || key == "user_frequency" || key == "recency_score") {
+        ASSERT_TRUE(value.IsNumber()) << key;
+      } else if (key == "is_named_entity" || key == "is_user_dict" || key == "is_neologism" ||
+                 key == "is_typo_corrected") {
+        ASSERT_TRUE(value.IsBool()) << key;
+      } else {
+        FAIL() << "Unknown golden case key: " << key;
+      }
+    }
+
     RerankSignals signals{};
     signals.zenzai_avg_logprob = row.GetNumber("zenzai_avg_logprob");
     signals.dictionary_score = row.GetNumber("dictionary_score");
     signals.typo_confidence = row.GetNumber("typo_confidence");
-    signals.candidate_length = core::CountCandidateCodepoints(*surface);
+    signals.candidate_length = core::ComputeCandidateLength(*surface);
     if (const auto segment_count = row.GetUInt("lattice_segment_count")) {
       signals.lattice_segment_count = static_cast<size_t>(*segment_count);
     }
@@ -64,32 +83,32 @@ TEST(FeatureExtractorTest, MatchesFeaturesV1GoldenFixture) {
 }
 
 TEST(FeatureExtractorTest, DuplicateSurfaceRetainsSignalsFromBothSources) {
-  RerankSignals dictionary{};
-  dictionary.dictionary_score = 0.75;
-  dictionary.candidate_length = 4;
-  dictionary.lattice_segment_count = 2;
-  dictionary.is_named_entity = true;
-  dictionary.is_user_dict = true;
-  RerankSignals model{};
-  model.zenzai_avg_logprob = -1.25;
-  model.candidate_length = 4;
-  model.is_neologism = true;
+  core::Candidate dictionary;
+  dictionary.surface = "変換候補";
+  dictionary.rerank_signals = {.dictionary_score = 0.75,
+                               .lattice_segment_count = 2,
+                               .is_named_entity = true,
+                               .is_user_dict = true};
+  core::Candidate model;
+  model.surface = dictionary.surface;
+  model.rerank_signals = {.zenzai_avg_logprob = -1.25, .is_neologism = true};
 
   auto dictionary_wins = dictionary;
+  ASSERT_EQ(dictionary_wins.rerank_signals.candidate_length, 0U);
   core::PreserveRerankSignals(dictionary_wins, model);
   auto model_wins = model;
   core::PreserveRerankSignals(model_wins, dictionary);
 
   const std::array<float, 12> expected{-1.25f, 0.75f, 0, 0, 0, 0, 4, 2, 1, 1, 1, 0};
-  EXPECT_EQ(ExtractFeaturesV1(dictionary_wins, {}), expected);
-  EXPECT_EQ(ExtractFeaturesV1(model_wins, {}), expected);
+  EXPECT_EQ(ExtractFeaturesV1(dictionary_wins.rerank_signals, {}), expected);
+  EXPECT_EQ(ExtractFeaturesV1(model_wins.rerank_signals, {}), expected);
 
   auto preferred = dictionary;
-  preferred.dictionary_score = 0;
-  preferred.lattice_segment_count = 1;
+  preferred.rerank_signals.dictionary_score = 0;
+  preferred.rerank_signals.lattice_segment_count = 1;
   core::PreserveRerankSignals(preferred, dictionary);
-  EXPECT_EQ(preferred.dictionary_score, 0.0);
-  EXPECT_EQ(preferred.lattice_segment_count, 1U);
+  EXPECT_EQ(preferred.rerank_signals.dictionary_score, 0.0);
+  EXPECT_EQ(preferred.rerank_signals.lattice_segment_count, 1U);
 }
 
 TEST(FeatureExtractorTest, LeavesInvalidInputsVisibleToTheScorer) {

@@ -44,10 +44,7 @@ struct RerankSignals {
 };
 
 // Count Unicode scalar values in the candidate surface; invalid bytes are skipped.
-size_t CountCandidateCodepoints(std::string_view surface);
-
-// Fold signals from another occurrence of the same surface into the ranking winner.
-void PreserveRerankSignals(RerankSignals& winner, const RerankSignals& other);
+size_t ComputeCandidateLength(std::string_view surface);
 
 struct Candidate {
   std::string surface;
@@ -59,5 +56,8 @@ struct Candidate {
   CandidateTag tag{CandidateTag::None};
   RerankSignals rerank_signals{};
 };
+
+// Fold signals from another occurrence of the same surface into the ranking winner.
+void PreserveRerankSignals(Candidate& representative, const Candidate& duplicate);
 
 }  // namespace azookey::core

@@ -73,7 +73,7 @@ TinyNeuralReranker を適用する。`ExtractFeaturesV1` が最大 30 候補の�
 同じ表層を重複除去する際は、既存の順位規則で代表候補を選ぶ。生の辞書スコアと
 Zenzai の平均 logprob は別々に保持する。各スコア、typo confidence、ラティスの
 文節数は、代表候補に値があればその値を使い、欠損していればもう一方の値を引き継ぐ。
-flag は論理和を取る。表層の長さは共通なので、表層から求める。
+flag は論理和を取る。重複除去後の `candidate_length` は代表候補の表層から算出する。
 
 ## 4. 入力特徴量
 
@@ -221,6 +221,7 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
   `dictionary_score` / `user_frequency` / `recency_score` / `typo_confidence` /
   `app_profile_score`）は学習データ統計から推定した per-feature 標準化
   （z-score または min-max）を ONNX グラフ内に持たせ、runtime では生値を入力する。
+  学習データで標準偏差が 0 の特徴には平均 0、スケール 1 を使い、入力値をそのまま通す。
   正規化統計はモデルと一緒に versioning する。flag / int 特徴
   （`candidate_length` / `segment_count` / 4 つの bool）は正規化せず素の値
   （bool は 0 / 1）を入力する。
@@ -228,7 +229,8 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
   割った値。`dictionary_score` は `DictionaryCandidates` が受け取る
   `DictionaryEntry::score` の値。どちらも Host で標準化や再スケールは行わない。
   `user_frequency` と `recency_score` は Host が供給する `UserSignals` の値を使う。
-- **欠損特徴の既定値**: Zenzai の平均 logprob が無ければ `zenzai_score` は −10.0。
+- **欠損特徴の既定値**: Zenzai の平均 logprob が無い場合や有限でない場合は
+  `zenzai_score` を −10.0 とする。
   `dictionary_score`、`user_frequency`、`recency_score`、`typo_confidence` は
   欠損時に 0.0。文節数と flag の既定値はそれぞれ 1 と false。
   `app_profile_score` は §4 のとおり 0.0 に固定する。

@@ -372,7 +372,13 @@ std::vector<azookey::tsf::CandidateViewItem> BuildCandidateViews(
   std::vector<azookey::tsf::CandidateViewItem> items;
   items.reserve(candidates.size());
   for (const auto& candidate : candidates) {
-    items.push_back({Utf8ToWide(candidate.field.surface), Utf8ToWide(candidate.description)});
+    azookey::tsf::CandidateViewItem item{Utf8ToWide(candidate.field.surface),
+                                       Utf8ToWide(candidate.description)};
+    if (const auto& origin = candidate.exposure_origin) {
+      item.exposure_id = std::shared_ptr<const std::string>(origin, &origin->id);
+      item.response_index = candidate.response_index;
+    }
+    items.push_back(std::move(item));
   }
   return items;
 }
@@ -12405,8 +12411,10 @@ HRESULT TextService::CompleteReconversionSelection(size_t index, bool click,
     }
   }
   if (!reconversion_list_ || generation != reconversion_generation_ ||
-      range.Get() != reconversion_range_)
+      range.Get() != reconversion_range_) {
+    LogReconversion(stage, "stale_generation", S_FALSE, index);
     return S_FALSE;
+  }
   const bool unchanged = replacement == original;
   // Built before the choice is marked pending: an allocation failure here
   // leaves no pending state that would turn every later choice into busy.

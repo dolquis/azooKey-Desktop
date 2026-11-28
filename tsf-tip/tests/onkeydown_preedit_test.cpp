@@ -989,6 +989,12 @@ struct ResetCandidateExposureTime {
   ~ResetCandidateExposureTime() { azookey::tsf::CandidateWindow::SetExposureTimeForTest(0); }
 };
 
+void ExpectNoExposure(const azookey::ipc::CommitObservationRequest& observation) {
+  EXPECT_FALSE(observation.shown_at_ms);
+  EXPECT_FALSE(observation.exposure_id);
+  EXPECT_FALSE(observation.shown_candidate_indices);
+}
+
 class FakeCompositionAttachment {
  public:
   explicit FakeCompositionAttachment(TextServiceHarness& harness) : harness_(harness) {
@@ -12608,6 +12614,30 @@ TEST(TsfTipEnglishCandidatesTest, EnglishCommitKeepsTheKanaReadingWithoutTheCapa
   EXPECT_EQ(observation->reading, "あっpぇ");
 }
 
+TEST(TsfTipCandidateExposureTest, EnglishCommitKeepsLearningWithoutExposure) {
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
+  TextServiceHarness h;
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  h.service.set_english_candidates_for_test(true);
+  h.service.preedit_kana_ = "あっpぇ";
+  azookey::ipc::CandidateField english{"Apple", "apple", 1.0, "heuristic"};
+  english.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_cached_candidates_for_test({english}, "english-exposure");
+  }));
+  ASSERT_TRUE(h.service.candidate_window_for_test().IsVisible());
+  FakeCompositionAttachment attachment(h);
+  ASSERT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->reading, "apple");
+  EXPECT_EQ(observation->chosen.surface, "Apple");
+  ExpectNoExposure(*observation);
+}
+
 // DEV-1539 (spec §4.1.1): the batch Space asks for English candidates only
 // with the setting, the Host capability and the neural mode.
 TEST(TsfTipEnglishCandidatesTest, BatchSpaceAsksForEnglishOnlyInNeuralMode) {
@@ -12772,10 +12802,46 @@ void PrepareCorrectionHarness(TextServiceHarness& h) {
   h.service.set_text_edit_context_for_test(&h.context);
 }
 
-// An edit record whose selection changed, as TSF reports the end of an edit
-// session that moved the caret.
+// A text-update enumeration containing zero or one TSF range.
+class TextUpdateEnumerator final : public IEnumTfRanges {
+ public:
+  explicit TextUpdateEnumerator(ITfRange* range) : range_(range) {}
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != __uuidof(IEnumTfRanges)) return E_NOINTERFACE;
+    *out = static_cast<IEnumTfRanges*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
+  STDMETHODIMP_(ULONG) Release() override {
+    const ULONG remaining = --refs_;
+    if (!remaining) delete this;
+    return remaining;
+  }
+  STDMETHODIMP Clone(IEnumTfRanges**) override { return E_NOTIMPL; }
+  STDMETHODIMP Next(ULONG count, ITfRange** out, ULONG* fetched) override {
+    if (count != 1 || !out || !fetched) return E_INVALIDARG;
+    *out = range_.Detach();
+    *fetched = *out ? 1 : 0;
+    return *out ? S_OK : S_FALSE;
+  }
+  STDMETHODIMP Reset() override { return E_NOTIMPL; }
+  STDMETHODIMP Skip(ULONG) override { return E_NOTIMPL; }
+
+ private:
+  ULONG refs_{1};
+  Microsoft::WRL::ComPtr<ITfRange> range_;
+};
+
+// An edit record whose selection changed, with text updates when supplied.
 class SelectionChangedRecord final : public ITfEditRecord {
  public:
+  SelectionChangedRecord() = default;
+  explicit SelectionChangedRecord(ITfRange* updated) {
+    updates_.Attach(new TextUpdateEnumerator(updated));
+  }
   STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
     if (!out) return E_POINTER;
     *out = nullptr;
@@ -12791,12 +12857,19 @@ class SelectionChangedRecord final : public ITfEditRecord {
     *changed = TRUE;
     return S_OK;
   }
-  STDMETHODIMP GetTextAndPropertyUpdates(DWORD, const GUID**, ULONG, IEnumTfRanges**) override {
-    return E_NOTIMPL;
+  STDMETHODIMP GetTextAndPropertyUpdates(DWORD flags, const GUID**, ULONG properties,
+                                         IEnumTfRanges** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (!updates_) return E_NOTIMPL;
+    EXPECT_EQ(flags, TF_GTP_INCL_TEXT);
+    EXPECT_EQ(properties, 0u);
+    return updates_.CopyTo(out);
   }
 
  private:
   ULONG refs_{1};
+  Microsoft::WRL::ComPtr<IEnumTfRanges> updates_;
 };
 
 void EndEditWithSelectionChange(TextServiceHarness& h) {
@@ -12844,6 +12917,27 @@ TEST(TsfTipCommitCorrectionTest, BackspaceRightAfterCommitSendsUndoOnce) {
   // The window was the first key only.
   EXPECT_FALSE(h.TestPress(VK_BACK));
   EXPECT_EQ(h.service.queued_corrections_for_test().size(), 1u);
+}
+
+TEST(TsfTipCandidateExposureTest, BackspaceUndoOmitsTargetAfterThreadFocusLoss) {
+  TextServiceHarness h;
+  PrepareCorrectionHarness(h);
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(99);
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  CommitOneCandidate(h, "undo-before-focus-loss");
+  const auto commit = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(commit);
+  ASSERT_EQ(commit->exposure_id, "undo-before-focus-loss");
+
+  ASSERT_EQ(h.service.OnKillThreadFocus(), S_OK);
+  ASSERT_EQ(h.service.OnSetThreadFocus(), S_OK);
+  EXPECT_FALSE(h.TestPress(VK_BACK));
+  const auto corrections = h.service.queued_corrections_for_test();
+  ASSERT_EQ(corrections.size(), 1u);
+  EXPECT_EQ(corrections[0].kind, "undo");
+  EXPECT_EQ(corrections[0].rejected_surface, "仮名");
+  EXPECT_FALSE(corrections[0].target_observation_id);
 }
 
 TEST(TsfTipCommitCorrectionTest, AnotherKeyFirstClosesTheUndoWindow) {
@@ -13899,11 +13993,12 @@ void StartPunctuationConversion(DocumentPreeditHarness& h, bool enabled = true) 
 }
 
 // Types てんき and delivers the per-key answer for it.
-void TypeTenkiWithCache(DocumentPreeditHarness& h) {
+void TypeTenkiWithCache(DocumentPreeditHarness& h, std::optional<std::string> exposure_id = {}) {
   for (const WPARAM key : {WPARAM{'T'}, WPARAM{'E'}, WPARAM{'N'}, WPARAM{'K'}, WPARAM{'I'}})
     ASSERT_TRUE(h.Press(key));
   h.service.mark_pending_ipc_query_sent_for_test();
-  h.service.set_cached_candidates_for_test({ModelField("天気", "てんき")});
+  h.service.set_cached_candidates_for_test({ModelField("天気", "てんき")},
+                                            std::move(exposure_id));
   h.service.show_candidate_window_from_cache_for_test();
 }
 
@@ -13928,9 +14023,11 @@ TEST(TsfTipPunctuationConversionTest, OffKeepsTheMarkInTheReading) {
 
 TEST(TsfTipPunctuationConversionTest, CommitsTheCachedFirstCandidateWithTheMark) {
   DocumentPreeditHarness h;
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
   OemCompositionTranslationGuard oem_translation;
   StartPunctuationConversion(h);
-  TypeTenkiWithCache(h);
+  TypeTenkiWithCache(h, "punctuation-cache-exposure");
+  ASSERT_FALSE(h.service.candidate_window_for_test().IsVisible());
   ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
   EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
   EXPECT_EQ(h.context.document->text, L"天気。");
@@ -13941,6 +14038,7 @@ TEST(TsfTipPunctuationConversionTest, CommitsTheCachedFirstCandidateWithTheMark)
   ASSERT_TRUE(observation.has_value());
   EXPECT_EQ(observation->reading, "てんき");
   EXPECT_EQ(observation->chosen.surface, "天気");
+  ExpectNoExposure(*observation);
 }
 
 TEST(TsfTipPunctuationConversionTest, WaitsForTheFirstCandidateAndReplaysTheKey) {
@@ -15172,13 +15270,17 @@ std::vector<azookey::ipc::CandidateField> MixedCandidates() {
 void CommitMixedCandidate(
     TextServiceHarness& h, std::vector<azookey::ipc::CandidateField> shown, int selected,
     bool commit_segments,
-    const char* privacy = R"({"privacy":{"mode":"normal","autoSecureInput":false}})") {
+    const char* privacy = R"({"privacy":{"mode":"normal","autoSecureInput":false}})",
+    std::optional<std::string> exposure_id = {}) {
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
   h.service.set_privacy_settings_for_test(privacy);
   h.service.set_commit_segments_supported_for_test(commit_segments);
   h.service.preedit_kana_ = kMixedKana;
-  ASSERT_TRUE(
-      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test(std::move(shown)); }));
+  const bool has_exposure = exposure_id.has_value();
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_cached_candidates_for_test(std::move(shown), std::move(exposure_id));
+  }));
+  if (has_exposure) ASSERT_TRUE(h.service.candidate_window_for_test().IsVisible());
   h.service.set_selected_candidate_index_for_test(selected);
   FakeCompositionAttachment attachment(h);
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
@@ -15220,8 +15322,13 @@ TEST(TsfTipMixedEnglishTest, CandidateWithSegmentsIsObservedPerSegment) {
 
 // Without commit_segments the segments go as one CommitObservation each.
 TEST(TsfTipMixedEnglishTest, CandidateSegmentsFallBackToOneObservationEach) {
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
   TextServiceHarness h;
-  CommitMixedCandidate(h, MixedCandidates(), 0, /*commit_segments=*/false);
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  CommitMixedCandidate(h, MixedCandidates(), 0, /*commit_segments=*/false,
+                       R"({"privacy":{"mode":"normal","autoSecureInput":false}})",
+                       "mixed-exposure");
   EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitSegmentsObservation), 0u);
   EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 5u);
   const auto last = h.service.last_queued_commit_observation_for_test();
@@ -15230,6 +15337,8 @@ TEST(TsfTipMixedEnglishTest, CandidateSegmentsFallBackToOneObservationEach) {
   const auto first = h.service.first_queued_commit_observation_for_test();
   ASSERT_TRUE(first.has_value());
   EXPECT_EQ(first->reading, "きょうは");
+  ExpectNoExposure(*first);
+  ExpectNoExposure(*last);
   // Each segment is its own observation for the Host's dedupe.
   EXPECT_FALSE(first->observation_id.empty());
   EXPECT_NE(first->observation_id, last->observation_id);
@@ -15842,6 +15951,37 @@ TEST(TsfTipCandidatePageTest, BatchSegmentTurnsPagesAndADigitOnlyMovesTheSelecti
   EXPECT_FALSE(h.service.candidate_window_showing_for_test());
 }
 
+TEST(TsfTipCandidateExposureTest, BatchFallbackOmitsExposureOnSingleSegmentMessages) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_batch_romaji_options_for_test(true);
+  h.service.set_commit_segments_supported_for_test(false);
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  TypeTypoRomaji(h, "KANI");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const auto first = ModelField("蚊", "か");
+  h.service.set_cached_batch_segments_for_test({{"か", {first}}, {"に", {ModelField("二", "に")}}});
+  // Deliberately provide provenance for the visible rows while keeping the
+  // batch segments. The fallback still sends ordinary observations only.
+  h.service.set_cached_candidates_for_test({first}, "batch-exposure");
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_TRUE(h.service.candidate_window_for_test().IsVisible());
+  ASSERT_EQ(h.service.shown_batch_segment_count_for_test(), 2u);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"蚊二");
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 2u);
+  const auto first_observation = h.service.first_queued_commit_observation_for_test();
+  const auto second_observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(first_observation);
+  ASSERT_TRUE(second_observation);
+  EXPECT_EQ(first_observation->chosen.surface, "蚊");
+  EXPECT_EQ(second_observation->chosen.surface, "二");
+  ExpectNoExposure(*first_observation);
+  ExpectNoExposure(*second_observation);
+}
+
 TEST(TsfTipCandidatePageTest, ClickOnTheSecondPageCommitsThatCandidate) {
   for (const bool legacy : {false, true}) {
     SCOPED_TRACE(legacy);
@@ -15929,10 +16069,64 @@ TEST(TsfTipCandidateExposureTest, LegacyResponseAndRevokedExposureKeepOrdinaryLe
     EXPECT_EQ(h.context.document->text, L"蚊");
     const auto observation = h.service.last_queued_commit_observation_for_test();
     ASSERT_TRUE(observation);
-    EXPECT_FALSE(observation->shown_at_ms);
-    EXPECT_FALSE(observation->exposure_id);
-    EXPECT_FALSE(observation->shown_candidate_indices);
+    ExpectNoExposure(*observation);
     EXPECT_EQ(observation->shown.size(), 3u);
+  }
+}
+
+TEST(TsfTipCandidateExposureTest, LifecycleTransitionsInvalidatePendingCommitExposure) {
+  enum class Transition { ChangeDocument, PushContext, PopContext, Deactivate, Cleanup };
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
+  for (const auto transition : {Transition::ChangeDocument, Transition::PushContext,
+                                Transition::PopContext, Transition::Deactivate,
+                                Transition::Cleanup}) {
+    SCOPED_TRACE(static_cast<int>(transition));
+    FakeDocumentMgr old_document;
+    FakeDocumentMgr new_document;
+    NoopContext other_context;
+    DocumentPreeditHarness h;
+    ASSERT_TRUE(h.service.create_candidate_window_for_test());
+    old_document.context_ = &h.context;
+    new_document.context_ = &other_context;
+    h.context.document_mgr_ = &old_document;
+    StartWindowWait(h);
+    AnswerWindow(h, "exposure-before-transition");
+    ASSERT_TRUE(h.service.candidate_window_for_test().IsVisible());
+
+    // Keep the commit's copy of the drawn rows alive across the transition.
+    h.context.lock_write = true;
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_TRUE(h.service.has_pending_commit_observation_for_test());
+    ASSERT_FALSE(h.service.last_queued_commit_observation_for_test());
+    h.context.lock_write = false;
+
+    switch (transition) {
+      case Transition::ChangeDocument:
+        ASSERT_EQ(h.service.OnSetFocus(&new_document, &old_document), S_OK);
+        break;
+      case Transition::PushContext:
+        ASSERT_EQ(h.service.OnPushContext(&other_context), S_OK);
+        break;
+      case Transition::PopContext:
+        ASSERT_EQ(h.service.OnPopContext(&other_context), S_OK);
+        break;
+      case Transition::Deactivate:
+        ASSERT_EQ(h.service.Deactivate(), S_OK);
+        break;
+      case Transition::Cleanup:
+        ASSERT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+        break;
+    }
+    // Focus-loss cleanup can complete the pending commit itself; context
+    // stack changes that leave it pending are followed by a retry.
+    if (h.service.committing_)
+      ASSERT_EQ(h.service.request_commit_edit_session_for_test(&h.context), S_OK);
+    EXPECT_EQ(h.context.document->text, L"蚊");
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_EQ(observation->chosen.surface, "蚊");
+    ExpectNoExposure(*observation);
   }
 }
 
@@ -16009,8 +16203,9 @@ TEST(TsfTipCandidateExposureTest, WindowQueryResponseCarriesExposureThroughTheCo
 TEST(TsfTipCandidateExposureTest, ReconversionNamesOnlyTheExactCommittedRange) {
   ResetCandidateExposureTime reset_exposure_time;
   azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
-  for (const bool same_range : {true, false}) {
-    SCOPED_TRACE(same_range);
+  enum class Edit { SelectCommit, SelectOtherRange, ReplaceCommittedText };
+  for (const Edit edit : {Edit::SelectCommit, Edit::SelectOtherRange, Edit::ReplaceCommittedText}) {
+    SCOPED_TRACE(static_cast<int>(edit));
     DocumentPreeditHarness h;
     ASSERT_TRUE(h.service.create_candidate_window_for_test());
     h.service.set_text_edit_context_for_test(&h.context);
@@ -16030,15 +16225,25 @@ TEST(TsfTipCandidateExposureTest, ReconversionNamesOnlyTheExactCommittedRange) {
     ASSERT_TRUE(commit);
     ASSERT_EQ(commit->exposure_id, "reconversion-exposure");
 
-    const LONG start = same_range ? 1 : 0;
+    Microsoft::WRL::ComPtr<ITfRange> own_update;
+    own_update.Attach(new DocumentRange(h.context.document, 1, 2, &h.context));
+    SelectionChangedRecord own_commit(own_update.Get());
+    ASSERT_EQ(h.service.OnEndEdit(&h.context, 1, &own_commit), S_OK);
+
+    const LONG start = edit == Edit::SelectOtherRange ? 0 : 1;
     h.context.document->start = start;
     h.context.document->end = start + 1;
     Microsoft::WRL::ComPtr<ITfRange> range;
     range.Attach(new DocumentRange(h.context.document, start, start + 1, &h.context));
+    // An app can replace a span with the same surface; comparison of text
+    // and positions still succeeds, but the commit's provenance is gone.
+    const bool text_changed = edit == Edit::ReplaceCommittedText;
+    if (text_changed) ASSERT_EQ(range->SetText(1, 0, L"蚊", 1), S_OK);
+    SelectionChangedRecord external_edit(text_changed ? range.Get() : nullptr);
+    ASSERT_EQ(h.service.OnEndEdit(&h.context, 1, &external_edit), S_OK);
     h.service.set_reconversion_cache_for_test(&h.context, L"蚊", {L"蚊", L"課"}, "か");
     Microsoft::WRL::ComPtr<IUnknown> function;
-    ASSERT_EQ(h.service.GetFunction(GUID_NULL, IID_ITfFnReconversion, function.GetAddressOf()),
-              S_OK);
+    ASSERT_EQ(h.service.GetFunction(GUID{}, IID_ITfFnReconversion, function.GetAddressOf()), S_OK);
     Microsoft::WRL::ComPtr<ITfFnReconversion> reconversion;
     ASSERT_EQ(function.As(&reconversion), S_OK);
     ASSERT_EQ(reconversion->Reconvert(range.Get()), S_OK);
@@ -16051,7 +16256,7 @@ TEST(TsfTipCandidateExposureTest, ReconversionNamesOnlyTheExactCommittedRange) {
     EXPECT_EQ(corrections[0].kind, "reconvert");
     EXPECT_EQ(corrections[0].rejected_surface, "蚊");
     EXPECT_EQ(corrections[0].selected_surface, "課");
-    if (same_range)
+    if (edit == Edit::SelectCommit)
       EXPECT_EQ(corrections[0].target_observation_id, commit->observation_id);
     else
       EXPECT_FALSE(corrections[0].target_observation_id);
@@ -20826,6 +21031,37 @@ TEST(TsfTipCommitUndoTest, ChoosingAnotherSurfaceSendsUndoForTheCommitTakenBack)
     ASSERT_TRUE(observation);
     EXPECT_EQ(observation->chosen.surface, "カナ");
     EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+  }
+}
+
+TEST(TsfTipCandidateExposureTest, RestoredCommitUndoOmitsTargetAfterThreadFocusLoss) {
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
+  for (const bool before_reopening : {false, true}) {
+    SCOPED_TRACE(before_reopening);
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    ASSERT_TRUE(h.service.create_candidate_window_for_test());
+    CommitKanaCandidate(h, 0, "restored-exposure-before-focus-loss");
+    const auto commit = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(commit);
+    ASSERT_EQ(commit->exposure_id, "restored-exposure-before-focus-loss");
+
+    if (!before_reopening) ASSERT_TRUE(PressCtrlBackspace(h));
+    ASSERT_EQ(h.service.OnKillThreadFocus(), S_OK);
+    ASSERT_EQ(h.service.OnSetThreadFocus(), S_OK);
+    if (before_reopening) ASSERT_TRUE(PressCtrlBackspace(h));
+    ASSERT_TRUE(h.service.pending_undo_correction_for_test());
+    OpenCandidateWindow(h, KanaCandidates());
+    ASSERT_TRUE(h.Press(VK_DOWN));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+
+    EXPECT_EQ(h.context.document->text, L"前カナ");
+    const auto corrections = h.service.queued_corrections_for_test();
+    ASSERT_EQ(corrections.size(), 1u);
+    EXPECT_EQ(corrections[0].kind, "undo");
+    EXPECT_EQ(corrections[0].rejected_surface, "仮名");
+    EXPECT_FALSE(corrections[0].target_observation_id);
   }
 }
 

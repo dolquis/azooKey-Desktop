@@ -19,6 +19,8 @@ namespace azookey::tsf {
 struct CandidateViewItem {
   std::wstring surface;
   std::wstring description;
+  std::shared_ptr<const std::string> exposure_id{};
+  uint32_t response_index{};
 };
 
 enum class CandidateHealthState { Healthy, DegradedSimple, DegradedModel, SafeMode };

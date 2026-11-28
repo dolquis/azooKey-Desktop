@@ -977,6 +977,49 @@ TEST(TsfTipCandidateUiCoordinatorTest, NativeExposureUsesFirstDrawForEachVisible
   EXPECT_EQ(exposure->shown_at_ms, 400u);
 }
 
+TEST(TsfTipCandidateUiCoordinatorTest, NativeExposureTracksResponseIdentityAndRowPositions) {
+  using azookey::tsf::CandidateViewItem;
+  using azookey::tsf::CandidateWindow;
+  const ScopedNativeExposureTestEnvironment environment;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = TRUE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+
+  const auto rows_for = [](const char* response_id) {
+    auto id = std::make_shared<const std::string>(response_id);
+    return std::vector<CandidateViewItem>{{L"候補", L"", id, 0}, {L"候補", L"", id, 1}};
+  };
+  const auto first_response = rows_for("response-a");
+  const auto same_response = rows_for("response-a");
+  ASSERT_NE(first_response.front().exposure_id, same_response.front().exposure_id);
+
+  CandidateWindow::SetExposureTimeForTest(100);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, first_response, 0), S_OK);
+  auto exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 100u);
+
+  CandidateWindow::SetExposureTimeForTest(200);
+  ASSERT_EQ(coordinator.UpdateUI(same_response, 0), S_OK);
+  exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 100u);
+
+  auto second_response = rows_for("response-b");
+  ASSERT_EQ(coordinator.UpdateUI(second_response, 0), S_OK);
+  exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 200u);
+
+  CandidateWindow::SetExposureTimeForTest(300);
+  std::swap(second_response[0].response_index, second_response[1].response_index);
+  ASSERT_EQ(coordinator.UpdateUI(second_response, 0), S_OK);
+  exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 300u);
+}
+
 TEST(TsfTipCandidateUiCoordinatorTest, NativeExposureRequiresAVisibleNativeCandidateFrame) {
   using azookey::tsf::CandidateWindow;
   const ScopedNativeExposureTestEnvironment environment;

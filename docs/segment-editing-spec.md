@@ -290,6 +290,26 @@ Enter・→・Ctrl+F・数字（候補窓のクリックと UI-less の `Finaliz
 | → で読み全体の候補を確定 | 読み全体を確定する | e = n の → はアプリへ渡す |
 | Space の候補列 | 伸縮する前は、先頭文節だけを覆う候補を先頭に並べる | 読み全体の候補だけを並べる |
 
+Space の候補列に先頭文節の候補を並べない理由は次の 3 つである（DEV-2110）。
+
+- 先頭の候補が先頭文節になる。kana_kanji_eval の 236 件のうち 130 件で先頭文節が読み全体より短く、そのうち
+  116 件は読み全体の 1 位が正解だった。legacy の順に並べると、この 116 件の 1 位が先頭文節に置き換わる。
+- 先頭の候補で Enter を押すと部分確定になり、Enter の意味が「読み全体を確定」から候補によって変わる。
+- 先頭文節だけを変換して確定する操作は、§4 の Shift+← と §6 の部分確定で同じことができる。
+
+遅延は理由に含めない。読み全体の要求の後に先頭文節の要求（§5.1）を続けると、2 要求の和は p50 65.7 ms、
+p95 96.2 ms で、候補窓用の期限 750 ms（`docs/host-availability-spec.md` §8.5.2）を超えた要求と、先頭文節の要求で
+Zenzai の deadline（`docs/zenzai-inference-spec.md` §8.2）に打ち切られた要求はどちらも 0 件（1300 要求中）だった。和は読み全体の要求だけの約 1.4〜1.5 倍で、遅い機械では
+余裕が同じとは限らない。測定の条件は次のとおり。
+
+- 計測: `azookey_bench --first-clause-probe`（`docs/conversion-quality-benchmark-spec.md` §7）。先頭文節の境目は
+  ラティスの 1 位経路の先頭文節で代用し、legacy の境目そのものではない。
+- build: commit bda1e302 の Release（llama.cpp 入り）、CPU、スレッド数は製品の既定。
+- モデル: `ggml-model-Q5_K_M.gguf`（SHA-256 `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）。
+- 辞書: `dictbuild/build_bundled.py` の同梱辞書 20260723（bundle SHA-256 `acb33c5c33548de126f19d122a2f4af6b311008cb0f6d0674269f32bc9654cf4`）。
+- データ: `bench/data/kana_kanji_eval.jsonl`（dataset SHA-256 `85b1a2a16495ddae45dcaf731b178c5ba13c42f713702e0fb6a2a6772143e5f9`）。
+- 引数: `--nll on --lattice on --typo-mode off --iterations 10 --first-clause-probe`。
+
 ## 10. テスト計画
 
 | 対象 | 試験 |

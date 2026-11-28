@@ -263,26 +263,32 @@ TEST_F(TinyRerankerRuntimeTest, RequestDeadlineStopsForwardAndPendingWorkDoesNot
   auto saw_stop = stopped->get_future();
   std::promise<void> release;
   auto gate = release.get_future().share();
-  Install([started, stopped, gate](auto rows, const auto& stop) {
-    started->set_value();
-    stop.wait(false, std::memory_order_relaxed);
-    stopped->set_value();
-    gate.wait();
-    return std::vector<float>(rows.size(), 1.0f);
-  });
-  const auto deadline = std::chrono::steady_clock::now() + 5s;
-  runtime_.SetClockForTests([&, samples = 0]() mutable {
-    // Preparation uses most of the request budget before the watchdog starts.
-    if (++samples == 1) return deadline - 3s;
-    if (samples == 2) return deadline - 1ms;
-    EXPECT_EQ(entered.wait_for(2s), std::future_status::ready);
-    return deadline;
+  auto mock = std::make_shared<MockTinyRerankerRuntime>(
+      [started, stopped, gate](auto rows, const auto& stop) {
+        started->set_value();
+        stop.wait(false, std::memory_order_relaxed);
+        stopped->set_value();
+        gate.wait();
+        return std::vector<float>(rows.size(), 1.0f);
+      });
+  // Only the injected clock is before this deadline, so the real future wait
+  // cannot block while waiting for the worker to advance the simulated time.
+  const auto deadline = std::chrono::steady_clock::now();
+  auto now = deadline - 3s;
+  runtime_.SetFactoryForTests(
+      [&now, deadline, mock](const auto&) {
+        // Model loading uses most of the request budget.
+        now = deadline - 1ms;
+        return mock;
+      },
+      2s);
+  runtime_.SetClockForTests([&now, deadline, &entered] {
+    return entered.wait_for(0ms) == std::future_status::ready ? deadline : now;
   });
 
   std::vector<core::Candidate> candidates{{"先", "", 0.5}};
   EXPECT_EQ(runtime_.Apply(candidates, false, nullptr, deadline), Outcome::Skipped);
   EXPECT_EQ(saw_stop.wait_for(2s), std::future_status::ready);
-  runtime_.SetClockForTests({});
   EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Skipped);
   EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Skipped);
   EXPECT_DOUBLE_EQ(candidates.front().score, 0.5);
@@ -312,27 +318,38 @@ TEST_F(TinyRerankerRuntimeTest, PendingTinyTimeoutCountsOncePerRequest) {
   release.set_value();
 }
 
-TEST_F(TinyRerankerRuntimeTest, PendingCanceledForwardSkipsWithoutOpeningTheBreaker) {
-  config_.failure_threshold = 1;
+TEST_F(TinyRerankerRuntimeTest, PendingCanceledForwardCountsOnceItReachesTinyTimeout) {
+  config_.failure_threshold = 2;
   runtime_.SetConfig(config_);
+  constexpr auto timeout = 2s;
+  const auto start = std::chrono::steady_clock::now();
+  auto now = start;
+  runtime_.SetClockForTests([&now] { return now; });
   auto canceled = std::make_shared<std::atomic<bool>>(false);
   auto stopped = std::make_shared<std::promise<void>>();
   auto saw_stop = stopped->get_future();
   std::promise<void> release;
   auto gate = release.get_future().share();
-  Install([canceled, stopped, gate](auto rows, const auto& stop) {
-    canceled->store(true, std::memory_order_relaxed);
-    stop.wait(false, std::memory_order_relaxed);
-    stopped->set_value();
-    gate.wait();
-    return std::vector<float>(rows.size(), 1.0f);
-  });
+  Install(
+      [canceled, stopped, gate](auto rows, const auto& stop) {
+        canceled->store(true, std::memory_order_relaxed);
+        stop.wait(false, std::memory_order_relaxed);
+        stopped->set_value();
+        gate.wait();
+        return std::vector<float>(rows.size(), 1.0f);
+      },
+      timeout);
 
   std::vector<core::Candidate> candidates{{"先", "", 0.5}};
   EXPECT_EQ(runtime_.Apply(candidates, false, canceled.get()), Outcome::Skipped);
   EXPECT_EQ(saw_stop.wait_for(2s), std::future_status::ready);
+  now = start + timeout - 1ms;
   EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Skipped);
   EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Skipped);
+  now = start + timeout;
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Timeout);
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Timeout);
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::CircuitOpen);
   EXPECT_DOUBLE_EQ(candidates.front().score, 0.5);
   release.set_value();
 }

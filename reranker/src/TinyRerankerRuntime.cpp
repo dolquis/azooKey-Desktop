@@ -197,7 +197,9 @@ TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& 
   if (canceled() || (deadline && started >= *deadline)) return Outcome::Skipped;
   if (pending_.valid()) {
     if (pending_.wait_for(0ms) != std::future_status::ready) {
-      return pending_timed_out_ ? RecordFailure(Outcome::Timeout) : Outcome::Skipped;
+      if (!pending_timed_out_ && started - pending_started_ < timeout) return Outcome::Skipped;
+      pending_timed_out_ = true;
+      return RecordFailure(Outcome::Timeout);
     }
     // The previous request already fell back. Discard its result.
     pending_ = {};
@@ -225,6 +227,7 @@ TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& 
     std::thread worker(std::move(work));
     worker.detach();
     pending_ = std::move(result);
+    pending_started_ = started;
     pending_timed_out_ = false;
     for (;;) {
       if (canceled()) {

@@ -91,6 +91,7 @@ class TinyRerankerRuntime {
   std::function<std::chrono::steady_clock::time_point()> now_for_tests_;
   std::shared_ptr<ITinyRerankerRuntime> runtime_;
   std::future<std::vector<float>> pending_;
+  std::chrono::steady_clock::time_point pending_started_{};
   bool pending_timed_out_{};
   bool load_attempted_{};
   int failures_{};

@@ -397,8 +397,9 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
   watchdog は期限後の出力を破棄し、実行中の forward に停止を通知する。
   要求の deadline が先に来るか同時ならスキップし、tiny 自身の timeout が先に来た場合に限って
   `timeout` として数える。前の forward がまだ実行中なら新しい forward は始めない。
-  前の要求が tiny 自身の timeout で終わった場合は新しい要求も `timeout` として数え、
-  取り消しや要求の deadline で終わった場合は新しい要求もスキップする。スキップは失敗回数に含めない。
+  前の要求が tiny 自身の timeout で終わった場合は、新しい要求も `timeout` として数える。
+  取り消しや要求の deadline で終わった場合は、まだ実行中の forward の開始から tiny 自身の timeout に
+  達するまではスキップし、達した後は新しい要求ごとに `timeout` として数える。スキップは失敗回数に含めない。
   このスキップは下記の fallback reason にも含めない。
 - **ロード失敗は即時無効化（breaker とは別経路）**: ONNX load 失敗時は §7.1 の
   とおり当該セッションで reranker を**即時無効化**し、`reason=load_failed` で

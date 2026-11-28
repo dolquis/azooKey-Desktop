@@ -1422,3 +1422,9 @@ M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
   末尾の語を外す）。かなだけの候補を足さないのは、誤った読みのかながそのまま正解を top5 から押し出すためである。
   変換し直しは元の変換と同じ時間予算で打ち切り、失敗したときは枠を変えない。aggressive で先頭に出た語は枠に
   含めず、変換の第一候補の後ろの最初の語を枠の先頭とする。
+- M55 の受け入れでは `typo_correction_top5_accuracy` の目標を 40% とする（roadmap M55）。M55 は合格基準 v1
+  （`conversion-quality-benchmark-spec.md` §9）の 85% の例外で、85% は M53〜M57 完了時点の目標として残す。残りは別
+  Issue（Zenzai の NLL による読みの仮説の順位付け、学習済みストアでの評価）で扱う。
+- 受け入れ構成（`conversion-quality-benchmark-spec.md` §7）の DEV-2150 の採取では、変換し直しの 1 回分が遅延に乗る。
+  typo の p50 / p95 は 32.4 / 67.9 ms（`off` で 10.8 / 22.4 ms）、clean の p50 / p95 は 25.1 / 54.5 ms（`off` で
+  13.4 / 48.9 ms）で、合格基準 v1 の `latency_p95_ms` 50 ms 以下を超える。M55 ではこれを受け入れ、短縮は別 Issue で扱う。

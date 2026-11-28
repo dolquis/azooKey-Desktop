@@ -210,8 +210,9 @@ TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& 
   const auto expires = request_expires_first ? *deadline : tiny_expires;
   auto stop = std::make_shared<std::atomic<bool>>(false);
   const auto request_stop = [&] {
+    // No notify_all(): std::atomic wait/notify imports msvcp140_atomic_wait.dll,
+    // which the MSI does not ship. Runtimes poll the flag instead.
     stop->store(true, std::memory_order_relaxed);
-    stop->notify_all();
   };
   const auto expire = [&] {
     request_stop();

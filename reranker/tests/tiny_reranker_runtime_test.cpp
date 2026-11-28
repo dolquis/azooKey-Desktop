@@ -4,6 +4,7 @@
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 
 #include "MockTinyRerankerRuntime.h"
 #include "azookey/core/PlatformPaths.h"
@@ -14,6 +15,11 @@ namespace {
 using namespace std::chrono_literals;
 using Outcome = TinyRerankOutcome;
 using test::MockTinyRerankerRuntime;
+
+// The runtime only stores the stop flag (no atomic notify), so poll it.
+void WaitForStop(const std::atomic<bool>& stop) {
+  while (!stop.load(std::memory_order_relaxed)) std::this_thread::sleep_for(1ms);
+}
 
 class TinyRerankerRuntimeTest : public testing::Test {
  protected:
@@ -200,7 +206,7 @@ TEST_F(TinyRerankerRuntimeTest, WatchdogDiscardsTheLateResultAndOpensTheBreaker)
   auto completion = stopped->get_future();
   Install(
       [stopped](auto rows, const auto& stop) {
-        stop.wait(false, std::memory_order_relaxed);
+        WaitForStop(stop);
         stopped->set_value();
         return std::vector<float>(rows.size(), 1.0f);
       },
@@ -266,7 +272,7 @@ TEST_F(TinyRerankerRuntimeTest, RequestDeadlineStopsForwardAndPendingWorkDoesNot
   auto mock = std::make_shared<MockTinyRerankerRuntime>(
       [started, stopped, gate](auto rows, const auto& stop) {
         started->set_value();
-        stop.wait(false, std::memory_order_relaxed);
+        WaitForStop(stop);
         stopped->set_value();
         gate.wait();
         return std::vector<float>(rows.size(), 1.0f);
@@ -333,7 +339,7 @@ TEST_F(TinyRerankerRuntimeTest, PendingCanceledForwardCountsOnceItReachesTinyTim
   Install(
       [canceled, stopped, gate](auto rows, const auto& stop) {
         canceled->store(true, std::memory_order_relaxed);
-        stop.wait(false, std::memory_order_relaxed);
+        WaitForStop(stop);
         stopped->set_value();
         gate.wait();
         return std::vector<float>(rows.size(), 1.0f);

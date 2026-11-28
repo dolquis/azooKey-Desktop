@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <future>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "azookey/core/Candidate.h"
+#include "azookey/reranker/FeatureExtractor.h"
 
 namespace azookey::reranker {
 
@@ -34,6 +36,16 @@ TinyRerankerConfig ClampTinyRerankerConfig(TinyRerankerConfig config);
 std::optional<std::filesystem::path> ResolveTinyRerankerModelPath(
     const std::string& explicit_path, const std::filesystem::path& user_models,
     const std::filesystem::path& bundled_models);
+
+struct TinyRerankerBatch {
+  std::vector<size_t> indices;
+  std::vector<std::array<float, 12>> features;
+};
+
+// Indices refer to the original candidate order. An empty user span supplies
+// default signals. A nonempty span must have one entry per candidate.
+TinyRerankerBatch PrepareTinyRerankerBatch(const std::vector<core::Candidate>& candidates,
+                                           std::span<const UserSignals> user = {});
 
 class ITinyRerankerRuntime {
  public:
@@ -70,16 +82,22 @@ class TinyRerankerRuntime {
   void SetModelDirectories(std::filesystem::path user_models, std::filesystem::path bundled_models);
   void SetFactoryForTests(Factory factory, std::optional<std::chrono::milliseconds> timeout = {});
   void SetClockForTests(std::function<std::chrono::steady_clock::time_point()> now);
+  // A prepared batch must describe this candidate list before any score or order changes.
   TinyRerankOutcome Apply(std::vector<core::Candidate>& candidates, bool secure,
-                          const std::atomic<bool>* cancel = nullptr, Deadline deadline = {});
+                          const std::atomic<bool>* cancel = nullptr, Deadline deadline = {},
+                          const TinyRerankerBatch* prepared = nullptr);
   TinyRerankOutcome ApplyPredictionBatches(std::vector<core::Candidate>& dictionary,
                                            std::vector<core::Candidate>& predictions, bool secure,
-                                           const std::atomic<bool>* cancel);
+                                           const std::atomic<bool>* cancel,
+                                           std::span<const UserSignals> dictionary_user = {},
+                                           std::span<const UserSignals> prediction_user = {});
 
  private:
   // Apply one forward without treating its success as a request-level success.
   TinyRerankOutcome ApplyBatch(std::vector<core::Candidate>& candidates, bool secure,
-                               const std::atomic<bool>* cancel, Deadline deadline);
+                               const std::atomic<bool>* cancel, Deadline deadline,
+                               std::span<const UserSignals> user,
+                               const TinyRerankerBatch* prepared = nullptr);
   void ResetSession();
   TinyRerankOutcome RecordFailure(TinyRerankOutcome outcome);
 

@@ -1521,9 +1521,10 @@ void InferenceEngine::SetTinyRerankerModelDirectories(std::filesystem::path user
 
 void InferenceEngine::ApplyTinyRerankerLocked(std::vector<core::Candidate>& candidates, bool secure,
                                               const std::atomic<bool>* cancel,
-                                              reranker::TinyRerankerRuntime::Deadline deadline) {
-  LogTinyRerankOutcome(
-      tiny_reranker_.Apply(candidates, secure || tiny_reranker_privacy_secure_, cancel, deadline));
+                                              reranker::TinyRerankerRuntime::Deadline deadline,
+                                              const reranker::TinyRerankerBatch& batch) {
+  LogTinyRerankOutcome(tiny_reranker_.Apply(candidates, secure || tiny_reranker_privacy_secure_,
+                                           cancel, deadline, &batch));
 }
 
 void InferenceEngine::LogTinyRerankOutcome(reranker::TinyRerankOutcome outcome) const {
@@ -1537,7 +1538,8 @@ void InferenceEngine::LogTinyRerankOutcome(reranker::TinyRerankOutcome outcome) 
 }
 
 void InferenceEngine::ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
-                                                        const std::atomic<bool>* cancel) const {
+                                                        const std::atomic<bool>* cancel,
+                                                        std::span<const reranker::UserSignals> user) const {
   if (!tiny_reranker_feature_observer_for_tests_ ||
       (cancel && cancel->load(std::memory_order_relaxed))) {
     return;
@@ -1549,7 +1551,8 @@ void InferenceEngine::ObserveTinyRerankerFeaturesLocked(std::vector<core::Candid
     if (signals.candidate_length == 0) {
       signals.candidate_length = core::ComputeCandidateLength(candidate.surface);
     }
-    features.push_back(reranker::ExtractFeaturesV1(signals, {}));
+    features.push_back(reranker::ExtractFeaturesV1(
+        signals, user.empty() ? reranker::UserSignals{} : user[features.size()]));
   }
   tiny_reranker_feature_observer_for_tests_(candidates, features);
 }
@@ -1830,6 +1833,8 @@ std::optional<HealthTransition> InferenceEngine::ApplyHealthEvent(HealthEvent ev
 std::optional<HealthTransition> InferenceEngine::ApplyHealthEventLocked(HealthEvent event) {
   const auto from = health_.state();
   const auto transition = health_.Apply(event);
+  if (transition && (from == HealthState::SafeMode || transition->to == HealthState::SafeMode))
+    SyncExposurePolicyLocked();
   if (runtime_logger_) {
     if (transition) {
       runtime_logger_->Log(
@@ -1850,6 +1855,7 @@ std::optional<HealthTransition> InferenceEngine::ApplyHealthEventLocked(HealthEv
 void InferenceEngine::RestoreHealthState(HealthState state) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   health_ = HealthStateMachine(state);
+  SyncExposurePolicyLocked();
   if (runtime_logger_) {
     runtime_logger_->Log(
         logging::RuntimeLogLevel::Info, "health_state_restored",
@@ -1890,6 +1896,8 @@ void InferenceEngine::ApplyConfigLocked(const EngineConfig& config) {
   config_.nll = ClampNllConfig(config.nll);
   config_.tiny_reranker = reranker::ClampTinyRerankerConfig(config.tiny_reranker);
   tiny_reranker_.SetConfig(config_.tiny_reranker);
+  config_.exposure_trace_enabled = config.exposure_trace_enabled;
+  SyncExposurePolicyLocked();
   ++nll_config_revision_;
   config_.lattice = config.lattice;
   config_.enable_live_conversion = config.enable_live_conversion;
@@ -2108,8 +2116,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
     return typed;
   // DEV-2101: without the lattice, so the other reading's dictionary candidates appended below
   // are its words, not the lattice's paths of it (the DEV-1773 behavior).
+  MixedConversionOptions other_options;
+  other_options.capture_exposure_features = compared.capture_exposure_features;
   auto other = QueryFilteredCandidates(*alternative, context, now_epoch_sec, cancel, max_candidates,
-                                       false, telemetry, tag_boosts, nullptr, false);
+                                       false, telemetry, tag_boosts, &other_options, false);
   const auto best_model_score = [](const CandidatesResult& result) -> std::optional<double> {
     std::optional<double> best;
     for (const auto& candidate : result.candidates)
@@ -2120,8 +2130,17 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
   // Appends `from`'s candidates whose surfaces `into` lacks, keeping their own
   // reading, so the reading not chosen stays in the window: its first `limit`
   // ones when `dictionary_only` is false, its dictionary words otherwise.
-  const auto append_other = [](CandidatesResult& into, CandidatesResult& from, bool dictionary_only,
-                               size_t limit) {
+  const auto transfer_exposure = [](CandidatesResult& into, const CandidatesResult& from,
+                                     const core::Candidate& candidate) {
+    std::erase_if(into.exposure_features,
+                  [&](const auto& row) { return row.surface == candidate.surface; });
+    if (auto it = std::find_if(from.exposure_features.begin(), from.exposure_features.end(),
+                               [&](const auto& row) { return row.Matches(candidate); });
+        it != from.exposure_features.end())
+      into.exposure_features.push_back(*it);
+  };
+  const auto append_other = [&](CandidatesResult& into, CandidatesResult& from, bool dictionary_only,
+                                size_t limit) {
     size_t appended = 0;
     for (auto& candidate : from.candidates) {
       if (appended == limit) break;
@@ -2132,6 +2151,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
           std::any_of(into.candidates.begin(), into.candidates.end(),
                       [&](const core::Candidate& c) { return c.surface == candidate.surface; });
       if (shown) continue;
+      transfer_exposure(into, from, candidate);
       into.candidates.push_back(std::move(candidate));
       ++appended;
     }
@@ -2178,8 +2198,11 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
       // Without a usable model the typed reading's words all stay: only the
       // other reading's learned words move to the front, with their own reading.
       std::vector<core::Candidate> learned_front;
-      for (size_t i = 0; i < other.candidates.size(); ++i)
-        if (other_is_learned[i]) learned_front.push_back(other.candidates[i]);
+      for (size_t i = 0; i < other.candidates.size(); ++i) {
+        if (!other_is_learned[i]) continue;
+        transfer_exposure(typed, other, other.candidates[i]);
+        learned_front.push_back(other.candidates[i]);
+      }
       const auto is_learned_surface = [&](const core::Candidate& c) {
         return std::any_of(learned_front.begin(), learned_front.end(),
                            [&](const core::Candidate& l) { return l.surface == c.surface; });
@@ -2270,6 +2293,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   bool using_model_converter = false;
   learning::AutoWordStore* auto_word_store = nullptr;
   std::vector<core::Candidate> merged;
+  DictionaryCategoryMasks categories;
   // lattice-conversion-spec section 3.2; appended after the converter's candidates.
   std::vector<core::Candidate> lattice;
   std::optional<core::LatticeStatus> lattice_status;
@@ -2297,8 +2321,13 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     using_model_converter = model_converter_ && converter == model_converter_;
     // Preserve M9's explicit user word score while static layers use M53 scoring.
     RefreshDictionaryLocked();
+    const bool need_categories = !(mixed && mixed->secure) && !tiny_reranker_privacy_secure_ &&
+                                 (config.tiny_reranker.enabled ||
+                                  tiny_reranker_feature_observer_for_tests_ ||
+                                  (mixed && mixed->capture_exposure_features));
     merged = DictionaryCandidates(dictionaries_, kana, learning::LookupMode::Exact, now_epoch_sec,
-                                  32, false);
+                                  32, false, config.user_word_default_score,
+                                  need_categories ? &categories : nullptr);
     if (user_dict_ && user_dictionary_enabled_) {
       auto words = user_dict_->Lookup(kana);
       merged.reserve(merged.size() + words.size());
@@ -2668,8 +2697,26 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   std::vector<core::Candidate> result;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    ObserveTinyRerankerFeaturesLocked(merged, cancel);
-    ApplyTinyRerankerLocked(merged, mixed && mixed->secure, cancel, request_deadline);
+    const bool secure = mixed && mixed->secure;
+    const bool capture = !secure && mixed && mixed->capture_exposure_features &&
+                         ExposureAllowedLocked() && !canceled();
+    const auto user = !secure && !tiny_reranker_privacy_secure_ &&
+                              (capture || config_.tiny_reranker.enabled ||
+                               tiny_reranker_feature_observer_for_tests_)
+                          ? TinyUserSignalsForCandidatesLocked(merged, now_epoch_sec, categories)
+                          : std::vector<reranker::UserSignals>{};
+    ObserveTinyRerankerFeaturesLocked(merged, cancel, user);
+    auto batch = capture || (!secure && !tiny_reranker_privacy_secure_ && config_.tiny_reranker.enabled)
+                     ? reranker::PrepareTinyRerankerBatch(merged, user)
+                     : reranker::TinyRerankerBatch{};
+    if (capture) {
+      for (size_t i = 0; i < batch.indices.size(); ++i) {
+        const auto& candidate = merged[batch.indices[i]];
+        out.exposure_features.push_back(
+            {candidate.surface, candidate.reading, candidate.source, batch.features[i]});
+      }
+    }
+    ApplyTinyRerankerLocked(merged, secure, cancel, request_deadline, batch);
     result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec, cancel);
   }
   if (canceled()) {
@@ -2933,13 +2980,24 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(
   if (rerank_canceled()) return {};
   RefreshDictionaryLocked();
   if (rerank_canceled()) return {};
+  DictionaryCategoryMasks categories;
+  const bool use_signals = !tiny_reranker_privacy_secure_ &&
+                           (config_.tiny_reranker.enabled || tiny_reranker_feature_observer_for_tests_);
   auto dictionary_predictions =
       DictionaryCandidates(dictionaries_, kana, learning::LookupMode::PredictivePrefix,
-                           now_epoch_sec, 32, true, config_.user_word_default_score);
-  ObserveTinyRerankerFeaturesLocked(dictionary_predictions, cancel);
-  ObserveTinyRerankerFeaturesLocked(candidates, cancel);
+                           now_epoch_sec, 32, true, config_.user_word_default_score,
+                           use_signals ? &categories : nullptr);
+  const auto dictionary_user = use_signals
+                                   ? TinyUserSignalsForCandidatesLocked(dictionary_predictions,
+                                                                        now_epoch_sec, categories)
+                                   : std::vector<reranker::UserSignals>{};
+  const auto prediction_user = use_signals ? TinyUserSignalsForCandidatesLocked(candidates, now_epoch_sec, categories)
+                                           : std::vector<reranker::UserSignals>{};
+  ObserveTinyRerankerFeaturesLocked(dictionary_predictions, cancel, dictionary_user);
+  ObserveTinyRerankerFeaturesLocked(candidates, cancel, prediction_user);
   LogTinyRerankOutcome(tiny_reranker_.ApplyPredictionBatches(
-      dictionary_predictions, candidates, tiny_reranker_privacy_secure_, cancel));
+      dictionary_predictions, candidates, tiny_reranker_privacy_secure_, cancel, dictionary_user,
+      prediction_user));
   dictionary_predictions =
       ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec, cancel);
   if (rerank_canceled()) return {};
@@ -3026,8 +3084,14 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
     candidates = converter->Correct(kana, hint, conversion_context);
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
-  ObserveTinyRerankerFeaturesLocked(candidates, nullptr);
-  ApplyTinyRerankerLocked(candidates, false, nullptr);
+  const bool use_signals = !tiny_reranker_privacy_secure_ &&
+                           (config_.tiny_reranker.enabled || tiny_reranker_feature_observer_for_tests_);
+  const auto user = use_signals ? TinyUserSignalsForCandidatesLocked(candidates, now_epoch_sec)
+                                : std::vector<reranker::UserSignals>{};
+  ObserveTinyRerankerFeaturesLocked(candidates, nullptr, user);
+  const auto batch = use_signals ? reranker::PrepareTinyRerankerBatch(candidates, user)
+                                 : reranker::TinyRerankerBatch{};
+  ApplyTinyRerankerLocked(candidates, false, nullptr, {}, batch);
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
@@ -3207,13 +3271,16 @@ bool InferenceEngine::IsMiningCandidateLocked(const std::string& reading,
 bool InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface,
                                         uint64_t now_epoch_sec, const std::string& observation_id,
                                         const std::string& app_name,
-                                        const std::string& left_context) {
+                                        const std::string& left_context,
+                                        const ipc::CommitObservationRequest* exposure,
+                                        const std::string* payload, std::string_view client_id) {
   std::unique_lock history_lock(learning_history_mutex_);
   const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
   learning::AutoWordStore* auto_word_store = nullptr;
   uint32_t auto_word_min_count = 0;
   bool auto_word_auto_register = false;
+  const char* exposure_skipped = nullptr;
   {
     std::unique_lock state_lock(state_mutex_, std::defer_lock);
     std::unique_lock converter_lock(converter_call_mutex_, std::defer_lock);
@@ -3256,7 +3323,9 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
       throw;
     }
     finish_observation();
+    if (exposure && payload) exposure_skipped = RecordExposureLocked(*exposure, *payload, client_id);
   }
+  if (exposure_skipped) LogExposureSkipped(exposure_skipped);
   if (auto_word_store) {
     // Deliberately outside both engine mutexes: Save() writes a temp file,
     // flushes it to disk and renames it, and every QueryCandidates takes
@@ -3302,10 +3371,12 @@ bool InferenceEngine::CommitCorrection(const std::string& reading,
                                        const std::optional<std::string>& selected_surface,
                                        uint64_t now_epoch_sec, const std::string& observation_id,
                                        const std::string& app_name,
-                                       const std::string& left_context) {
+                                       const std::string& left_context,
+                                       const ipc::CommitCorrectionRequest* exposure) {
   std::lock_guard history_lock(learning_history_mutex_);
   const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
+  const char* exposure_skipped = nullptr;
   {
     std::unique_lock state_lock(state_mutex_, std::defer_lock);
     std::unique_lock converter_lock(converter_call_mutex_, std::defer_lock);
@@ -3343,7 +3414,9 @@ bool InferenceEngine::CommitCorrection(const std::string& reading,
       throw;
     }
     finish_observation();
+    if (exposure) exposure_skipped = RecordExposureCorrectionLocked(*exposure);
   }
+  if (exposure_skipped) LogExposureSkipped(exposure_skipped);
   return true;
 }
 
@@ -3510,7 +3583,12 @@ void InferenceEngine::RecordUserDictionaryFailureLocked(const char* error) {
 
 void InferenceEngine::LearningFlushWorker() {
   std::unique_lock<std::mutex> lock(state_mutex_);
+  const auto exposure_expiry = [this]() -> std::optional<std::chrono::steady_clock::time_point> {
+    if (exposures_.empty() || exposure_clock_for_tests_) return std::nullopt;
+    return exposures_.front().expires;
+  };
   while (!learning_flush_stop_) {
+    if (!exposure_clock_for_tests_) PruneExpiredExposuresLocked(std::chrono::steady_clock::now());
     // learning-data-management-spec §15: the persona is computed at startup (the store
     // is loaded before the engine) and again every kPersonaRefreshInterval.
     const auto persona_due = persona_computed_steady_
@@ -3532,13 +3610,19 @@ void InferenceEngine::LearningFlushWorker() {
       continue;
     }
     const auto typo_due = typo_flush_due_steady_;
-    const auto wake_due = typo_due.has_value() ? (std::min)(persona_due, *typo_due) : persona_due;
+    const auto exposure_due = exposure_expiry();
+    const auto wake_due = (std::min)({persona_due, typo_due.value_or(persona_due),
+                                      exposure_due.value_or(persona_due)});
+    const auto schedule_changed = [&] {
+      return learning_flush_stop_ || typo_flush_due_steady_ != typo_due ||
+             exposure_expiry() != exposure_due;
+    };
 
     if (learning_erasure_in_progress_ || !store_ || !store_->dirty() ||
         config_.learning_flush_interval_sec == 0 ||
         !first_unsaved_observation_steady_.has_value()) {
-      learning_flush_cv_.wait_until(lock, wake_due, [this, typo_due]() {
-        return learning_flush_stop_ || typo_flush_due_steady_ != typo_due ||
+      learning_flush_cv_.wait_until(lock, wake_due, [&]() {
+        return schedule_changed() ||
                (!learning_erasure_in_progress_ && store_ && store_->dirty() &&
                 config_.learning_flush_interval_sec > 0 &&
                 first_unsaved_observation_steady_.has_value());
@@ -3549,8 +3633,8 @@ void InferenceEngine::LearningFlushWorker() {
     const auto flush_deadline = *first_unsaved_observation_steady_ +
                                 std::chrono::seconds(config_.learning_flush_interval_sec);
     const bool changed = learning_flush_cv_.wait_until(
-        lock, (std::min)(flush_deadline, wake_due), [this, typo_due]() {
-          return learning_flush_stop_ || typo_flush_due_steady_ != typo_due ||
+        lock, (std::min)(flush_deadline, wake_due), [&]() {
+          return schedule_changed() ||
                  learning_erasure_in_progress_ || !store_ || !store_->dirty() ||
                  config_.learning_flush_interval_sec == 0 ||
                  !first_unsaved_observation_steady_.has_value();

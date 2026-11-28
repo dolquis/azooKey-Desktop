@@ -54,6 +54,8 @@ struct EditableSettings {
   bool openai_api_key_unavailable{false};
   std::string log_level{"info"};
   std::string crash_report_consent{"off"};
+  // The learning pane saves its switch immediately through SaveExposureTraceSetting.
+  bool exposure_trace_enabled{};
   // Unset keeps whatever dictionary object is on disk.
   std::optional<DictionarySettings> dictionary;
   // The switches the UI started from; when set, only switches that differ from it are written.
@@ -109,6 +111,10 @@ SettingsDocumentResult LoadSettingsDocument(
 
 SettingsSaveResult SaveSettingsDocument(
     const std::filesystem::path& path, const EditableSettings& settings,
+    std::chrono::milliseconds lock_timeout = std::chrono::milliseconds(5000));
+
+SettingsSaveResult SaveExposureTraceSetting(
+    const std::filesystem::path& path, bool enabled,
     std::chrono::milliseconds lock_timeout = std::chrono::milliseconds(5000));
 
 // Keys whose change between two saved states only takes effect after the Host restarts

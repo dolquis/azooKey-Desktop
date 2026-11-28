@@ -2814,6 +2814,54 @@ TEST(PayloadsTest, ListLearningEntriesResponseRoundTripsEntries) {
   EXPECT_TRUE(parsed_failed->entries.empty());
 }
 
+TEST(PayloadsTest, ListLearningEntriesResponseExposureTraceSummaryIsOptional) {
+  using namespace azookey::ipc;
+  ListLearningEntriesResponse response;
+  response.total = 2;
+  const auto legacy_wire = BuildListLearningEntriesResponse(response);
+  const auto legacy_object = json::Parse(legacy_wire);
+  ASSERT_TRUE(legacy_object);
+  EXPECT_FALSE(legacy_object->Find("exposure_trace"));
+  const auto legacy = ParseListLearningEntriesResponse(legacy_wire);
+  ASSERT_TRUE(legacy);
+  EXPECT_FALSE(legacy->exposure_trace);
+
+  response.exposure_trace = ExposureTraceSummary{0, 9007199254740993ULL, 30};
+  const auto wire = BuildListLearningEntriesResponse(response);
+  EXPECT_NE(wire.find("\"size_bytes\":9007199254740993"), std::string::npos);
+  const auto decoded = ParseListLearningEntriesResponse(wire);
+  ASSERT_TRUE(decoded && decoded->exposure_trace);
+  EXPECT_EQ(decoded->total, 2u);
+  EXPECT_TRUE(decoded->entries.empty());
+  EXPECT_EQ(decoded->exposure_trace->records, 0u);
+  EXPECT_EQ(decoded->exposure_trace->size_bytes, 9007199254740993ULL);
+  EXPECT_EQ(decoded->exposure_trace->retention_days, 30u);
+}
+
+TEST(PayloadsTest, ListLearningEntriesResponseIgnoresMalformedExposureTraceSummary) {
+  using namespace azookey::ipc;
+  for (const char* malformed : {
+           "null",
+           "[]",
+           R"({"records":3,"size_bytes":123})",
+           R"({"records":-1,"size_bytes":123,"retention_days":30})",
+           R"({"records":3,"size_bytes":"123","retention_days":30})",
+           R"({"records":3,"size_bytes":18446744073709551616,"retention_days":30})",
+           R"({"records":3,"size_bytes":123,"retention_days":0.5})",
+       }) {
+    SCOPED_TRACE(malformed);
+    const auto decoded = ParseListLearningEntriesResponse(
+        std::string(R"({"total":1,"entries":[{"id":"entry-1","reading":"かな","surface":"仮名"}],)"
+                    R"("exposure_trace":)") +
+        malformed + "}");
+    ASSERT_TRUE(decoded && decoded->ok);
+    EXPECT_FALSE(decoded->exposure_trace);
+    EXPECT_EQ(decoded->total, 1u);
+    ASSERT_EQ(decoded->entries.size(), 1u);
+    EXPECT_EQ(decoded->entries[0].id, "entry-1");
+  }
+}
+
 TEST(PayloadsTest, ListLearningEntriesResponseSkipsMalformedEntriesAndBoundsSizes) {
   using namespace azookey::ipc;
   // Entries missing id / reading / surface are skipped; non-string tags and

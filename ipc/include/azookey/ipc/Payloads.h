@@ -815,11 +815,20 @@ struct LearningEntryField {
   std::map<std::string, std::string> metadata;
 };
 
+struct ExposureTraceSummary {
+  uint64_t records{};
+  uint64_t size_bytes{};
+  uint64_t retention_days{};
+};
+
 struct ListLearningEntriesResponse {
   bool ok{true};
   std::optional<std::string> error;
   uint64_t total{};
   std::vector<LearningEntryField> entries;
+  // Whole-store summary for "learning", independent of query and page.
+  // Older Hosts omit it.
+  std::optional<ExposureTraceSummary> exposure_trace;
 };
 
 // Exactly one form: `id` (settings app), or `reading` + `surface` with

@@ -24,6 +24,7 @@
 #include "azookey/core/IConverter.h"
 #include "azookey/host/AiBackend.h"
 #include "azookey/host/CandidateTags.h"
+#include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/EnglishCandidates.h"
 #include "azookey/host/EnglishDictionaryStore.h"
 #include "azookey/host/HealthStateMachine.h"
@@ -38,6 +39,7 @@
 #include "azookey/learning/DictionaryStore.h"
 #include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
+#include "azookey/learning/RerankerTraceStore.h"
 #include "azookey/learning/Persona.h"
 #include "azookey/learning/Reranker.h"
 #include "azookey/learning/TypoLearningStore.h"
@@ -74,6 +76,7 @@ void DropRepeatedUnitModelCandidates(std::vector<core::Candidate>& candidates,
 // M63-B (docs/mixed-english-auto-conversion-spec.md sections 7, 10 and 12): how a
 // reading that holds M63 English segments is converted.
 struct MixedConversionOptions {
+  bool capture_exposure_features{};
   // Byte ranges of the reading that the English segments occupy (section 7).
   std::vector<std::pair<size_t, size_t>> english_ranges;
   // Section 10: the conversion ends by the earlier of this and the Zenzai budget.
@@ -168,6 +171,7 @@ struct EngineConfig {
   EnglishCandidateConfig english;
   NllConfig nll;
   reranker::TinyRerankerConfig tiny_reranker;
+  bool exposure_trace_enabled{};
   LatticeConfig lattice;
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
@@ -356,6 +360,12 @@ class InferenceEngine {
   // including one that failed (which publishes secure).
   void SetTypoWritesSuspended(bool suspended);
   void SetTinyRerankerPrivacyMode(bool secure);
+  // The Host owns the trace store and keeps it alive through engine shutdown.
+  void SetRerankerTraceStore(learning::RerankerTraceStore* store);
+  void SetExposureTracePolicy(bool enabled, bool learning_allowed);
+  learning::RerankerTraceStats ExposureTraceStats() const;
+  std::optional<uint64_t> BeginExposureCapture(bool allowed, bool secure);
+  void SetExposureClockForTests(std::function<std::chrono::steady_clock::time_point()> clock);
   void SetTinyRerankerModelDirectories(std::filesystem::path user_models,
                                        std::filesystem::path bundled_models);
   // External, non-owning; nullptr disables new-word mining entirely (M36-A).
@@ -515,6 +525,14 @@ class InferenceEngine {
   bool StartModelPreload(ModelLoadOptions options);
   void WaitForModelPreload();
 
+  struct ExposureFeature {
+    std::string surface;
+    std::string reading;
+    core::CandidateSource source;
+    std::array<float, 12> values;
+    bool Matches(const core::Candidate& candidate) const;
+  };
+
   struct CandidatesResult {
     std::vector<core::Candidate> candidates;
     // Non-empty only under typo_correction_mode aggressive (the v1 auto_replace): the
@@ -524,7 +542,13 @@ class InferenceEngine {
     // MixedConversionOptions::deadline): its candidates are best-so-far or the
     // fallback's (M63-B section 10 leaves such a conversion out).
     bool model_deadline_exceeded{false};
+    std::vector<ExposureFeature> exposure_features;
   };
+
+  std::optional<std::string> PublishExposure(
+      uint64_t generation, std::string_view client_id, std::string_view context,
+      const std::vector<ipc::CandidateField>& candidates,
+      std::vector<std::optional<std::array<float, 12>>> features);
 
   // QueryCandidates with optional cancel polling, plus the typo-corrected
   // reading (M35). Returns an empty result when *cancel is observed true.
@@ -610,7 +634,9 @@ class InferenceEngine {
   // context hash and may be empty (global row, empty-context hash).
   bool CommitObservation(const std::string& reading, const std::string& surface,
                          uint64_t now_epoch_sec, const std::string& observation_id = {},
-                         const std::string& app_name = {}, const std::string& left_context = {});
+                         const std::string& app_name = {}, const std::string& left_context = {},
+                         const ipc::CommitObservationRequest* exposure = nullptr,
+                         const std::string* payload = nullptr, std::string_view client_id = {});
   bool CommitSegmentsObservation(const ipc::CommitSegmentsObservationRequest& request,
                                  uint64_t now_epoch_sec);
   // M35: records one observed (mistyped reading -> retyped reading) pair.
@@ -629,7 +655,8 @@ class InferenceEngine {
   bool CommitCorrection(const std::string& reading, const std::string& rejected_surface,
                         const std::optional<std::string>& selected_surface, uint64_t now_epoch_sec,
                         const std::string& observation_id = {}, const std::string& app_name = {},
-                        const std::string& left_context = {});
+                        const std::string& left_context = {},
+                        const ipc::CommitCorrectionRequest* exposure = nullptr);
   bool FlushLearningStore();
 
   // M49 learning data management (DEV-1190, learning-data-management-spec
@@ -777,10 +804,27 @@ class InferenceEngine {
                                    const std::vector<std::string>& released, uint64_t now_epoch_sec,
                                    size_t max_records, double min_weight);
   void ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
-                                         const std::atomic<bool>* cancel) const;
+                                         const std::atomic<bool>* cancel,
+                                         std::span<const reranker::UserSignals> user) const;
   void ApplyTinyRerankerLocked(std::vector<core::Candidate>& candidates, bool secure,
                                const std::atomic<bool>* cancel,
-                               reranker::TinyRerankerRuntime::Deadline deadline = {});
+                               reranker::TinyRerankerRuntime::Deadline deadline,
+                               const reranker::TinyRerankerBatch& batch);
+  reranker::UserSignals TinyUserSignalsLocked(const std::string& reading,
+                                             const std::string& surface, uint16_t category_mask,
+                                             uint64_t now_epoch_sec) const;
+  std::vector<reranker::UserSignals> TinyUserSignalsForCandidatesLocked(
+      const std::vector<core::Candidate>& candidates, uint64_t now_epoch_sec,
+      const DictionaryCategoryMasks& categories = {}) const;
+  bool ExposureAllowedLocked() const;
+  void SyncExposurePolicyLocked();
+  void InvalidateExposuresLocked();
+  void PruneExpiredExposuresLocked(std::chrono::steady_clock::time_point now);
+  void LogExposureSkipped(std::string_view reason) const;
+  const char* RecordExposureLocked(const ipc::CommitObservationRequest& request,
+                                   const std::string& payload, std::string_view client_id);
+  const char* RecordExposureCorrectionLocked(const ipc::CommitCorrectionRequest& request);
+  std::chrono::steady_clock::time_point ExposureNowLocked() const;
   void LogTinyRerankOutcome(reranker::TinyRerankOutcome outcome) const;
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
@@ -842,6 +886,19 @@ class InferenceEngine {
   learning::Reranker reranker_;
   reranker::TinyRerankerRuntime tiny_reranker_;
   bool tiny_reranker_privacy_secure_{};
+  struct CachedExposure {
+    std::string id;
+    std::string client_id;
+    std::string left_context_hash;
+    std::vector<ipc::CandidateField> candidates;
+    std::vector<std::optional<std::array<float, 12>>> features;
+    std::chrono::steady_clock::time_point expires;
+  };
+  learning::RerankerTraceStore* exposure_trace_store_{};
+  bool exposure_learning_allowed_{true};
+  uint64_t exposure_generation_{};
+  std::deque<CachedExposure> exposures_;
+  std::function<std::chrono::steady_clock::time_point()> exposure_clock_for_tests_;
   learning::UserDictionary* user_dict_{nullptr};
   // Written under both state_mutex_ and typo_store_mutex_, so either lock
   // reads it.

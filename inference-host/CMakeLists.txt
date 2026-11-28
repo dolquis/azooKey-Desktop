@@ -31,6 +31,7 @@ add_library(azookey_host STATIC
   src/UpdateToast.cpp
   src/InferenceEngine.cpp
   src/InferenceEngineLearningData.cpp
+  src/InferenceEngineExposure.cpp
   src/InferenceEngineUserDictImport.cpp
   src/LearningDataManager.cpp
   src/LookupCli.cpp

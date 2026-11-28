@@ -72,6 +72,7 @@
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
+#include "azookey/learning/RerankerTraceStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/logging/RuntimeLogger.h"
 
@@ -1055,14 +1056,28 @@ int main(int argc, char** argv) {
     converter->LoadFromTsv(mock_dict_path);
   }
 
+  azookey::learning::RerankerTraceStore exposure_trace(
+      user_paths->learning_path.parent_path() / "reranker_trace.jsonl.enc",
+      [&runtime_log](std::string_view reason) {
+        runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "reranker_trace_storage",
+                        {{"reason", SafeLogText(std::string(reason))}});
+      });
   azookey::host::InferenceEngine engine(std::move(converter), &store, config, &runtime_log);
   engine.SetUserDictionary(&user_dict);
   // Section 12.12.2: the published privacy_mode_secure, which is also on
   // for an invalid settings.json (fail closed); HandleUpdateConfig follows
   // every reload.
-  const bool privacy_secure = settings_store.LockPrivacyPolicy().privacy_mode_secure;
+  bool privacy_secure;
+  bool exposure_learning_allowed;
+  {
+    const auto privacy = settings_store.LockPrivacyPolicy();
+    privacy_secure = privacy.privacy_mode_secure;
+    exposure_learning_allowed = !privacy.policy.secure && privacy.policy.learning_allowed;
+  }
   engine.SetTypoWritesSuspended(privacy_secure);
   engine.SetTinyRerankerPrivacyMode(privacy_secure);
+  engine.SetExposureTracePolicy(config.exposure_trace_enabled, exposure_learning_allowed);
+  engine.SetRerankerTraceStore(&exposure_trace);
   std::filesystem::path tiny_user_models;
   if (path_inputs.local_app_data) tiny_user_models = *path_inputs.local_app_data / "azooKey/models";
   std::filesystem::path tiny_bundled_models;

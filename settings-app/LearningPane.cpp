@@ -21,6 +21,7 @@
 
 #include "LearningPaneModel.h"
 #include "ModelPaneModel.h"
+#include "SettingsDocument.h"
 #include "SettingsIpcClient.h"
 #include "UiDispatch.h"
 
@@ -142,6 +143,21 @@ void LearningPane::Build(controls::StackPanel panel,
   entries_section_ = controls::StackPanel();
   entries_section_.Spacing(8);
 
+  exposure_trace_setting_ = controls::StackPanel();
+  exposure_trace_toggle_ = controls::ToggleSwitch();
+  exposure_trace_toggle_.Header(
+      winrt::box_value(resources.GetString(L"Learning_ExposureTraceOptIn")));
+  exposure_trace_toggle_.IsEnabled(false);
+  SetId(exposure_trace_toggle_, L"LearningExposureTraceToggle");
+  exposure_trace_toggle_.Toggled([weak = weak_from_this()](auto const&, auto const&) {
+    if (const auto self = weak.lock())
+      self->SaveExposureTraceOptIn(self->exposure_trace_toggle_.IsOn());
+  });
+  exposure_trace_setting_.Children().Append(exposure_trace_toggle_);
+  exposure_trace_setting_.Children().Append(
+      Block(resources.GetString(L"Learning_ExposureTraceOptInDescription"), true));
+  entries_section_.Children().Append(exposure_trace_setting_);
+
   // Adding a word, on the user dictionary tab only. The settings app never opens the dictionary
   // file; the Host adds the word (AddUserWord) and the listing is read again.
   add_section_ = controls::StackPanel();
@@ -228,6 +244,11 @@ void LearningPane::Build(controls::StackPanel panel,
   });
   search_row.Children().Append(search_button_);
   entries_section_.Children().Append(search_row);
+
+  exposure_trace_text_ = Block(L"", true);
+  exposure_trace_text_.Visibility(xaml::Visibility::Collapsed);
+  SetId(exposure_trace_text_, L"LearningExposureTraceSummary");
+  entries_section_.Children().Append(exposure_trace_text_);
 
   entries_panel_ = controls::StackPanel();
   entries_panel_.Spacing(6);
@@ -354,6 +375,61 @@ void LearningPane::OnShown() {
   if (IsUserDictTab()) ProbeUserDictFeatures();
 }
 
+void LearningPane::SetExposureTraceSetting(std::optional<std::filesystem::path> path,
+                                            bool enabled) {
+  exposure_trace_settings_path_ = std::move(path);
+  exposure_trace_enabled_ = enabled;
+  exposure_trace_toggle_.IsOn(enabled);
+  exposure_trace_toggle_.IsEnabled(exposure_trace_settings_path_.has_value());
+}
+
+winrt::fire_and_forget LearningPane::SaveExposureTraceOptIn(bool enabled) {
+  if (!exposure_trace_settings_path_ || exposure_trace_saving_ || enabled == exposure_trace_enabled_) {
+    co_return;
+  }
+  const auto self = shared_from_this();
+  const auto dispatcher = dispatcher_;
+  const auto path = *exposure_trace_settings_path_;
+  exposure_trace_saving_ = true;
+  exposure_trace_toggle_.IsEnabled(false);
+  status_bar_.IsOpen(false);
+  try {
+    co_await winrt::resume_background();
+    const auto saved = SaveExposureTraceSetting(path, enabled);
+    SettingsIpcResult notified;
+    if (saved.ok) {
+      try {
+        notified = NotifyHostOfSettingsChange(DefaultSettingsIpcOptions());
+      } catch (...) {
+        // The file still has the chosen setting if the Host is unavailable.
+      }
+    }
+    co_await ResumeForeground(dispatcher);
+    if (saved.ok) exposure_trace_enabled_ = enabled;
+    exposure_trace_toggle_.IsOn(exposure_trace_enabled_);
+    exposure_trace_saving_ = false;
+    exposure_trace_toggle_.IsEnabled(true);
+    ResourceLoader resources;
+    if (!saved.ok) {
+      ShowStatus(controls::InfoBarSeverity::Error, resources.GetString(L"SaveFailedTitle"),
+                 resources.GetString(saved.quarantined_path ? L"SaveFailedAfterQuarantineMessage"
+                                                            : L"SaveFailedMessage"));
+    } else if (!notified.ok) {
+      ShowStatus(controls::InfoBarSeverity::Warning, resources.GetString(L"SavedHostWarningTitle"),
+                 resources.GetString(L"HostUpdateFailedMessage"));
+    }
+  } catch (...) {
+    dispatcher.TryEnqueue([self] {
+      self->exposure_trace_toggle_.IsOn(self->exposure_trace_enabled_);
+      self->exposure_trace_saving_ = false;
+      self->exposure_trace_toggle_.IsEnabled(true);
+      ResourceLoader resources;
+      self->ShowStatus(controls::InfoBarSeverity::Error, resources.GetString(L"SaveFailedTitle"),
+                       resources.GetString(L"Learning_UnexpectedError"));
+    });
+  }
+}
+
 bool LearningPane::IsUserDictTab() const {
   return tab_index_ >= 0 && tab_index_ < static_cast<int>(kLearningStoreTabs.size()) &&
          kLearningStoreTabs[static_cast<size_t>(tab_index_)].id == "user_dict";
@@ -405,6 +481,11 @@ void LearningPane::SelectTab(int index) {
   entries_section_.Visibility(shown_when(LearningTabKind::Store));
   persona_section_.Visibility(shown_when(LearningTabKind::Persona));
   backup_section_.Visibility(shown_when(LearningTabKind::Backup));
+  const bool learning_tab = kind == LearningTabKind::Store &&
+                            kLearningStoreTabs[static_cast<size_t>(index)].id == "learning";
+  exposure_trace_setting_.Visibility(learning_tab ? xaml::Visibility::Visible
+                                                  : xaml::Visibility::Collapsed);
+  ShowExposureTraceSummary(std::nullopt);
   status_bar_.IsOpen(false);
   if (kind != LearningTabKind::Store) {
     if (kind == LearningTabKind::Persona && host_.persona_shown) host_.persona_shown();
@@ -487,6 +568,26 @@ void LearningPane::UpdatePager() {
                                     " / " + std::to_string(total_)));
 }
 
+void LearningPane::ShowExposureTraceSummary(
+    const std::optional<azookey::ipc::ExposureTraceSummary>& summary) {
+  if (!summary) {
+    exposure_trace_text_.Visibility(xaml::Visibility::Collapsed);
+    return;
+  }
+  const ResourceLoader resources;
+  std::wstring text(resources.GetString(L"Learning_ExposureTraceSummary"));
+  const auto replace = [&](std::wstring_view marker, uint64_t value) {
+    if (const auto at = text.find(marker); at != std::wstring::npos) {
+      text.replace(at, marker.size(), std::to_wstring(value));
+    }
+  };
+  replace(L"{records}", summary->records);
+  replace(L"{bytes}", summary->size_bytes);
+  replace(L"{days}", summary->retention_days);
+  exposure_trace_text_.Text(winrt::hstring(text));
+  exposure_trace_text_.Visibility(xaml::Visibility::Visible);
+}
+
 winrt::fire_and_forget LearningPane::LoadPage(bool keep_status) {
   const auto self = shared_from_this();
   if (tab_index_ >= static_cast<int>(kLearningStoreTabs.size())) co_return;
@@ -508,11 +609,13 @@ winrt::fire_and_forget LearningPane::LoadPage(bool keep_status) {
     SetBusy(false);
     ResourceLoader resources;
     if (result.status != HostCallStatus::Ok) {
+      ShowExposureTraceSummary(std::nullopt);
       ShowStatus(controls::InfoBarSeverity::Error, resources.GetString(L"Learning_ProblemTitle"),
                  Str(resources, HostCallStatusResource(result.status)));
       co_return;
     }
     if (!result.response->ok) {
+      ShowExposureTraceSummary(std::nullopt);
       ShowStatus(controls::InfoBarSeverity::Error, resources.GetString(L"Learning_ProblemTitle"),
                  Str(resources, LearningErrorResource(result.response->error.value_or(""))));
       co_return;
@@ -520,6 +623,7 @@ winrt::fire_and_forget LearningPane::LoadPage(bool keep_status) {
     loaded_once_ = true;
     entries_ = result.response->entries;
     total_ = result.response->total;
+    if (request.store == "learning") ShowExposureTraceSummary(result.response->exposure_trace);
     RenderEntries();
   } catch (...) {
     RecoverFromFailure();

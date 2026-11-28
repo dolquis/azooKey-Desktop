@@ -234,6 +234,8 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
     tiny.failure_threshold =
         ReadClampedInt32(*reranker, "tinyNeuralFailureThreshold", tiny.failure_threshold,
                          azookey::reranker::kTinyFailureMin, azookey::reranker::kTinyFailureMax);
+    settings.exposure_trace_enabled =
+        ReadBool(*reranker, "exposureTraceEnabled", settings.exposure_trace_enabled);
   }
   settings.input_mode =
       ReadEnum(object, "inputMode", settings.input_mode, {"hiragana", "alnum_half", "alnum_full"});
@@ -464,7 +466,8 @@ SettingsStore::SettingsStore(std::filesystem::path settings_path,
 
 SettingsStore::PrivacyGuard SettingsStore::LockPrivacyPolicy() const {
   std::unique_lock lock(privacy_mutex_);
-  return {std::move(lock), privacy_policy_, privacy_mode_secure_, typo_learning_};
+  return {std::move(lock), privacy_policy_, privacy_mode_secure_, typo_learning_,
+          exposure_trace_enabled_};
 }
 
 void SettingsStore::PublishPrivacyPolicy() {
@@ -475,6 +478,7 @@ void SettingsStore::PublishPrivacyPolicy() {
   // typo correction off stops ObserveTypo before the engine config follows.
   const auto& typo = settings_.typo_correction;
   typo_learning_ = typo.learn_personal_patterns && typo.enabled && typo.mode != "off";
+  exposure_trace_enabled_ = settings_.exposure_trace_enabled;
   // Every change of settings_ passes here, so the flag follows each load.
   homophone_notes_.store(settings_.homophone_notes, std::memory_order_release);
 }
@@ -706,6 +710,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
   config.rewriters.emoji_path = core::Utf8Path(settings.emoji_data_path);
   config.nll = ClampNllConfig(settings.nll);
   config.tiny_reranker = reranker::ClampTinyRerankerConfig(settings.tiny_reranker);
+  config.exposure_trace_enabled = settings.exposure_trace_enabled;
   // Sampled at most once, and only when a setting depends on the power source.
   std::optional<InferenceThreadEnvironment> sampled_environment;
   const auto sample_environment = [&]() -> const InferenceThreadEnvironment& {

@@ -147,6 +147,65 @@ TEST_F(TinyRerankerRuntimeTest, ScoresOnlyTheTopThirtyWithStableTiesAndClampsThe
   EXPECT_DOUBLE_EQ(candidates.back().score, 1.0);
 }
 
+TEST_F(TinyRerankerRuntimeTest, PreparedBatchUsesAlignedSignalsAndIsTheForwardInput) {
+  std::vector<core::Candidate> candidates;
+  std::vector<UserSignals> user;
+  for (int index = 0; index <= 30; ++index) {
+    candidates.push_back({std::to_string(index), "", 1.0});
+    user.push_back({static_cast<double>(index + 1), 0.25});
+  }
+  candidates.back().surface = "新候補";
+  candidates.back().score = 2.0;
+  candidates[4].rerank_signals.dictionary_score = std::numeric_limits<double>::quiet_NaN();
+  ASSERT_TRUE(PrepareTinyRerankerBatch(candidates, std::span(user).first(1)).features.empty());
+
+  const auto prepared = PrepareTinyRerankerBatch(candidates, user);
+  ASSERT_EQ(prepared.indices.size(), 29u);
+  ASSERT_EQ(prepared.features.size(), prepared.indices.size());
+  EXPECT_EQ(prepared.indices.front(), 30u);
+  EXPECT_EQ(prepared.indices.back(), 28u);  // An invalid row does not admit row 31.
+  EXPECT_EQ(std::find(prepared.indices.begin(), prepared.indices.end(), 4u),
+            prepared.indices.end());
+  EXPECT_EQ(prepared.features.front()[6], 3.0f);
+  for (size_t row = 0; row < prepared.features.size(); ++row) {
+    EXPECT_EQ(prepared.features[row][2], static_cast<float>(prepared.indices[row] + 1));
+    EXPECT_EQ(prepared.features[row][3], 0.25f);
+  }
+
+  auto observed = std::make_shared<std::vector<std::array<float, 12>>>();
+  Install([observed](auto rows, const auto&) {
+    observed->assign(rows.begin(), rows.end());
+    return std::vector<float>(rows.size(), 0.0f);
+  });
+  ASSERT_EQ(runtime_.Apply(candidates, false, nullptr, {}, &prepared), Outcome::Applied);
+  EXPECT_EQ(*observed, prepared.features);
+}
+
+TEST_F(TinyRerankerRuntimeTest, PredictionBatchesUseTheirOwnUserSignals) {
+  std::vector<core::Candidate> dictionary{{"辞書", "じしょ", 1.0}};
+  std::vector<core::Candidate> predictions{{"予測", "よそく", 1.0}};
+  const std::array dictionary_user{UserSignals{2.0, 0.25}};
+  const std::array prediction_user{UserSignals{3.0, 0.5}};
+  auto observed = std::make_shared<std::vector<std::array<float, 12>>>();
+  Install([observed](auto rows, const auto&) {
+    observed->insert(observed->end(), rows.begin(), rows.end());
+    return std::vector<float>(rows.size(), 0.0f);
+  });
+  ASSERT_EQ(runtime_.ApplyPredictionBatches(dictionary, predictions, false, nullptr,
+                                             dictionary_user, prediction_user),
+            Outcome::Applied);
+  dictionary.clear();
+  ASSERT_EQ(runtime_.ApplyPredictionBatches(dictionary, predictions, false, nullptr, {},
+                                             prediction_user),
+            Outcome::Applied);
+  ASSERT_EQ(observed->size(), 3u);
+  EXPECT_EQ((*observed)[0][2], 2.0f);
+  EXPECT_EQ((*observed)[0][3], 0.25f);
+  EXPECT_EQ((*observed)[1][2], 3.0f);
+  EXPECT_EQ((*observed)[1][3], 0.5f);
+  EXPECT_EQ((*observed)[2], (*observed)[1]);
+}
+
 TEST_F(TinyRerankerRuntimeTest, InvalidFeaturesSkipOnlyTheirRowsAndDoNotTripTheBreaker) {
   config_.failure_threshold = 1;
   runtime_.SetConfig(config_);

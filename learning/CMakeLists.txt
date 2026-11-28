@@ -40,6 +40,7 @@ add_library(azookey_learning STATIC
   src/LearningStore.cpp
   src/Persona.cpp
   src/Reranker.cpp
+  src/RerankerTraceStore.cpp
   src/Sha256.cpp
   src/TypoCorrectionStore.cpp
   src/TypoLearningStore.cpp
@@ -64,4 +65,6 @@ target_link_libraries(azookey_learning
 if(WIN32)
   # normaliz: NormalizeString for the context hash NFC step.
   target_link_libraries(azookey_learning PUBLIC crypt32 normaliz)
+else()
+  target_link_libraries(azookey_learning PRIVATE Threads::Threads)
 endif()

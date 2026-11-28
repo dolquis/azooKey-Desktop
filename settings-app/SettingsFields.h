@@ -64,6 +64,7 @@ const std::vector<SettingField>& GenericSettingFields();
 
 // Schema keys edited by dedicated controls (EditableSettings' typed members).
 const std::vector<std::string_view>& DedicatedSettingPaths();
+inline constexpr std::string_view kExposureTraceEnabledPath = "reranker.exposureTraceEnabled";
 
 // Schema keys kept on save without an editing control.
 const std::vector<UneditedSetting>& UneditedSettings();

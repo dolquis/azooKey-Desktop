@@ -46,6 +46,12 @@ target_link_libraries(reranker_tests
 )
 azookey_discover_tests(reranker_tests)
 
+add_executable(reranker_trace_store_tests reranker_trace_store_test.cpp)
+target_link_libraries(reranker_trace_store_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(reranker_trace_store_tests)
+
 add_executable(typo_correction_store_tests typo_correction_store_test.cpp)
 target_link_libraries(typo_correction_store_tests
   PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings

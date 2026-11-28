@@ -93,14 +93,33 @@ inline bool FlushFileToDisk(const std::filesystem::path& path,
 #endif
 }
 
+enum class AtomicWriteResult { Written, Cancelled, Failed };
+
+namespace detail {
+
+inline std::uint64_t NextAtomicFileSequence() {
+  static std::atomic<std::uint64_t> sequence{0};
+  return sequence.fetch_add(1, std::memory_order_relaxed);
+}
+
+}  // namespace detail
+
 // retry_budget bounds each of the flush-open and replace retries on Windows.
-inline bool WriteTextFileAtomically(
-    const std::filesystem::path& target, const std::string& content,
-    std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) {
+// may_replace is checked after flushing the temporary file, just before each
+// replacement attempt. It must not throw or block on other file operations.
+template <class MayReplace>
+inline AtomicWriteResult WriteTextFileAtomically(const std::filesystem::path& target,
+                                                 const std::string& content,
+                                                 std::chrono::milliseconds retry_budget,
+                                                 MayReplace may_replace) {
+  const auto failure = [](const char* stage, std::error_code error) {
+    detail::ReportPersistenceFailure(stage, error);
+    return AtomicWriteResult::Failed;
+  };
   std::error_code ec;
   if (!target.parent_path().empty()) {
     std::filesystem::create_directories(target.parent_path(), ec);
-    if (ec) return detail::ReportPersistenceFailure("create-directory", ec);
+    if (ec) return failure("create-directory", ec);
   }
 
   // Build a temp name that is unique per write across threads and processes.
@@ -110,10 +129,9 @@ inline bool WriteTextFileAtomically(
   // the name unique across processes, and a process-local atomic counter makes
   // it unique across every write within this process (covering all threads),
   // independent of clock resolution.
-  static std::atomic<std::uint64_t> sequence{0};
   const auto stamp =
       static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-  const std::uint64_t seq = sequence.fetch_add(1, std::memory_order_relaxed);
+  const auto seq = detail::NextAtomicFileSequence();
 #ifdef _WIN32
   const unsigned long pid = ::GetCurrentProcessId();
 #else
@@ -125,7 +143,7 @@ inline bool WriteTextFileAtomically(
     errno = 0;
     std::ofstream ofs(temp, std::ios::binary | std::ios::trunc);
     if (!ofs.is_open()) {
-      return detail::ReportPersistenceFailure("temp-open", {errno, std::generic_category()});
+      return failure("temp-open", {errno, std::generic_category()});
     }
     ofs << content;
     ofs.flush();
@@ -133,12 +151,12 @@ inline bool WriteTextFileAtomically(
       const int error = errno != 0 ? errno : EIO;
       ofs.close();
       std::filesystem::remove(temp, ec);
-      return detail::ReportPersistenceFailure("temp-write", {error, std::generic_category()});
+      return failure("temp-write", {error, std::generic_category()});
     }
   }
   if (!FlushFileToDisk(temp, retry_budget)) {
     std::filesystem::remove(temp, ec);
-    return false;
+    return AtomicWriteResult::Failed;
   }
 
 #ifdef _WIN32
@@ -147,8 +165,13 @@ inline bool WriteTextFileAtomically(
   // A reader without FILE_SHARE_DELETE can produce ACCESS_DENIED as well as
   // SHARING_VIOLATION. Retry only the completed temp file's replacement; do not
   // repeat encryption or read-modify-write, and retain the caller's file lock.
+  bool cancelled = false;
   const DWORD error = detail::RetryTransientFileOperation(
-      [&] {
+      [&]() -> DWORD {
+        if (!may_replace()) {
+          cancelled = true;
+          return ERROR_CANCELLED;
+        }
         return MoveFileExW(native_temp.c_str(), native_target.c_str(),
                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
                    ? ERROR_SUCCESS
@@ -157,16 +180,19 @@ inline bool WriteTextFileAtomically(
       retry_budget, true);
   if (error != ERROR_SUCCESS) {
     std::filesystem::remove(temp, ec);
-    return detail::ReportPersistenceFailure("atomic-replace",
-                                            {static_cast<int>(error), std::system_category()});
+    if (cancelled) return AtomicWriteResult::Cancelled;
+    return failure("atomic-replace", {static_cast<int>(error), std::system_category()});
   }
-  return true;
 #else
+  if (!may_replace()) {
+    std::filesystem::remove(temp, ec);
+    return AtomicWriteResult::Cancelled;
+  }
   std::filesystem::rename(temp, target, ec);
   if (ec) {
     const auto error = ec;
     std::filesystem::remove(temp, ec);
-    return detail::ReportPersistenceFailure("atomic-replace", error);
+    return failure("atomic-replace", error);
   }
   // Flush the parent directory to ensure the rename metadata is persisted.
   const auto dir = target.parent_path();
@@ -177,8 +203,15 @@ inline bool WriteTextFileAtomically(
       close(dir_fd);
     }
   }
-  return true;
 #endif
+  return AtomicWriteResult::Written;
+}
+
+inline bool WriteTextFileAtomically(
+    const std::filesystem::path& target, const std::string& content,
+    std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) {
+  return WriteTextFileAtomically(target, content, retry_budget, [] { return true; }) ==
+         AtomicWriteResult::Written;
 }
 
 }  // namespace azookey::learning

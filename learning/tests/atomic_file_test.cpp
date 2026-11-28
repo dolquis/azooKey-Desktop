@@ -205,6 +205,28 @@ TEST(AtomicFileTest, ReplaceRecoversAfterTemporarySharingViolation) {
   std::filesystem::remove_all(root);
 }
 
+TEST(AtomicFileTest, ChecksCancellationBeforeEveryReplacementRetry) {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("azookey_atomicfile_retry_cancel_" + std::to_string(GetCurrentProcessId()));
+  std::filesystem::create_directories(root);
+  const auto target = root / "store.tsv";
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target, "old"));
+  ReadHandle reader(target, FILE_SHARE_READ | FILE_SHARE_WRITE);
+  ASSERT_TRUE(reader.valid());
+  int attempts = 0;
+  testing::internal::CaptureStderr();
+  const auto result = azookey::learning::WriteTextFileAtomically(
+      target, "new", std::chrono::seconds(2), [&] { return ++attempts == 1; });
+  const auto log = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(result, azookey::learning::AtomicWriteResult::Cancelled);
+  EXPECT_EQ(attempts, 2);
+  EXPECT_TRUE(log.empty());
+  EXPECT_EQ(ReadAll(target), "old");
+  EXPECT_EQ(CountTempFiles(root), 0u);
+  reader.Close();
+  std::filesystem::remove_all(root);
+}
+
 TEST(AtomicFileTest, PersistentSharingFailurePreservesTargetAndReportsOnlyStageAndCode) {
   const auto root =
       std::filesystem::temp_directory_path() /
@@ -279,6 +301,28 @@ TEST(AtomicFileTest, OverwriteReplacesExistingContentAndLeavesNoTempFiles) {
   EXPECT_EQ(ReadAll(target), "new\n");
   EXPECT_EQ(CountTempFiles(root), 0u);
 
+  std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, CancellationAfterTempPreparationPreservesTargetWithoutLogging) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_cancel_prepared";
+  std::filesystem::remove_all(root);
+  ASSERT_TRUE(std::filesystem::create_directories(root));
+  const auto target = root / "store.tsv";
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target, "old"));
+
+  testing::internal::CaptureStderr();
+  const auto result = azookey::learning::WriteTextFileAtomically(
+      target, "new", azookey::learning::kTransientFileRetryBudget, [&] {
+        EXPECT_EQ(CountTempFiles(root), 1u);
+        EXPECT_EQ(ReadAll(target), "old");
+        return false;
+      });
+  const auto log = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(result, azookey::learning::AtomicWriteResult::Cancelled);
+  EXPECT_TRUE(log.empty());
+  EXPECT_EQ(ReadAll(target), "old");
+  EXPECT_EQ(CountTempFiles(root), 0u);
   std::filesystem::remove_all(root);
 }
 

@@ -236,6 +236,7 @@ const std::vector<std::string_view>& DedicatedSettingPaths() {
       "logLevel",
       "openAiApiKey",
       "privacy.crashReportConsent",
+      kExposureTraceEnabledPath,
       "dictionary.sudachiEnabled",
       "dictionary.neologdEnabled",
       "dictionary.namedEntityEnabled",

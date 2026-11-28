@@ -31,6 +31,36 @@ bool ScoreBefore(const core::Candidate& left, const core::Candidate& right) {
 
 }  // namespace
 
+TinyRerankerBatch PrepareTinyRerankerBatch(const std::vector<core::Candidate>& candidates,
+                                           std::span<const UserSignals> user) {
+  if (!user.empty() && user.size() != candidates.size()) return {};
+
+  TinyRerankerBatch batch;
+  batch.indices.resize(candidates.size());
+  std::iota(batch.indices.begin(), batch.indices.end(), size_t{0});
+  std::stable_sort(batch.indices.begin(), batch.indices.end(), [&](size_t left, size_t right) {
+    return ScoreBefore(candidates[left], candidates[right]);
+  });
+  batch.indices.resize((std::min)(batch.indices.size(), kTinyBatchLimit));
+  batch.features.reserve(batch.indices.size());
+  size_t valid_count = 0;
+  for (size_t index : batch.indices) {
+    const auto& candidate = candidates[index];
+    if (!std::isfinite(candidate.score)) continue;
+    auto signals = candidate.rerank_signals;
+    if (signals.candidate_length == 0) {
+      signals.candidate_length = core::ComputeCandidateLength(candidate.surface);
+    }
+    const auto features = ExtractFeaturesV1(signals, user.empty() ? UserSignals{} : user[index]);
+    if (!std::all_of(features.begin(), features.end(), [](float v) { return std::isfinite(v); }))
+      continue;
+    batch.indices[valid_count++] = index;
+    batch.features.push_back(features);
+  }
+  batch.indices.resize(valid_count);
+  return batch;
+}
+
 TinyRerankerConfig ClampTinyRerankerConfig(TinyRerankerConfig config) {
   config.timeout_ms = std::clamp(config.timeout_ms, kTinyTimeoutMinMs, kTinyTimeoutMaxMs);
   config.failure_threshold = std::clamp(config.failure_threshold, kTinyFailureMin, kTinyFailureMax);
@@ -115,24 +145,31 @@ TinyRerankOutcome TinyRerankerRuntime::RecordFailure(TinyRerankOutcome outcome) 
 }
 
 TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candidates, bool secure,
-                                             const std::atomic<bool>* cancel, Deadline deadline) {
-  const auto outcome = ApplyBatch(candidates, secure, cancel, deadline);
+                                             const std::atomic<bool>* cancel, Deadline deadline,
+                                             const TinyRerankerBatch* prepared) {
+  const auto outcome = ApplyBatch(candidates, secure, cancel, deadline, {}, prepared);
   if (outcome == TinyRerankOutcome::Applied) failures_ = 0;
   return outcome;
 }
 
 TinyRerankOutcome TinyRerankerRuntime::ApplyPredictionBatches(
     std::vector<core::Candidate>& dictionary, std::vector<core::Candidate>& predictions,
-    bool secure, const std::atomic<bool>* cancel) {
+    bool secure, const std::atomic<bool>* cancel, std::span<const UserSignals> dictionary_user,
+    std::span<const UserSignals> prediction_user) {
   using Outcome = TinyRerankOutcome;
-  if (dictionary.empty()) return Apply(predictions, secure, cancel);
-  if (predictions.empty() || !config_.enabled || secure) return Apply(dictionary, secure, cancel);
+  if (dictionary.empty() || predictions.empty() || !config_.enabled || secure) {
+    const bool use_predictions = dictionary.empty();
+    const auto outcome = ApplyBatch(use_predictions ? predictions : dictionary, secure, cancel, {},
+                                    use_predictions ? prediction_user : dictionary_user);
+    if (outcome == Outcome::Applied) failures_ = 0;
+    return outcome;
+  }
 
   // Keep the original scores and failure count until both batches finish.
   auto ranked_dictionary = dictionary;
-  const auto first = ApplyBatch(ranked_dictionary, secure, cancel, {});
+  const auto first = ApplyBatch(ranked_dictionary, secure, cancel, {}, dictionary_user);
   if (first != Outcome::Applied && first != Outcome::InvalidInput) return first;
-  const auto second = ApplyBatch(predictions, secure, cancel, {});
+  const auto second = ApplyBatch(predictions, secure, cancel, {}, prediction_user);
   if (second != Outcome::Applied && second != Outcome::InvalidInput) return second;
   if (first == Outcome::Applied) dictionary = std::move(ranked_dictionary);
   if (first == Outcome::Applied || second == Outcome::Applied) {
@@ -144,7 +181,9 @@ TinyRerankOutcome TinyRerankerRuntime::ApplyPredictionBatches(
 
 TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& candidates,
                                                   bool secure, const std::atomic<bool>* cancel,
-                                                  Deadline deadline) {
+                                                  Deadline deadline,
+                                                  std::span<const UserSignals> user,
+                                                  const TinyRerankerBatch* prepared) {
   using Outcome = TinyRerankOutcome;
   using namespace std::chrono_literals;
   const auto canceled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
@@ -170,29 +209,14 @@ TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& 
   }
   if (!runtime_) return Outcome::LoadFailed;
 
-  std::vector<size_t> indices(candidates.size());
-  std::iota(indices.begin(), indices.end(), size_t{0});
-  std::stable_sort(indices.begin(), indices.end(), [&](size_t left, size_t right) {
-    return ScoreBefore(candidates[left], candidates[right]);
-  });
-  indices.resize((std::min)(indices.size(), kTinyBatchLimit));
-  std::vector<std::array<float, 12>> batch;
-  batch.reserve(indices.size());
-  size_t valid_count = 0;
-  for (size_t index : indices) {
-    const auto& candidate = candidates[index];
-    if (!std::isfinite(candidate.score)) continue;
-    auto signals = candidate.rerank_signals;
-    if (signals.candidate_length == 0) {
-      signals.candidate_length = core::ComputeCandidateLength(candidate.surface);
-    }
-    const auto features = ExtractFeaturesV1(signals, {});
-    if (!std::all_of(features.begin(), features.end(), [](float v) { return std::isfinite(v); }))
-      continue;
-    indices[valid_count++] = index;
-    batch.push_back(features);
+  auto local_batch = prepared ? TinyRerankerBatch{} : PrepareTinyRerankerBatch(candidates, user);
+  const auto& batch = prepared ? *prepared : local_batch;
+  const size_t valid_count = batch.features.size();
+  if (valid_count == 0 || batch.indices.size() != valid_count ||
+      (prepared && std::any_of(batch.indices.begin(), batch.indices.end(),
+                               [&](size_t index) { return index >= candidates.size(); }))) {
+    return Outcome::InvalidInput;
   }
-  if (batch.empty()) return Outcome::InvalidInput;
   const auto started = now();
   if (canceled() || (deadline && started >= *deadline)) return Outcome::Skipped;
   if (pending_.valid()) {
@@ -222,8 +246,12 @@ TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& 
   };
   std::vector<float> scores;
   try {
-    std::packaged_task<std::vector<float>()> work([runtime = runtime_, batch = std::move(batch),
-                                                   stop] { return runtime->Infer(batch, *stop); });
+    // A pending forward may outlive the caller's prepared batch.
+    auto features = prepared ? prepared->features : std::move(local_batch.features);
+    std::packaged_task<std::vector<float>()> work(
+        [runtime = runtime_, features = std::move(features), stop] {
+          return runtime->Infer(features, *stop);
+        });
     auto result = work.get_future();
     std::thread worker(std::move(work));
     worker.detach();
@@ -251,7 +279,7 @@ TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& 
     return RecordFailure(Outcome::InferError);
   }
   for (size_t i = 0; i < valid_count; ++i) {
-    candidates[indices[i]].score += kTinyScoreWeight * std::clamp(scores[i], 0.0f, 1.0f);
+    candidates[batch.indices[i]].score += kTinyScoreWeight * std::clamp(scores[i], 0.0f, 1.0f);
   }
   std::stable_sort(candidates.begin(), candidates.end(), ScoreBefore);
   return Outcome::Applied;

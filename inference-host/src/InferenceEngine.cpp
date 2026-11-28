@@ -74,6 +74,10 @@ constexpr size_t kPredictionDisplayLimit = 5;
 constexpr auto kLatticeFallbackBudget = std::chrono::milliseconds(15);
 constexpr size_t kLatticeMaxPaths = 8;
 constexpr std::string_view kLatticeDebugPrefix = "lattice;rank=";
+// Stage 2 (section 3.3, DEV-2102): the debug_info of its candidates, and the step between ranks
+// in its band.
+constexpr std::string_view kLatticeModelDebugPrefix = "lattice-model;rank=";
+constexpr double kLatticeModelBandStep = 0.01;
 // docs/user-dictionary-pos-spec.md section 5.2: T, how far above the best path of any kind the
 // best path through a conjugating user dictionary word may cost (half of P_unk's initial value;
 // the Human Gate DEV-2139 revisits it), and the debug_info of its candidate (section 5.3).
@@ -105,11 +109,25 @@ std::optional<uint32_t> CountCodepoints(std::string_view utf8) {
   return count;
 }
 
-// Whether a request gets the lattice's N-best (lattice-conversion-spec sections 3.2 and 3.3).
-// `model_answered` is a request the model converter answered without falling back.
+// Whether a request gets stage 1's N-best (lattice-conversion-spec section 3.2). `model_answered`
+// is a request the model converter answered without falling back; stage 2 (section 3.3) is
+// decided apart from this.
 bool LatticeApplies(const LatticeConfig& config, bool model_answered) {
-  // Stage 2 (with_model) keeps its score band for DEV-2102 to decide: no candidates yet.
   return config.enabled && !model_answered;
+}
+
+// Stage 2 (section 3.3): whether NLL rerank scored the candidate (its nll= tag,
+// neural-reranker-nll-spec section B4.2).
+bool NllScored(const core::Candidate& candidate) {
+  const std::string_view info = candidate.debug_info;
+  for (size_t start = 0; start <= info.size();) {
+    const auto end = info.find(';', start);
+    if (info.substr(start, end == std::string_view::npos ? end : end - start).starts_with("nll="))
+      return true;
+    if (end == std::string_view::npos) break;
+    start = end + 1;
+  }
+  return false;
 }
 
 void LogTracePhase(logging::RuntimeLogger* logger, const InferenceTelemetry* telemetry,
@@ -1450,6 +1468,10 @@ void InferenceEngine::SetNllContextObserverForTests(
   nll_context_observer_for_tests_ = std::move(hook);
 }
 
+void InferenceEngine::SetNllRerankForTests(NllRerankForTests hook) {
+  nll_rerank_for_tests_ = std::move(hook);
+}
+
 void InferenceEngine::SetTinyRerankerFeatureObserverForTests(
     TinyRerankerFeatureObserverForTests hook) {
   std::lock_guard<std::mutex> lock(state_mutex_);
@@ -2414,6 +2436,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   const bool nll = config.nll.enabled && !live && (!mixed || mixed->nll);
   if (!nll) converter_lock.unlock();
   model_fell_back = using_model_converter && (model_fell_back || convert_failed);
+  // Whether RerankNll scores this request (zenzai-inference-spec section 7.1 step 7), read under
+  // converter_call_mutex_. A cut-off before the first beam step has spent the deadline NLL would
+  // score under, so it skips NLL as it did while that cut-off still counted as degraded (DEV-1700).
+  auto* nll_zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
+  const bool nll_scores = nll && !convert_failed && nll_zenzai && nll_zenzai->runtime_loaded() &&
+                          !nll_zenzai->last_error() && !nll_zenzai->last_fell_back_at_deadline();
   if (lattice_allowed && using_model_converter &&
       LatticeApplies(config.lattice, !model_fell_back) && request_time_left()) {
     // Section 3.2: not the converter's spent budget but 15 ms from here, within the request's
@@ -2445,6 +2473,47 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       if (request_deadline) deadline = (std::min)(deadline, *request_deadline);
       std::lock_guard<std::mutex> lock(state_mutex_);
       user_word_path = UserWordPathLocked(kana, *model_best, cancel, deadline);
+    }
+  }
+  // lattice-conversion-spec section 3.3 (stage 2, DEV-2102): a request the model answered and NLL
+  // scores gets the lattice's first k paths below the model's first candidate, under the timing
+  // of a fallen-back lattice. Like the path above, a first segment's request is searched as its
+  // own reading.
+  std::vector<core::Candidate> model_lattice;
+  if (lattice_allowed && using_model_converter && !model_fell_back && nll_scores &&
+      config.lattice.enabled && config.lattice.with_model && config.lattice.with_model_paths > 0 &&
+      request_time_left()) {
+    std::optional<double> model_best;
+    std::optional<double> model_lowest;
+    for (const auto& candidate : converted) {
+      if (candidate.source != core::CandidateSource::Model) continue;
+      model_best = model_best ? (std::max)(*model_best, candidate.score) : candidate.score;
+      model_lowest = model_lowest ? (std::min)(*model_lowest, candidate.score) : candidate.score;
+    }
+    if (model_best) {
+      auto deadline =
+          std::chrono::steady_clock::now() +
+          std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(
+              lattice_fallback_budget_ns_.load(std::memory_order_relaxed)));
+      if (request_deadline) deadline = (std::min)(deadline, *request_deadline);
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        model_lattice =
+            LatticeCandidatesLocked(kana, kNoRemainingReading,
+                                    (std::min)(config.lattice.with_model_paths,
+                                               LatticePathCount(effective_max_candidates, live)),
+                                    cancel, deadline, lattice_status.emplace());
+      }
+      // Just below the model's first candidate leaves the slot right under it to the path
+      // through a conjugated user dictionary word; the other band starts under the model's lowest.
+      const double anchor = config.lattice.with_model_band == LatticeModelBand::BelowModelBest
+                                ? *model_best - kLatticeModelBandStep
+                                : *model_lowest;
+      for (size_t i = 0; i < model_lattice.size(); ++i) {
+        model_lattice[i].score =
+            (std::max)(0.1, anchor - kLatticeModelBandStep * static_cast<double>(i + 1));
+        model_lattice[i].debug_info = std::string(kLatticeModelDebugPrefix) + std::to_string(i + 1);
+      }
     }
   }
   // Section 3.6: each degradation of the request, by its result only (never the reading or a
@@ -2482,6 +2551,15 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                 std::make_move_iterator(lattice.end()));
   // user-dictionary-pos-spec section 5.3: before DedupMergedCandidates, like the lattice's.
   if (user_word_path) merged.push_back(std::move(*user_word_path));
+  // Stage 2 adds new surfaces only: a surface another source has keeps that candidate as with
+  // stage 2 off, so dropping the unscored paths after NLL gives the candidates back unchanged.
+  const bool model_lattice_added = !model_lattice.empty();
+  if (model_lattice_added) {
+    std::unordered_set<std::string> surfaces;
+    for (const auto& candidate : merged) surfaces.insert(candidate.surface);
+    for (auto& candidate : model_lattice)
+      if (surfaces.insert(candidate.surface).second) merged.push_back(std::move(candidate));
+  }
   DedupMergedCandidates(merged);
 
   if (canceled()) return {};
@@ -2496,12 +2574,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     const auto nll_context = BuildContext(kana, limited_context, cancel, conversion_deadline,
                                           effective_max_candidates, live, instruction_profile);
     if (nll_context_observer_for_tests_) nll_context_observer_for_tests_(nll_context);
-    auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
-    // A cut-off before the first beam step has spent the deadline NLL would score under, so it
-    // skips NLL as it did while that cut-off still counted as degraded (DEV-1700).
-    if (!convert_failed && zenzai && zenzai->runtime_loaded() && !zenzai->last_error() &&
-        !zenzai->last_fell_back_at_deadline()) {
-      outcome = zenzai->RerankNll(kana, merged, nll_context, config.nll, nll_revision);
+    if (nll_scores) {
+      outcome = nll_rerank_for_tests_
+                    ? nll_rerank_for_tests_(merged)
+                    : nll_zenzai->RerankNll(kana, merged, nll_context, config.nll, nll_revision);
       std::lock_guard<std::mutex> lock(state_mutex_);
       MirrorModelRuntimeErrorLocked(converter);
     } else {
@@ -2521,6 +2597,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                       "cancelled");
       return {};
     }
+    // Section 3.3: only the stage 2 paths NLL scored stay. When NLL did not apply (all or nothing,
+    // neural-reranker-nll-spec section B7) it scored none, and the candidates are as without them.
+    if (model_lattice_added)
+      std::erase_if(merged, [](const core::Candidate& candidate) {
+        return candidate.debug_info.starts_with(kLatticeModelDebugPrefix) && !NllScored(candidate);
+      });
     if (runtime_logger_ && !outcome.reason.empty()) {
       if (telemetry) {
         runtime_logger_->Log(logging::RuntimeLogLevel::Info, "nll_rerank",

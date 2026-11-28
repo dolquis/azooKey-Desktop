@@ -130,15 +130,25 @@ struct DictionaryLayerConfig {
   bool app_specific_dictionary_enabled{true};
 };
 
+// Where stage 2 places the lattice's paths, always below the model's first candidate
+// (docs/lattice-conversion-spec.md section 3.3): just below it (and below the path through a
+// conjugated user dictionary word, user-dictionary-pos-spec section 5.3), or below the model's
+// lowest candidate.
+enum class LatticeModelBand { BelowModelBest, BelowModelLowest };
+
 // M65 lattice conversion (docs/lattice-conversion-spec.md section 3). Internal switches, not
 // settings.json keys.
 struct LatticeConfig {
   // Stage 1 (section 3.2): the N-best on requests that do not go through the model. Off also
   // keeps LoadBundledDictionaryLayers from loading lattice_core (bench --lattice off).
   bool enabled{true};
-  // Stage 2 (section 3.3, DEV-2102): also on requests the model answered. Its score band is not
-  // decided, so no candidates are added while it is on.
+  // Stage 2 (section 3.3, DEV-2102): on a request the model answered and NLL rerank scores, the
+  // lattice's first `with_model_paths` paths join NLL's candidate set in `with_model_band`. Only
+  // the ones NLL scored stay; when NLL does not apply, the candidates are as with stage 2 off.
+  // Needs `enabled`. Off by default; bench --lattice-with-model switches it for measurement.
   bool with_model{false};
+  size_t with_model_paths{4};
+  LatticeModelBand with_model_band{LatticeModelBand::BelowModelBest};
 };
 
 // M25 power-saving lanes (docs/copilot-pc-backend-spec.md section 6.2). Fast: one Zenzai pass with
@@ -474,6 +484,10 @@ class InferenceEngine {
   // Test-only: receives the context QueryCandidates gives NLL rerank, whenever NLL is enabled and
   // the request is not live, before the model check. Set it before any query.
   void SetNllContextObserverForTests(std::function<void(const core::ConversionContext&)> hook);
+  using NllRerankForTests = std::function<NllOutcome(std::vector<core::Candidate>&)>;
+  // Test-only: takes the place of the model's NLL rerank (ZenzaiModelConverter::RerankNll) on a
+  // request it would score, with the merged candidates. Set it before any query.
+  void SetNllRerankForTests(NllRerankForTests hook);
   using TinyRerankerFeatureObserverForTests =
       std::function<void(std::span<const core::Candidate>, std::span<const std::array<float, 12>>)>;
   // Test-only: runs under state_mutex_ just before applying the learned ranking. The views are
@@ -874,6 +888,7 @@ class InferenceEngine {
   size_t user_dict_import_word_limit_{learning::kTextImportMaxWords};
   std::function<void(std::chrono::milliseconds)> before_learning_save_for_tests_;
   std::function<void(const core::ConversionContext&)> nll_context_observer_for_tests_;
+  NllRerankForTests nll_rerank_for_tests_;
   TinyRerankerFeatureObserverForTests tiny_reranker_feature_observer_for_tests_;
   // Nanoseconds, set by the constructor; read by every query that falls back from the model.
   std::atomic<int64_t> lattice_fallback_budget_ns_{0};

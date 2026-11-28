@@ -57,6 +57,7 @@ void PrintUsage(const char* exe) {
          " [--iterations N] [--typo-mode off|suggest|rank|aggressive]"
          " [--trace [--trace-output PATH]]"
          " [--nll on|off] [--decode-stats JSONL] [--dict-dir DIR [--lattice on|off]]"
+         " [--lattice-with-model K [--lattice-band best|lowest]]"
          " [--profile TEXT | --profile-file PATH]\n"
       << "       " << exe
       << " --personal-eval --output JSON [--learning PATH] [--settings PATH] [--max-cases N]"
@@ -71,7 +72,10 @@ void PrintUsage(const char* exe) {
          "setting). --decode-stats writes one line per query with its latency, deadline "
          "cut-off and candidate sources. --dict-dir loads the bundled static layers of DIR "
          "(the dict directory of dictbuild/build_bundled.py); --lattice defaults to on with it "
-         "and then needs DIR/lattice_core.azdic. --personal-eval "
+         "and then needs DIR/lattice_core.azdic. --lattice-with-model K (1 to 8) turns on "
+         "lattice stage 2 for measurement: the lattice's first K paths join NLL rerank below "
+         "the model's best candidate (--lattice-band best, the default) or its lowest; it needs "
+         "--model, --nll on and --lattice on. --personal-eval "
          "evaluates your own learning store, read without changing it, and writes aggregates "
          "only; --profile places a bench-only Zenzai profile in the prompt and needs --model.\n";
 }
@@ -154,6 +158,10 @@ std::string DecodeStatsLine(uint64_t call, const std::string& input, const std::
     value.emplace("surface", j::Value(candidate.surface));
     value.emplace("source", j::Value(CandidateSourceName(candidate.source)));
     value.emplace("unfinished", j::Value(HasDebugTag(candidate.debug_info, "unfinished")));
+    // Lattice stage 2 (DEV-2102): a path it added, and whether NLL rerank scored the candidate.
+    value.emplace("lattice_model", j::Value(candidate.debug_info.starts_with("lattice-model;")));
+    value.emplace("nll_scored", j::Value(candidate.debug_info.starts_with("nll=") ||
+                                         candidate.debug_info.find(";nll=") != std::string::npos));
     values.emplace_back(std::move(value));
   }
   line.emplace("candidates", j::Value(std::move(values)));
@@ -268,6 +276,9 @@ int main(int argc, char** argv) {
   std::filesystem::path dict_dir;
   std::optional<bool> nll_enabled;
   std::optional<bool> lattice_enabled;
+  // Lattice stage 2 (lattice-conversion-spec section 3.3, DEV-2102): K paths, and the band.
+  std::optional<size_t> lattice_with_model;
+  std::optional<std::string> lattice_band;
   azookey::bench::ConversionQualityOptions quality_options;
   bool personal_eval = false;
   std::filesystem::path learning_path;
@@ -366,6 +377,16 @@ int main(int argc, char** argv) {
           throw std::invalid_argument("--lattice must be on or off");
         }
         lattice_enabled = value == "on";
+      } else if (arg == "--lattice-with-model") {
+        const auto paths =
+            ParseSize(RequireValue(argc, argv, i, "--lattice-with-model"), "--lattice-with-model");
+        if (paths > 8) throw std::invalid_argument("--lattice-with-model must be 1 to 8");
+        lattice_with_model = paths;
+      } else if (arg == "--lattice-band") {
+        const auto value = RequireValue(argc, argv, i, "--lattice-band");
+        if (value != "best" && value != "lowest")
+          throw std::invalid_argument("--lattice-band must be best or lowest");
+        lattice_band = value;
       } else if (hide_arguments) {
         throw std::invalid_argument("unknown option at argument " + std::to_string(i));
       } else {
@@ -437,6 +458,15 @@ int main(int argc, char** argv) {
     }
     if (nll_enabled && quality_options.model.empty()) {
       throw std::invalid_argument("--nll requires --model");
+    }
+    // Stage 2 adds only the paths NLL scored, on requests the model answered.
+    if (lattice_band && !lattice_with_model) {
+      throw std::invalid_argument("--lattice-band requires --lattice-with-model");
+    }
+    if (lattice_with_model && (personal_eval || quality_options.eval_path.empty() ||
+                               !nll_enabled.value_or(false) || !*lattice_enabled)) {
+      throw std::invalid_argument(
+          "--lattice-with-model requires --eval, --model, --nll on and --lattice on");
     }
     if (!decode_stats_path.empty() &&
         (SamePath(decode_stats_path, output_path) ||
@@ -581,6 +611,15 @@ int main(int argc, char** argv) {
   if (nll_enabled) engine_config.nll.enabled = *nll_enabled;
   // lattice-conversion-spec section 10.1: A and B differ only in the lattice's internal switch.
   engine_config.lattice.enabled = *lattice_enabled;
+  if (lattice_with_model) {
+    engine_config.lattice.with_model = true;
+    engine_config.lattice.with_model_paths = *lattice_with_model;
+    engine_config.lattice.with_model_band = lattice_band.value_or("best") == "lowest"
+                                                ? azookey::host::LatticeModelBand::BelowModelLowest
+                                                : azookey::host::LatticeModelBand::BelowModelBest;
+    quality_options.lattice_with_model =
+        "k=" + std::to_string(*lattice_with_model) + ";band=" + lattice_band.value_or("best");
+  }
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
                                         engine_config, trace_logger ? &*trace_logger : nullptr);
   if (typo_store) engine.SetTypoStore(&*typo_store);

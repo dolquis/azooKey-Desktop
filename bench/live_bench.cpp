@@ -61,6 +61,7 @@ void PrintUsage(const char* exe) {
          " [--trace [--trace-output PATH]]"
          " [--nll on|off] [--decode-stats JSONL] [--dict-dir DIR [--lattice on|off]]"
          " [--lattice-with-model K [--lattice-band best|lowest]] [--first-clause-probe]"
+         " [--nll-breaker product|per-request]"
          " [--profile TEXT | --profile-file PATH]\n"
       << "       " << exe
       << " --personal-eval --output JSON [--learning PATH] [--settings PATH] [--max-cases N]"
@@ -81,6 +82,9 @@ void PrintUsage(const char* exe) {
          "--model, --nll on and --lattice on. --first-clause-probe also asks each reading's "
          "first segment (the lattice's best path) after the reading, as a first segment's "
          "request, and prints the latency of the two; it needs --model and --dict-dir. "
+         "--nll-breaker per-request closes the NLL breaker before every request, so a request "
+         "over the budget does not switch NLL off for the next ones (the default, product, keeps "
+         "the shipped breaker); it needs --nll on. "
          "--personal-eval "
          "evaluates your own learning store, read without changing it, and writes aggregates "
          "only; --profile places a bench-only Zenzai profile in the prompt and needs --model.\n";
@@ -359,6 +363,8 @@ int main(int argc, char** argv) {
   std::optional<std::string> lattice_band;
   // DEV-2110: the two Zenzai requests of Space with the first segment's candidates first.
   bool first_clause_probe = false;
+  // DEV-2102: whether each request's NLL runs apart from the breaker the earlier ones opened.
+  bool nll_breaker_per_request = false;
   azookey::bench::ConversionQualityOptions quality_options;
   bool personal_eval = false;
   std::filesystem::path learning_path;
@@ -469,6 +475,11 @@ int main(int argc, char** argv) {
         lattice_band = value;
       } else if (arg == "--first-clause-probe") {
         first_clause_probe = true;
+      } else if (arg == "--nll-breaker") {
+        const auto value = RequireValue(argc, argv, i, "--nll-breaker");
+        if (value != "product" && value != "per-request")
+          throw std::invalid_argument("--nll-breaker must be product or per-request");
+        nll_breaker_per_request = value == "per-request";
       } else if (hide_arguments) {
         throw std::invalid_argument("unknown option at argument " + std::to_string(i));
       } else {
@@ -553,6 +564,9 @@ int main(int argc, char** argv) {
     if (first_clause_probe && (personal_eval || quality_options.eval_path.empty() ||
                                quality_options.model.empty() || dict_dir.empty())) {
       throw std::invalid_argument("--first-clause-probe requires --eval, --model and --dict-dir");
+    }
+    if (nll_breaker_per_request && (personal_eval || !nll_enabled.value_or(false))) {
+      throw std::invalid_argument("--nll-breaker per-request requires --eval and --nll on");
     }
     if (!decode_stats_path.empty() &&
         (SamePath(decode_stats_path, output_path) ||
@@ -747,6 +761,7 @@ int main(int argc, char** argv) {
   quality_options.lattice = *lattice_enabled ? "on" : "off";
   // Recorded from the engine, so the compatibility key reflects the setting it ran with.
   quality_options.nll = engine.config().nll.enabled ? "on" : "off";
+  if (nll_breaker_per_request) quality_options.nll_breaker = "per_request";
   if (profile) {
     // Spec section 15.5: only a format with [PROF] can carry the profile.
     const auto format = engine.health_snapshot().prompt_format;
@@ -806,8 +821,9 @@ int main(int argc, char** argv) {
     const azookey::bench::CandidateQuery query =
         [&engine, &request_id, &trace_logger, &quality_options, &decode_stats, &decode_stats_call,
          &probe, &probe_queries, &probe_whole_ms, &probe_first_ms, &probe_sum_ms,
-         &probe_first_deadline](const std::string& input, const std::string& context,
-                                const std::string& raw_keys) {
+         &probe_first_deadline, nll_breaker_per_request](
+            const std::string& input, const std::string& context, const std::string& raw_keys) {
+          if (nll_breaker_per_request) engine.ResetNllBreakerForBench();
           const auto now = static_cast<uint64_t>(
               std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
           const auto start = std::chrono::steady_clock::now();

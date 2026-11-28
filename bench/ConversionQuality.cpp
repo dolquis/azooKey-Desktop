@@ -497,6 +497,7 @@ std::vector<std::string> IncompatibleBaselineKeys(const j::Value& baseline,
       "lattice",
       "lattice_with_model",
       "nll",
+      "nll_breaker",
       "eval_source",
       "profile_sha256",
       "category_filter",
@@ -511,6 +512,7 @@ std::vector<std::string> IncompatibleBaselineKeys(const j::Value& baseline,
     }
     if (key == "nll") return j::Value("off");
     if (key == "lattice_with_model") return j::Value("off");
+    if (key == "nll_breaker") return j::Value("product");
     if (key == "eval_source") return j::Value("bundled");
     if (key == "profile_sha256") return j::Value("none");
     return std::nullopt;
@@ -668,6 +670,7 @@ j::Object BuildConfig(const ConversionQualityOptions& options, std::string_view 
   config.emplace("model_sha256", j::Value(options.model.empty() ? "" : Sha256File(options.model)));
   config.emplace("n_best", j::Value(options.n_best));
   config.emplace("nll", j::Value(options.nll));
+  config.emplace("nll_breaker", j::Value(options.nll_breaker));
   config.emplace("profile_sha256", j::Value(options.profile_sha256));
   config.emplace("prompt_template_version", j::Value(options.prompt_template_version));
   config.emplace("thread_count", j::Value(options.thread_count));

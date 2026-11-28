@@ -129,6 +129,9 @@ expect_failure(stage_two_too_many "--lattice-with-model must be 1 to 8")
 run_bench(first_clause_without_model --dict-dir "${WORK_DIR}/lattice" --first-clause-probe)
 expect_failure(first_clause_without_model
                "--first-clause-probe requires --eval, --model and --dict-dir")
+# DEV-2102: closing the NLL breaker per request measures NLL, so it needs NLL on.
+run_bench(breaker_without_nll --dict-dir "${WORK_DIR}/lattice" --nll-breaker per-request)
+expect_failure(breaker_without_nll "--nll-breaker per-request requires --eval and --nll on")
 run_bench(empty_directory --dict-dir "${WORK_DIR}/empty" --lattice off)
 expect_failure(empty_directory "--dict-dir holds no .azdic file")
 run_bench(broken_layer --dict-dir "${WORK_DIR}/broken" --lattice off)

@@ -1463,6 +1463,11 @@ void InferenceEngine::SetBenchInstructionProfile(std::string profile) {
   bench_instruction_profile_ = std::move(profile);
 }
 
+void InferenceEngine::ResetNllBreakerForBench() {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  ++nll_config_revision_;
+}
+
 void InferenceEngine::SetNllContextObserverForTests(
     std::function<void(const core::ConversionContext&)> hook) {
   nll_context_observer_for_tests_ = std::move(hook);

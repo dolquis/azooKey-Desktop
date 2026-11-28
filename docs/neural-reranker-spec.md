@@ -198,7 +198,7 @@ runtime FeatureExtractor は v1 / v2 で別ビルダーを持ち、ONNX のメ�
 PyTorch / scikit-learn で学習したモデルを ONNX に export する。Host は
 `reranker.tinyNeuralModelPath` の明示パス、`%LOCALAPPDATA%\azooKey\models\tiny_reranker.onnx`、
 Host 実行ファイルに隣接する `models/tiny_reranker.onnx` の順に解決する。
-明示パスが無効な場合は他のパスを探索せず `load_failed` とする。
+明示パスは絶対パスに限る。無効な場合は他のパスを探索せず `load_failed` とする。
 明示パスが空の場合は、既定の候補のうち最初に見つかる通常ファイルを使う。
 
 ### 5.4 特徴量の重要度と重み付け（決定）
@@ -393,8 +393,13 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
   1〜2ms で完了するため、timeout は**病的な stall（ONNX session の一時的ハング等）
   に対する安全弁**であり、通常 path の p95 を支配しない。これにより roadmap M56 の
   「p95 latency 悪化 +10ms 以内」を脅かさない。
-  watchdog は期限後の出力を破棄し、実行中の forward に停止を通知する。前の forward が
-  まだ実行中なら新しい forward を積まず、その要求も `timeout` で扱う。
+  開始時に要求の deadline までの残り時間が tiny の timeout より短ければ、forward を始めずにスキップする。
+  watchdog は期限後の出力を破棄し、実行中の forward に停止を通知する。
+  要求の deadline が先に来るか同時ならスキップし、tiny 自身の timeout が先に来た場合に限って
+  `timeout` として数える。前の forward がまだ実行中なら新しい forward は始めない。
+  前の要求が tiny 自身の timeout で終わった場合は新しい要求も `timeout` として数え、
+  取り消しや要求の deadline で終わった場合は新しい要求もスキップする。スキップは失敗回数に含めない。
+  このスキップは下記の fallback reason にも含めない。
 - **ロード失敗は即時無効化（breaker とは別経路）**: ONNX load 失敗時は §7.1 の
   とおり当該セッションで reranker を**即時無効化**し、`reason=load_failed` で
   fallback する。使えるセッションが残らず後続のリクエスト失敗を生まないため、
@@ -406,6 +411,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
   順序維持）で返す。次回モデル再ロード / セッション再初期化で再有効化する。これは
   M57（`docs/modernbert-ja-scoring-spec.md` §5.4）の circuit breaker と同じ runtime
   安全パターンであり、ユーザー設定 `tinyNeuralEnabled` とは独立した内部フラグである。
+  連続失敗は要求単位で数え、予測の最初のバッチが失敗したら次のバッチを実行せず、どちらかが失敗した要求では両方の加算を破棄する。
   `load_failed`（上記）と `invalid_input`（下記、入力起因）は breaker に載せない。
   閾値は既定 3、範囲 1〜10 とし、範囲外は clamp する。
 - **部分適用**: 入力 NaN / Inf を含む候補は当該候補のみ skip し、他候補には rerank を
@@ -469,7 +475,7 @@ M56 の `tiny_reranker.onnx` と M57 の `modernbert-ja-70m` の ONNX モデル�
   `reason=disabled` で記録する（§7.2）。
 - `tinyNeuralTimeoutMs`: 範囲 10〜20（§7.2）。範囲外は clamp。
 - `tinyNeuralModelPath`: 明示パス、ユーザー領域、同梱モデルの順に解決する（§5.3）。
-  明示パスが無効なら `load_failed` とし、ほかの候補は探索しない。
+  明示パスは絶対パスに限る。無効なら `load_failed` とし、ほかの候補は探索しない。
 - `tinyNeuralFailureThreshold`: §7.2 の circuit breaker 閾値。既定 3、範囲 1〜10。
   範囲外は clamp。
 - `reranker.modernbert*`（`modernbertEnabled` / `modernbertTimeoutMs` 等）は M57 が使う。

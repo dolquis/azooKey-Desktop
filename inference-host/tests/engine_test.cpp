@@ -2887,6 +2887,55 @@ TEST(InferenceEngineTest, TinyRerankerCoversEveryRouteAndOffPreservesOrderAndSco
   }
 }
 
+TEST(InferenceEngineTest, TinyRerankerPredictionFailuresCountOnceAndKeepBothBatchesUnchanged) {
+  using azookey::core::Candidate;
+  using azookey::reranker::test::MockTinyRerankerRuntime;
+  using namespace std::chrono_literals;
+  ScopedTempDirectory temp;
+  const auto model = azookey::core::Utf8Path(temp.File("tiny.onnx"));
+  std::ofstream(model).put('x');
+  azookey::learning::UserDictionary dictionary(temp.File("user.json"),
+                                               &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dictionary.Load());
+  azookey::host::EngineConfig cfg;
+  cfg.lattice.enabled = false;
+  cfg.tiny_reranker.model_path = azookey::core::PathToUtf8(model);
+  cfg.tiny_reranker.failure_threshold = 2;
+  azookey::host::InferenceEngine engine(std::make_unique<ScriptedConverter>(
+                                           std::vector<Candidate>{{"予測", "かな", 0.6}}, true),
+                                       nullptr, cfg);
+  engine.SetUserDictionary(&dictionary);
+  ASSERT_TRUE(engine.AddUserWord({"辞書", "かなよみ"}));
+  const auto baseline = engine.QueryPredictions("かな", "", kNowBase);
+  ASSERT_EQ(baseline.size(), 2u);
+  cfg.tiny_reranker.enabled = true;
+  engine.ApplyConfig(cfg);
+
+  for (bool dictionary_fails : {true, false}) {
+    SCOPED_TRACE(dictionary_fails ? "dictionary batch fails" : "model batch fails");
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    auto mock = std::make_shared<MockTinyRerankerRuntime>(
+        [calls, dictionary_fails](auto rows, const auto&) {
+          ++*calls;
+          const bool dictionary_batch = rows.front()[9] == 1.0f;  // is_user_dict
+          if (dictionary_batch == dictionary_fails) throw std::runtime_error("mock failure");
+          return std::vector<float>(rows.size(), 1.0f);
+        });
+    engine.SetTinyRerankerRuntimeFactoryForTests([mock](const auto&) { return mock; }, 2s);
+    const int calls_per_request = dictionary_fails ? 1 : 2;
+    for (int request = 1; request <= 3; ++request) {
+      const auto candidates = engine.QueryPredictions("かな", "", kNowBase);
+      ASSERT_EQ(candidates.size(), baseline.size());
+      for (size_t i = 0; i < baseline.size(); ++i) {
+        EXPECT_EQ(candidates[i].surface, baseline[i].surface);
+        EXPECT_DOUBLE_EQ(candidates[i].score, baseline[i].score);
+      }
+      // With a threshold of two requests, the third request cannot enter either batch.
+      EXPECT_EQ(calls->load(), calls_per_request * (std::min)(request, 2));
+    }
+  }
+}
+
 // DEV-1648: live conversion takes the candidate window's final filters, and a
 // dropped top candidate leaves the next one rather than the kana.
 TEST(InferenceEngineTest, LiveConversionDropsPrivateUseAndMixedScriptGenerations) {

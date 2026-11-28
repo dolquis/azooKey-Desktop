@@ -69,10 +69,17 @@ class TinyRerankerRuntime {
   void SetConfig(TinyRerankerConfig config);
   void SetModelDirectories(std::filesystem::path user_models, std::filesystem::path bundled_models);
   void SetFactoryForTests(Factory factory, std::optional<std::chrono::milliseconds> timeout = {});
+  void SetClockForTests(std::function<std::chrono::steady_clock::time_point()> now);
   TinyRerankOutcome Apply(std::vector<core::Candidate>& candidates, bool secure,
                           const std::atomic<bool>* cancel = nullptr, Deadline deadline = {});
+  TinyRerankOutcome ApplyPredictionBatches(std::vector<core::Candidate>& dictionary,
+                                         std::vector<core::Candidate>& predictions, bool secure,
+                                         const std::atomic<bool>* cancel);
 
  private:
+  // Apply one forward without treating its success as a request-level success.
+  TinyRerankOutcome ApplyBatch(std::vector<core::Candidate>& candidates, bool secure,
+                               const std::atomic<bool>* cancel, Deadline deadline);
   void ResetSession();
   TinyRerankOutcome RecordFailure(TinyRerankOutcome outcome);
 
@@ -81,8 +88,10 @@ class TinyRerankerRuntime {
   std::filesystem::path bundled_models_;
   Factory factory_;
   std::optional<std::chrono::milliseconds> timeout_for_tests_;
+  std::function<std::chrono::steady_clock::time_point()> now_for_tests_;
   std::shared_ptr<ITinyRerankerRuntime> runtime_;
   std::future<std::vector<float>> pending_;
+  bool pending_timed_out_{};
   bool load_attempted_{};
   int failures_{};
 };

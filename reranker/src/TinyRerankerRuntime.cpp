@@ -43,6 +43,7 @@ std::optional<std::filesystem::path> ResolveTinyRerankerModelPath(
   if (!explicit_path.empty()) {
     if (explicit_path.find('\0') != std::string::npos) return std::nullopt;
     auto path = core::Utf8Path(explicit_path);
+    if (!path.is_absolute()) return std::nullopt;
     return IsModelFile(path) ? std::optional{std::move(path)} : std::nullopt;
   }
   for (const auto* directory : {&user_models, &bundled_models}) {
@@ -104,6 +105,10 @@ void TinyRerankerRuntime::SetFactoryForTests(Factory factory,
   ResetSession();
 }
 
+void TinyRerankerRuntime::SetClockForTests(std::function<Clock::time_point()> now) {
+  now_for_tests_ = std::move(now);
+}
+
 TinyRerankOutcome TinyRerankerRuntime::RecordFailure(TinyRerankOutcome outcome) {
   ++failures_;
   return outcome;
@@ -111,6 +116,35 @@ TinyRerankOutcome TinyRerankerRuntime::RecordFailure(TinyRerankOutcome outcome) 
 
 TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candidates, bool secure,
                                              const std::atomic<bool>* cancel, Deadline deadline) {
+  const auto outcome = ApplyBatch(candidates, secure, cancel, deadline);
+  if (outcome == TinyRerankOutcome::Applied) failures_ = 0;
+  return outcome;
+}
+
+TinyRerankOutcome TinyRerankerRuntime::ApplyPredictionBatches(
+    std::vector<core::Candidate>& dictionary, std::vector<core::Candidate>& predictions, bool secure,
+    const std::atomic<bool>* cancel) {
+  using Outcome = TinyRerankOutcome;
+  if (dictionary.empty()) return Apply(predictions, secure, cancel);
+  if (predictions.empty() || !config_.enabled || secure) return Apply(dictionary, secure, cancel);
+
+  // Keep the original scores and failure count until both batches finish.
+  auto ranked_dictionary = dictionary;
+  const auto first = ApplyBatch(ranked_dictionary, secure, cancel, {});
+  if (first != Outcome::Applied && first != Outcome::InvalidInput) return first;
+  const auto second = ApplyBatch(predictions, secure, cancel, {});
+  if (second != Outcome::Applied && second != Outcome::InvalidInput) return second;
+  if (first == Outcome::Applied) dictionary = std::move(ranked_dictionary);
+  if (first == Outcome::Applied || second == Outcome::Applied) {
+    failures_ = 0;
+    return Outcome::Applied;
+  }
+  return Outcome::InvalidInput;
+}
+
+TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& candidates,
+                                                 bool secure, const std::atomic<bool>* cancel,
+                                                 Deadline deadline) {
   using Outcome = TinyRerankOutcome;
   using namespace std::chrono_literals;
   const auto canceled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
@@ -118,7 +152,9 @@ TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candi
   if (!config_.enabled) return Outcome::Disabled;
   if (secure) return Outcome::SecureMode;
   if (failures_ >= config_.failure_threshold) return Outcome::CircuitOpen;
-  if (deadline && Clock::now() >= *deadline) return Outcome::Skipped;
+  const auto now = [this] { return now_for_tests_ ? now_for_tests_() : Clock::now(); };
+  const auto timeout = timeout_for_tests_.value_or(std::chrono::milliseconds(config_.timeout_ms));
+  if (deadline && *deadline - now() < timeout) return Outcome::Skipped;
 
   if (!load_attempted_) {
     load_attempted_ = true;
@@ -157,22 +193,29 @@ TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candi
     batch.push_back(features);
   }
   if (batch.empty()) return Outcome::InvalidInput;
-  if (canceled() || (deadline && Clock::now() >= *deadline)) return Outcome::Skipped;
+  const auto started = now();
+  if (canceled() || (deadline && started >= *deadline)) return Outcome::Skipped;
   if (pending_.valid()) {
     if (pending_.wait_for(0ms) != std::future_status::ready) {
-      return RecordFailure(Outcome::Timeout);
+      return pending_timed_out_ ? RecordFailure(Outcome::Timeout) : Outcome::Skipped;
     }
-    // This result belongs to a timed-out or canceled request.
+    // The previous request already fell back. Discard its result.
     pending_ = {};
   }
 
-  const auto timeout = timeout_for_tests_.value_or(std::chrono::milliseconds(config_.timeout_ms));
-  auto expires = Clock::now() + timeout;
-  if (deadline) expires = (std::min)(expires, *deadline);
+  const auto tiny_expires = started + timeout;
+  const bool request_expires_first = deadline && *deadline <= tiny_expires;
+  const auto expires = request_expires_first ? *deadline : tiny_expires;
   auto stop = std::make_shared<std::atomic<bool>>(false);
   const auto request_stop = [&] {
     stop->store(true, std::memory_order_relaxed);
     stop->notify_all();
+  };
+  const auto expire = [&] {
+    request_stop();
+    if (request_expires_first) return Outcome::Skipped;
+    pending_timed_out_ = true;
+    return RecordFailure(Outcome::Timeout);
   };
   std::vector<float> scores;
   try {
@@ -182,21 +225,19 @@ TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candi
     std::thread worker(std::move(work));
     worker.detach();
     pending_ = std::move(result);
+    pending_timed_out_ = false;
     for (;;) {
       if (canceled()) {
         request_stop();
         return Outcome::Skipped;
       }
-      const auto now = Clock::now();
-      if (now >= expires) {
-        request_stop();
-        return RecordFailure(Outcome::Timeout);
-      }
-      const auto next_check = cancel ? (std::min)(expires, now + 1ms) : expires;
+      const auto current = now();
+      if (current >= expires) return expire();
+      const auto next_check = cancel ? (std::min)(expires, current + 1ms) : expires;
       if (pending_.wait_until(next_check) == std::future_status::ready) break;
     }
     if (canceled()) return Outcome::Skipped;
-    if (Clock::now() >= expires) return RecordFailure(Outcome::Timeout);
+    if (now() >= expires) return expire();
     scores = pending_.get();
   } catch (...) {
     return RecordFailure(Outcome::InferError);
@@ -205,7 +246,6 @@ TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candi
       !std::all_of(scores.begin(), scores.end(), [](float v) { return std::isfinite(v); })) {
     return RecordFailure(Outcome::InferError);
   }
-  failures_ = 0;
   for (size_t i = 0; i < valid_count; ++i) {
     candidates[indices[i]].score += kTinyScoreWeight * std::clamp(scores[i], 0.0f, 1.0f);
   }

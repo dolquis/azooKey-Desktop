@@ -68,6 +68,29 @@ TEST_F(TinyRerankerRuntimeTest, ResolvesModelPathsInOrderAndDoesNotFallBackFromA
             std::nullopt);
 }
 
+TEST_F(TinyRerankerRuntimeTest, RelativeOverrideFailsEvenWhenItNamesAnExistingFile) {
+  const auto relative = temp_.filename() / "model.onnx";
+  ASSERT_FALSE(relative.is_absolute());
+  ASSERT_TRUE(std::filesystem::create_directory(relative.parent_path()));
+  struct RelativeModelCleanup {
+    std::filesystem::path model;
+    ~RelativeModelCleanup() {
+      std::error_code error;
+      std::filesystem::remove(model, error);
+      std::filesystem::remove(model.parent_path(), error);
+    }
+  } cleanup{relative};
+  std::ofstream(relative).put('x');
+  ASSERT_TRUE(std::filesystem::is_regular_file(relative));
+  Install([](auto rows, const auto&) { return std::vector<float>(rows.size(), 1.0f); });
+  config_.model_path = core::PathToUtf8(relative);
+  runtime_.SetConfig(config_);
+
+  std::vector<core::Candidate> candidates{{"先", "", 0.5}};
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::LoadFailed);
+  EXPECT_DOUBLE_EQ(candidates.front().score, 0.5);
+}
+
 TEST_F(TinyRerankerRuntimeTest, DisabledSecureAndAbsentRuntimePreserveTheCandidates) {
   std::vector<core::Candidate> candidates{{"先", "さき", 0.5}, {"後", "あと", 1.0}};
   EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::LoadFailed);
@@ -190,6 +213,128 @@ TEST_F(TinyRerankerRuntimeTest, WatchdogDiscardsTheLateResultAndOpensTheBreaker)
   EXPECT_EQ(candidates[0].surface, "先");
   EXPECT_DOUBLE_EQ(candidates[0].score, 0.5);
   EXPECT_DOUBLE_EQ(candidates[1].score, 1.0);
+}
+
+TEST_F(TinyRerankerRuntimeTest, ChangedConfigClosesAnOpenBreaker) {
+  config_.failure_threshold = 1;
+  runtime_.SetConfig(config_);
+  auto calls = std::make_shared<std::atomic<int>>(0);
+  Install([calls](auto rows, const auto&) {
+    if ((*calls)++ == 0) throw std::runtime_error("mock failure");
+    return std::vector<float>(rows.size(), 1.0f);
+  });
+
+  std::vector<core::Candidate> candidates{{"先", "", 0.5}};
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::InferError);
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::CircuitOpen);
+  runtime_.SetConfig(config_);
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::CircuitOpen);
+  config_.timeout_ms = kTinyTimeoutMaxMs;
+  runtime_.SetConfig(config_);
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Applied);
+  EXPECT_EQ(calls->load(), 2);
+}
+
+TEST_F(TinyRerankerRuntimeTest, ShortRequestBudgetSkipsWithoutStartingForward) {
+  config_.failure_threshold = 1;
+  runtime_.SetConfig(config_);
+  const auto now = std::chrono::steady_clock::now();
+  runtime_.SetClockForTests([now] { return now; });
+  auto calls = std::make_shared<std::atomic<int>>(0);
+  Install([calls](auto rows, const auto&) {
+    ++*calls;
+    return std::vector<float>(rows.size(), 1.0f);
+  });
+
+  std::vector<core::Candidate> candidates{{"先", "", 0.5}};
+  EXPECT_EQ(runtime_.Apply(candidates, false, nullptr, now + 20ms), Outcome::Skipped);
+  EXPECT_EQ(calls->load(), 0);
+  EXPECT_DOUBLE_EQ(candidates.front().score, 0.5);
+  runtime_.SetClockForTests({});
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Applied);
+}
+
+TEST_F(TinyRerankerRuntimeTest, RequestDeadlineStopsForwardAndPendingWorkDoesNotCount) {
+  config_.failure_threshold = 1;
+  runtime_.SetConfig(config_);
+  auto started = std::make_shared<std::promise<void>>();
+  auto entered = started->get_future();
+  auto stopped = std::make_shared<std::promise<void>>();
+  auto saw_stop = stopped->get_future();
+  std::promise<void> release;
+  auto gate = release.get_future().share();
+  Install([started, stopped, gate](auto rows, const auto& stop) {
+    started->set_value();
+    stop.wait(false, std::memory_order_relaxed);
+    stopped->set_value();
+    gate.wait();
+    return std::vector<float>(rows.size(), 1.0f);
+  });
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  runtime_.SetClockForTests([&, samples = 0]() mutable {
+    // Preparation uses most of the request budget before the watchdog starts.
+    if (++samples == 1) return deadline - 3s;
+    if (samples == 2) return deadline - 1ms;
+    EXPECT_EQ(entered.wait_for(2s), std::future_status::ready);
+    return deadline;
+  });
+
+  std::vector<core::Candidate> candidates{{"先", "", 0.5}};
+  EXPECT_EQ(runtime_.Apply(candidates, false, nullptr, deadline), Outcome::Skipped);
+  EXPECT_EQ(saw_stop.wait_for(2s), std::future_status::ready);
+  runtime_.SetClockForTests({});
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Skipped);
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Skipped);
+  EXPECT_DOUBLE_EQ(candidates.front().score, 0.5);
+  release.set_value();
+}
+
+TEST_F(TinyRerankerRuntimeTest, PendingTinyTimeoutCountsOncePerRequest) {
+  config_.failure_threshold = 2;
+  runtime_.SetConfig(config_);
+  std::promise<void> release;
+  auto gate = release.get_future().share();
+  Install(
+      [gate](auto rows, const auto&) {
+        gate.wait();
+        return std::vector<float>(rows.size(), 1.0f);
+      },
+      10ms);
+
+  std::vector<core::Candidate> dictionary{{"辞書", "", 0.5}};
+  std::vector<core::Candidate> predictions{{"予測", "", 0.7}};
+  EXPECT_EQ(runtime_.ApplyPredictionBatches(dictionary, predictions, false, nullptr),
+            Outcome::Timeout);
+  EXPECT_EQ(runtime_.Apply(predictions, false), Outcome::Timeout);
+  EXPECT_EQ(runtime_.Apply(predictions, false), Outcome::CircuitOpen);
+  EXPECT_DOUBLE_EQ(dictionary.front().score, 0.5);
+  EXPECT_DOUBLE_EQ(predictions.front().score, 0.7);
+  release.set_value();
+}
+
+TEST_F(TinyRerankerRuntimeTest, PendingCanceledForwardSkipsWithoutOpeningTheBreaker) {
+  config_.failure_threshold = 1;
+  runtime_.SetConfig(config_);
+  auto canceled = std::make_shared<std::atomic<bool>>(false);
+  auto stopped = std::make_shared<std::promise<void>>();
+  auto saw_stop = stopped->get_future();
+  std::promise<void> release;
+  auto gate = release.get_future().share();
+  Install([canceled, stopped, gate](auto rows, const auto& stop) {
+    canceled->store(true, std::memory_order_relaxed);
+    stop.wait(false, std::memory_order_relaxed);
+    stopped->set_value();
+    gate.wait();
+    return std::vector<float>(rows.size(), 1.0f);
+  });
+
+  std::vector<core::Candidate> candidates{{"先", "", 0.5}};
+  EXPECT_EQ(runtime_.Apply(candidates, false, canceled.get()), Outcome::Skipped);
+  EXPECT_EQ(saw_stop.wait_for(2s), std::future_status::ready);
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Skipped);
+  EXPECT_EQ(runtime_.Apply(candidates, false), Outcome::Skipped);
+  EXPECT_DOUBLE_EQ(candidates.front().score, 0.5);
+  release.set_value();
 }
 
 }  // namespace

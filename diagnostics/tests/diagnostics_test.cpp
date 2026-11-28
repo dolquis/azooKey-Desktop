@@ -775,6 +775,7 @@ TEST(DiagnosticsTest, RedactedSettingsStillRedactFreeTextInKeptStringValues) {
   const auto redacted = diag::RedactSettingsJson(R"json({
     "openAiModel": "sk-)json" + secret + R"json(",
     "model": {"selectedPath": "C:\\Users\\alice\\models\\m.gguf"},
+    "reranker": {"tinyNeuralModelPath": "C:\\Users\\alice\\models\\tiny.onnx"},
     "bracketPairingApps": ["sk-)json" + secret + R"json("],
     "openAiApiEndpoint": "https://example.invalid/Bearer )json" +
                                                  secret + R"json("
@@ -783,6 +784,9 @@ TEST(DiagnosticsTest, RedactedSettingsStillRedactFreeTextInKeptStringValues) {
   ASSERT_TRUE(value.has_value());
   EXPECT_EQ(value->GetString("openAiModel"), "***redacted***");
   EXPECT_EQ(value->Find("model")->GetString("selectedPath"), "%USERPROFILE%\\models\\m.gguf");
+  ASSERT_TRUE(value->Find("reranker"));
+  EXPECT_EQ(value->Find("reranker")->GetString("tinyNeuralModelPath"),
+            "%USERPROFILE%\\models\\tiny.onnx");
   EXPECT_EQ(redacted.find(secret), std::string::npos);
   EXPECT_EQ(redacted.find("alice"), std::string::npos);
 }
@@ -931,6 +935,7 @@ TEST(DiagnosticsTest, RedactedSettingsClassifyEveryFreeTextSchemaPath) {
       "/model/benchmarkHistory/[]/completedAt",
       "/model/benchmarkHistory/[]/error",
       "/inlineEnglishDictionaryPath",
+      "/reranker/tinyNeuralModelPath",
       "/symbolDataPath",
       "/emojiDataPath",
       "/safeMode/enteredAt",

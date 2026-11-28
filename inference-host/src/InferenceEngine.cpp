@@ -1522,8 +1522,11 @@ void InferenceEngine::SetTinyRerankerModelDirectories(std::filesystem::path user
 void InferenceEngine::ApplyTinyRerankerLocked(std::vector<core::Candidate>& candidates, bool secure,
                                               const std::atomic<bool>* cancel,
                                               reranker::TinyRerankerRuntime::Deadline deadline) {
-  const auto outcome =
-      tiny_reranker_.Apply(candidates, secure || tiny_reranker_privacy_secure_, cancel, deadline);
+  LogTinyRerankOutcome(
+      tiny_reranker_.Apply(candidates, secure || tiny_reranker_privacy_secure_, cancel, deadline));
+}
+
+void InferenceEngine::LogTinyRerankOutcome(reranker::TinyRerankOutcome outcome) const {
   if (!runtime_logger_ || !runtime_logger_->enabled()) return;
   if (const char* reason = reranker::TinyRerankReason(outcome)) {
     runtime_logger_->Log(logging::RuntimeLogLevel::Info, "tiny_rerank",
@@ -2934,12 +2937,12 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(
       DictionaryCandidates(dictionaries_, kana, learning::LookupMode::PredictivePrefix,
                            now_epoch_sec, 32, true, config_.user_word_default_score);
   ObserveTinyRerankerFeaturesLocked(dictionary_predictions, cancel);
-  ApplyTinyRerankerLocked(dictionary_predictions, false, cancel);
+  ObserveTinyRerankerFeaturesLocked(candidates, cancel);
+  LogTinyRerankOutcome(tiny_reranker_.ApplyPredictionBatches(
+      dictionary_predictions, candidates, tiny_reranker_privacy_secure_, cancel));
   dictionary_predictions =
       ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec, cancel);
   if (rerank_canceled()) return {};
-  ObserveTinyRerankerFeaturesLocked(candidates, cancel);
-  ApplyTinyRerankerLocked(candidates, false, cancel);
   candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec, cancel);
   if (rerank_canceled()) return {};
   if (rerank_start)

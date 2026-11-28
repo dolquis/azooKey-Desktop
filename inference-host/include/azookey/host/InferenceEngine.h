@@ -781,6 +781,7 @@ class InferenceEngine {
   void ApplyTinyRerankerLocked(std::vector<core::Candidate>& candidates, bool secure,
                                const std::atomic<bool>* cancel,
                                reranker::TinyRerankerRuntime::Deadline deadline = {});
+  void LogTinyRerankOutcome(reranker::TinyRerankOutcome outcome) const;
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec,

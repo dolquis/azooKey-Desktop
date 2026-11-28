@@ -2354,6 +2354,11 @@ TEST(InferenceEngineTest, ZenzaiConvertRejectsPrivateUseGenerationsDirectly) {
   for (const auto& candidate : candidates) {
     surfaces.push_back(candidate.surface);
     EXPECT_EQ(candidate.source, azookey::core::CandidateSource::Model);
+    ASSERT_TRUE(candidate.rerank_signals.zenzai_avg_logprob.has_value());
+    const bool partial = candidate.surface == "複数";
+    EXPECT_DOUBLE_EQ(*candidate.rerank_signals.zenzai_avg_logprob, partial ? -0.25 : -1.0 / 3.0);
+    EXPECT_EQ(candidate.rerank_signals.candidate_length, partial ? 2U : 3U);
+    EXPECT_FALSE(candidate.rerank_signals.dictionary_score.has_value());
   }
   std::sort(surfaces.begin(), surfaces.end());
   EXPECT_EQ(surfaces, (std::vector<std::string>{"複数", "複数形"}));

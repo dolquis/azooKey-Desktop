@@ -1,0 +1,7 @@
+add_executable(reranker_feature_tests feature_extractor_test.cpp)
+target_link_libraries(reranker_feature_tests
+  PRIVATE azookey_reranker azookey_json GTest::gtest_main azookey_project_warnings
+)
+target_compile_definitions(reranker_feature_tests PRIVATE
+  AZOOKEY_FEATURES_V1_GOLDEN="${CMAKE_CURRENT_SOURCE_DIR}/features_v1_golden.json")
+azookey_discover_tests(reranker_feature_tests)

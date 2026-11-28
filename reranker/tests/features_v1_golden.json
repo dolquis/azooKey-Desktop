@@ -1,0 +1,58 @@
+{
+  "feature_names": [
+    "zenzai_score", "dictionary_score", "user_frequency", "recency_score",
+    "typo_confidence", "app_profile_score", "candidate_length", "segment_count",
+    "is_named_entity", "is_user_dict", "is_neologism", "is_typo_corrected"
+  ],
+  "cases": [
+    {
+      "name": "dictionary",
+      "surface": "変換",
+      "dictionary_score": 0.64,
+      "expected": [-10, 0.64, 0, 0, 0, 0, 2, 1, 0, 0, 0, 0]
+    },
+    {
+      "name": "user_dictionary",
+      "surface": "𠮷田",
+      "dictionary_score": -1.25,
+      "user_frequency": 0.25,
+      "recency_score": 0.41,
+      "is_user_dict": true,
+      "expected": [-10, -1.25, 0.25, 0.41, 0, 0, 2, 1, 0, 1, 0, 0]
+    },
+    {
+      "name": "zenzai",
+      "surface": "交渉する",
+      "zenzai_avg_logprob": -1.82,
+      "expected": [-1.82, 0, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0]
+    },
+    {
+      "name": "missing_signals_with_combining_mark",
+      "surface": "か\u3099",
+      "expected": [-10, 0, 0, 0, 0, 0, 2, 1, 0, 0, 0, 0]
+    },
+    {
+      "name": "named_entity_and_neologism",
+      "surface": "新語",
+      "dictionary_score": 0,
+      "is_named_entity": true,
+      "is_neologism": true,
+      "expected": [-10, 0, 0, 0, 0, 0, 2, 1, 1, 0, 1, 0]
+    },
+    {
+      "name": "lattice_and_model_signals",
+      "surface": "きょうは晴れ",
+      "zenzai_avg_logprob": -2.25,
+      "dictionary_score": 0.75,
+      "lattice_segment_count": 3,
+      "expected": [-2.25, 0.75, 0, 0, 0, 0, 6, 3, 0, 0, 0, 0]
+    },
+    {
+      "name": "supplied_typo_signals",
+      "surface": "交渉",
+      "typo_confidence": 0.82,
+      "is_typo_corrected": true,
+      "expected": [-10, 0, 0, 0, 0.82, 0, 2, 1, 0, 0, 0, 1]
+    }
+  ]
+}

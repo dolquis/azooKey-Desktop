@@ -384,7 +384,10 @@ void DedupBySurface(std::vector<core::Candidate>& candidates) {
     if (existing == deduped.end()) {
       deduped.push_back(std::move(candidate));
     } else if (candidate.score > existing->score) {
+      core::PreserveRerankSignals(candidate.rerank_signals, existing->rerank_signals);
       *existing = std::move(candidate);
+    } else {
+      core::PreserveRerankSignals(existing->rerank_signals, candidate.rerank_signals);
     }
   }
   candidates = std::move(deduped);
@@ -1839,6 +1842,8 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
       candidate.reading = kana;
       candidate.score = NormalizeLogprob(item.total_logprob, item.token_count);
       candidate.source = core::CandidateSource::Model;
+      if (item.token_count > 0) candidate.rerank_signals.zenzai_avg_logprob = avg;
+      candidate.rerank_signals.candidate_length = core::CountCandidateCodepoints(candidate.surface);
       candidate.debug_info =
           "zenzai;lp=" + FormatDouble(item.total_logprob) + ";avg=" + FormatDouble(avg);
       if (trimmed_incomplete_utf8_suffix) {

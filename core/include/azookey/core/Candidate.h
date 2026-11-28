@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace azookey::core {
 
@@ -28,6 +31,24 @@ enum class CandidateSource {
   Emoji,
 };
 
+struct RerankSignals {
+  std::optional<double> zenzai_avg_logprob{};
+  std::optional<double> dictionary_score{};
+  std::optional<double> typo_confidence{};
+  size_t candidate_length{};
+  std::optional<size_t> lattice_segment_count{};
+  bool is_named_entity{};
+  bool is_user_dict{};
+  bool is_neologism{};
+  bool is_typo_corrected{};
+};
+
+// Count Unicode scalar values in the candidate surface; invalid bytes are skipped.
+size_t CountCandidateCodepoints(std::string_view surface);
+
+// Fold signals from another occurrence of the same surface into the ranking winner.
+void PreserveRerankSignals(RerankSignals& winner, const RerankSignals& other);
+
 struct Candidate {
   std::string surface;
   std::string reading;
@@ -36,6 +57,7 @@ struct Candidate {
   std::string debug_info;
   std::string description;
   CandidateTag tag{CandidateTag::None};
+  RerankSignals rerank_signals{};
 };
 
 }  // namespace azookey::core

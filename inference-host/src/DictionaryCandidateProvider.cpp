@@ -10,6 +10,12 @@ constexpr uint16_t kTechnicalCategories =
     learning::CategoryBit(learning::DictionaryCategory::ProductName) |
     learning::CategoryBit(learning::DictionaryCategory::Software) |
     learning::CategoryBit(learning::DictionaryCategory::Technical);
+constexpr uint16_t kNamedEntityCategories =
+    learning::CategoryBit(learning::DictionaryCategory::PersonName) |
+    learning::CategoryBit(learning::DictionaryCategory::PlaceName) |
+    learning::CategoryBit(learning::DictionaryCategory::StationName) |
+    learning::CategoryBit(learning::DictionaryCategory::ProductName) |
+    learning::CategoryBit(learning::DictionaryCategory::CompanyOrg);
 }  // namespace
 
 std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStore& store,
@@ -24,7 +30,8 @@ std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStor
   ctx.exclude_exact_key = mode == learning::LookupMode::PredictivePrefix;
   ctx.user_word_default_score = user_word_default_score;
   ctx.now_epoch_sec = now_epoch_sec;
-  if (!include_user) ctx.excluded_layers = 1U << static_cast<unsigned>(learning::LayerId::User);
+  constexpr uint16_t kUserLayer = 1U << static_cast<unsigned>(learning::LayerId::User);
+  if (!include_user) ctx.excluded_layers = kUserLayer;
   std::vector<core::Candidate> result;
   for (const auto& entry : store.Lookup(reading, ctx)) {
     const bool local = entry.source >= learning::LayerId::User;
@@ -34,7 +41,13 @@ std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStor
          local ? core::CandidateSource::UserDictionary : core::CandidateSource::SystemDictionary,
          "dictionary", "",
          (entry.category_mask & kTechnicalCategories) ? core::CandidateTag::Technical
-                                                      : core::CandidateTag::None});
+                                                      : core::CandidateTag::None,
+         {.dictionary_score = entry.score,
+          .candidate_length = core::CountCandidateCodepoints(entry.surface),
+          .is_named_entity = (entry.category_mask & kNamedEntityCategories) != 0,
+          .is_user_dict = (entry.sources & kUserLayer) != 0,
+          .is_neologism = (entry.category_mask &
+                          learning::CategoryBit(learning::DictionaryCategory::Neologism)) != 0}});
     if (result.size() == limit) break;
   }
   return result;

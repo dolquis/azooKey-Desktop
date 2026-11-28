@@ -125,6 +125,14 @@ TEST(CandidateTagsTest, DictionaryCategoriesAssignTechnicalBeforeEnglish) {
       const bool technical = category == 4 || category == 5 || category == 8;
       EXPECT_EQ(candidates[0].tag, technical ? CandidateTag::Technical : CandidateTag::None);
       const double dictionary_score = candidates[0].score;
+      const auto& signals = candidates[0].rerank_signals;
+      ASSERT_TRUE(signals.dictionary_score.has_value());
+      EXPECT_DOUBLE_EQ(*signals.dictionary_score, dictionary_score);
+      EXPECT_EQ(signals.candidate_length, 8U);
+      EXPECT_EQ(signals.is_named_entity,
+                category == 1 || category == 2 || category == 3 || category == 4 || category == 7);
+      EXPECT_EQ(signals.is_neologism, category == 9);
+      EXPECT_FALSE(signals.is_user_dict);
       azookey::host::AssignHeuristicTags(candidates);
       EXPECT_EQ(candidates[0].tag, technical ? CandidateTag::Technical : CandidateTag::English);
       // Tag assignment does not apply a profile boost to dictionary_score.
@@ -211,6 +219,8 @@ TEST(CandidateTagsTest, DictionaryCategoryUnionKeepsTechnicalForTheWinningLayer)
       store, entry.reading, azookey::learning::LookupMode::Exact, 0, 10);
   ASSERT_EQ(candidates.size(), 1U);
   EXPECT_EQ(candidates[0].source, azookey::core::CandidateSource::UserDictionary);
+  EXPECT_TRUE(candidates[0].rerank_signals.is_user_dict);
+  EXPECT_TRUE(candidates[0].rerank_signals.is_named_entity);
   azookey::host::AssignHeuristicTags(candidates);
   EXPECT_EQ(candidates[0].tag, CandidateTag::Technical);
 }

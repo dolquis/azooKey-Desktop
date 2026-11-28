@@ -8,7 +8,9 @@
 #include <limits>
 #include <locale>
 #include <sstream>
+#include <utility>
 
+#include "azookey/core/DoubleArrayTrie.h"
 #include "azookey/learning/AtomicFile.h"
 
 namespace azookey::learning {
@@ -170,9 +172,35 @@ bool ParseAutoWordState(std::string_view value, AutoWordState& out) {
 AutoWordStore::AutoWordStore(std::filesystem::path path, const ByteCrypto* crypto)
     : path_(std::move(path)), crypto_(crypto ? crypto : &DpapiCrypto()) {}
 
+AutoWordStore::Table::Words& AutoWordStore::Table::GetOrAddReading(const std::string& reading) {
+  const auto [it, inserted] = by_reading.try_emplace(reading);
+  if (inserted) {
+    for (const auto& key : core::ReadingAliases(core::NormalizeReading(reading)))
+      if (key != reading) prefix_readings[key].insert(reading);
+  }
+  return it->second;
+}
+
+AutoWordStore::Table::Readings::iterator AutoWordStore::Table::EraseReading(
+    Readings::iterator reading) {
+  for (const auto& key : core::ReadingAliases(core::NormalizeReading(reading->first))) {
+    if (key == reading->first) continue;
+    const auto originals = prefix_readings.find(key);
+    if (originals == prefix_readings.end()) continue;
+    originals->second.erase(reading->first);
+    if (originals->second.empty()) prefix_readings.erase(originals);
+  }
+  return by_reading.erase(reading);
+}
+
+void AutoWordStore::Table::Swap(Table& other) noexcept {
+  by_reading.swap(other.by_reading);
+  prefix_readings.swap(other.prefix_readings);
+}
+
 AutoWord* AutoWordStore::FindLocked(const std::string& surface, const std::string& reading) {
-  const auto by_reading = table_.find(reading);
-  if (by_reading == table_.end()) return nullptr;
+  const auto by_reading = table_.by_reading.find(reading);
+  if (by_reading == table_.by_reading.end()) return nullptr;
   const auto entry = by_reading->second.find(surface);
   if (entry == by_reading->second.end()) return nullptr;
   return &entry->second;
@@ -207,7 +235,7 @@ bool AutoWordStore::Observe(const std::string& surface, const std::string& readi
   // A threshold of 1 means the very first sighting is enough to register.
   const bool promoted = auto_promote && word.count >= promote_threshold;
   if (promoted) word.state = AutoWordState::Confirmed;
-  table_[reading].emplace(surface, std::move(word));
+  table_.GetOrAddReading(reading).emplace(surface, std::move(word));
   return promoted;
 }
 
@@ -236,14 +264,14 @@ void AutoWordStore::IngestTrending(const std::vector<AutoWord>& batch, uint64_t 
     word.state = auto_promote ? AutoWordState::Confirmed : AutoWordState::Pending;
     word.first_seen_epoch = now_epoch;
     word.last_seen_epoch = now_epoch;
-    table_[word.reading].emplace(word.surface, std::move(word));
+    table_.GetOrAddReading(word.reading).emplace(word.surface, std::move(word));
   }
 }
 
 std::vector<AutoWord> AutoWordStore::ListByState(AutoWordState state) const {
   std::lock_guard<std::mutex> lock(table_mutex_);
   std::vector<AutoWord> result;
-  for (const auto& [reading, surfaces] : table_) {
+  for (const auto& [reading, surfaces] : table_.by_reading) {
     for (const auto& [surface, word] : surfaces) {
       if (word.state == state) result.push_back(word);
     }
@@ -299,10 +327,35 @@ bool AutoWordStore::CompareAndSetState(const std::string& surface, const std::st
 std::vector<AutoWord> AutoWordStore::LookupConfirmed(const std::string& reading) const {
   std::lock_guard<std::mutex> lock(table_mutex_);
   std::vector<AutoWord> result;
-  const auto by_reading = table_.find(reading);
-  if (by_reading == table_.end()) return result;
+  const auto by_reading = table_.by_reading.find(reading);
+  if (by_reading == table_.by_reading.end()) return result;
   for (const auto& [surface, word] : by_reading->second) {
     if (word.state == AutoWordState::Confirmed) result.push_back(word);
+  }
+  return result;
+}
+
+std::vector<AutoWordPrefixMatch> AutoWordStore::LookupConfirmedPrefixes(
+    std::string_view normalized_reading) const {
+  // Each lattice position reads the published table separately. If a state change races a
+  // conversion, earlier positions may retain the old state. The next conversion sees the change.
+  std::lock_guard<std::mutex> lock(table_mutex_);
+  std::vector<AutoWordPrefixMatch> result;
+  const auto append = [&](std::string_view reading, size_t key_bytes) {
+    const auto it = table_.by_reading.find(reading);
+    if (it == table_.by_reading.end()) return;
+    for (const auto& [surface, word] : it->second)
+      if (word.state == AutoWordState::Confirmed) result.push_back({key_bytes, surface});
+  };
+  for (size_t length = 1; length <= normalized_reading.size(); ++length) {
+    if (length != normalized_reading.size() &&
+        (static_cast<uint8_t>(normalized_reading[length]) & 0xc0) == 0x80)
+      continue;
+    const auto key = normalized_reading.substr(0, length);
+    append(key, length);
+    const auto originals = table_.prefix_readings.find(key);
+    if (originals != table_.prefix_readings.end())
+      for (const auto& reading : originals->second) append(reading, length);
   }
   return result;
 }
@@ -311,7 +364,7 @@ size_t AutoWordStore::PrunePending(uint64_t now_epoch, uint64_t max_age_sec) {
   std::lock_guard<std::mutex> lock(mutex_);
   std::lock_guard<std::mutex> table_lock(table_mutex_);
   size_t removed = 0;
-  for (auto reading = table_.begin(); reading != table_.end();) {
+  for (auto reading = table_.by_reading.begin(); reading != table_.by_reading.end();) {
     auto& surfaces = reading->second;
     for (auto surface = surfaces.begin(); surface != surfaces.end();) {
       const AutoWord& word = surface->second;
@@ -327,7 +380,7 @@ size_t AutoWordStore::PrunePending(uint64_t now_epoch, uint64_t max_age_sec) {
         ++surface;
       }
     }
-    reading = surfaces.empty() ? table_.erase(reading) : std::next(reading);
+    reading = surfaces.empty() ? table_.EraseReading(reading) : std::next(reading);
   }
   return removed;
 }
@@ -335,14 +388,15 @@ size_t AutoWordStore::PrunePending(uint64_t now_epoch, uint64_t max_age_sec) {
 size_t AutoWordStore::Size() const {
   std::lock_guard<std::mutex> lock(table_mutex_);
   size_t count = 0;
-  for (const auto& [reading, surfaces] : table_) count += surfaces.size();
+  for (const auto& [reading, surfaces] : table_.by_reading) count += surfaces.size();
   return count;
 }
 
 void AutoWordStore::Reset() {
+  Table empty;
   std::lock_guard<std::mutex> lock(mutex_);
   std::lock_guard<std::mutex> table_lock(table_mutex_);
-  table_.clear();
+  table_.Swap(empty);
 }
 
 bool AutoWordStore::Load() {
@@ -360,7 +414,7 @@ bool AutoWordStore::Load() {
   SecureErase(text);
   {
     std::lock_guard<std::mutex> table_lock(table_mutex_);
-    table_.swap(loaded);
+    table_.Swap(loaded);
     save_blocked_by_load_failure_ = blocked;
   }
   return !blocked;
@@ -372,7 +426,7 @@ bool AutoWordStore::LoadText(std::string_view text) {
   const bool valid = ParseText(text, loaded);
   {
     std::lock_guard<std::mutex> table_lock(table_mutex_);
-    table_.swap(loaded);
+    table_.Swap(loaded);
   }
   return valid;
 }
@@ -418,7 +472,7 @@ bool AutoWordStore::ParseText(std::string_view text, Table& table) const {
       LogMalformedLine(path_, line_number);
       continue;
     }
-    table[word.reading].emplace(word.surface, std::move(word));
+    table.GetOrAddReading(word.reading).emplace(word.surface, std::move(word));
   }
   return all_valid;
 }
@@ -453,11 +507,11 @@ AutoWordSaveOutcome AutoWordStore::SetStateAndSave(const std::string& surface,
     if (word->state == state) return AutoWordSaveOutcome::Unchanged;
     replacement = table_;
   }
-  replacement.at(reading).at(surface).state = state;
+  replacement.by_reading.at(reading).at(surface).state = state;
   if (!SaveSnapshot(replacement)) return AutoWordSaveOutcome::SaveFailed;
   {
     std::lock_guard<std::mutex> table_lock(table_mutex_);
-    table_.swap(replacement);
+    table_.Swap(replacement);
   }
   return AutoWordSaveOutcome::Changed;
 }
@@ -468,7 +522,7 @@ bool AutoWordStore::ResetAndSave() {
   if (!SaveSnapshot(empty)) return false;
   {
     std::lock_guard<std::mutex> table_lock(table_mutex_);
-    table_.swap(empty);
+    table_.Swap(empty);
   }
   return true;
 }
@@ -489,7 +543,7 @@ std::string AutoWordStore::SerializeTable(const Table& table) {
   // Written as a comment so the column order is documented in the file without
   // the reader having to tell a header row apart from a record.
   out << kColumnHeader << '\n';
-  for (const auto& [reading, surfaces] : table) {
+  for (const auto& [reading, surfaces] : table.by_reading) {
     for (const auto& [surface, word] : surfaces) {
       out << EscapeTsvField(word.surface) << '\t' << EscapeTsvField(word.reading) << '\t'
           << AutoWordSourceName(word.source) << '\t' << AutoWordStateName(word.state) << '\t'
@@ -503,7 +557,7 @@ std::string AutoWordStore::SerializeTable(const Table& table) {
 std::vector<AutoWord> AutoWordStore::All() const {
   std::lock_guard<std::mutex> lock(table_mutex_);
   std::vector<AutoWord> words;
-  for (const auto& [reading, surfaces] : table_) {
+  for (const auto& [reading, surfaces] : table_.by_reading) {
     for (const auto& [surface, word] : surfaces) words.push_back(word);
   }
   return words;
@@ -514,9 +568,9 @@ ImportCounts AutoWordStore::Merge(const AutoWordStore& other, ImportConflictPoli
   std::scoped_lock lock(mutex_, other.mutex_);
   std::scoped_lock table_lock(table_mutex_, other.table_mutex_);
   ImportCounts counts;
-  for (const auto& [reading, surfaces] : other.table_) {
+  for (const auto& [reading, surfaces] : other.table_.by_reading) {
     for (const auto& [surface, word] : surfaces) {
-      const auto [it, inserted] = table_[reading].emplace(surface, word);
+      const auto [it, inserted] = table_.GetOrAddReading(reading).emplace(surface, word);
       if (inserted) {
         ++counts.imported;
         continue;

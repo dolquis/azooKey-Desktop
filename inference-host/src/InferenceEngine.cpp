@@ -1054,7 +1054,8 @@ std::vector<core::Candidate> InferenceEngine::LatticeCandidatesLocked(
     query.constraints.word_boundaries = {*head_length};
     query.head_only = true;
   }
-  const auto result = dictionaries_.ConvertLattice(reading, query);
+  const auto result = dictionaries_.ConvertLattice(
+      reading, query, config_.dictionary.auto_words_enabled ? auto_word_store_ : nullptr);
   status = result.status;
   std::vector<core::Candidate> candidates;
   const double scale = dictionaries_.LatticeScoreScale();
@@ -1083,7 +1084,8 @@ std::optional<core::Candidate> InferenceEngine::UserWordPathLocked(
   query.marked_only = true;
   query.limits.cancel = cancel;
   query.limits.deadline = deadline;
-  const auto result = dictionaries_.ConvertLattice(kana, query);
+  const auto result = dictionaries_.ConvertLattice(
+      kana, query, config_.dictionary.auto_words_enabled ? auto_word_store_ : nullptr);
   // Section 5.4: nothing without a marked path or before the forward pass ended (best_cost is
   // set once it has), nor when the path costs more than T above the best path of any kind.
   if (result.paths.empty() || !result.best_cost ||

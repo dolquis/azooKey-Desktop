@@ -1,10 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +37,11 @@ struct AutoWord {
   uint64_t last_seen_epoch{0};
   // Score used when the word is eventually injected as a candidate.
   double score{0.0};
+};
+
+struct AutoWordPrefixMatch {
+  size_t key_bytes{};
+  std::string surface;
 };
 
 std::string_view AutoWordSourceName(AutoWordSource source);
@@ -97,6 +104,10 @@ class AutoWordStore {
   // Confirmed words for one reading; pending and rejected words never surface.
   std::vector<AutoWord> LookupConfirmed(const std::string& reading) const;
 
+  // Confirmed words whose normalized readings or aliases are nonempty prefixes of this key.
+  std::vector<AutoWordPrefixMatch> LookupConfirmedPrefixes(
+      std::string_view normalized_reading) const;
+
   // Drops pending entries older than max_age_sec. Returns how many were removed.
   size_t PrunePending(uint64_t now_epoch, uint64_t max_age_sec);
 
@@ -116,7 +127,18 @@ class AutoWordStore {
   ImportCounts Merge(const AutoWordStore& other, ImportConflictPolicy policy);
 
  private:
-  using Table = std::map<std::string, std::map<std::string, AutoWord>>;
+  struct Table {
+    using Words = std::map<std::string, AutoWord>;
+    using Readings = std::map<std::string, Words, std::less<>>;
+    // The original reading and surface remain the word's identity.
+    Readings by_reading;
+    // Normalized and alias keys that differ from the original reading.
+    std::map<std::string, std::set<std::string>, std::less<>> prefix_readings;
+
+    Words& GetOrAddReading(const std::string& reading);
+    Readings::iterator EraseReading(Readings::iterator reading);
+    void Swap(Table& other) noexcept;
+  };
   bool ParseText(std::string_view text, Table& table) const;
   bool SaveSnapshot(const Table& table) const;
   static std::string SerializeTable(const Table& table);
@@ -130,8 +152,6 @@ class AutoWordStore {
   std::filesystem::path path_;
   const ByteCrypto* crypto_;
   bool save_blocked_by_load_failure_{false};
-  // reading -> surface -> word. Gives (surface, reading) uniqueness and the
-  // reading-keyed lookup LookupConfirmed needs from one container.
   Table table_;
 };
 

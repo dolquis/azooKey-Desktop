@@ -4,7 +4,9 @@
 #include <cmath>
 #include <limits>
 #include <tuple>
+#include <utility>
 
+#include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/LearningDecay.h"
 #include "azookey/learning/UserDictionaryPos.h"
 
@@ -371,6 +373,30 @@ class MutableLatticeVocabulary final : public core::ILatticeVocabulary {
   const core::LatticeDictionary& dictionary_;
   const std::map<std::string, std::vector<DictionaryEntry>>& index_;
 };
+
+class AutoWordLatticeVocabulary final : public core::ILatticeVocabulary {
+ public:
+  AutoWordLatticeVocabulary(const core::LatticeDictionary& dictionary, const AutoWordStore& store)
+      : dictionary_(dictionary), store_(store) {}
+
+  bool CommonPrefix(std::string_view key, std::vector<core::LatticeEntry>& out) const override {
+    auto matches = store_.LookupConfirmedPrefixes(key);
+    if (matches.empty()) return true;
+    // Lattice nodes borrow the surfaces through the end of this search. Moving the vector
+    // preserves its elements' addresses even when a later lookup grows matches_.
+    for (const auto& match : matches)
+      if (core::IsValidUtf8(match.surface))
+        out.push_back(
+            dictionary_.MutableWord(static_cast<uint32_t>(match.key_bytes), match.surface));
+    matches_.push_back(std::move(matches));
+    return true;
+  }
+
+ private:
+  const core::LatticeDictionary& dictionary_;
+  const AutoWordStore& store_;
+  mutable std::vector<std::vector<AutoWordPrefixMatch>> matches_;
+};
 }  // namespace
 
 // user-dictionary-pos-spec section 4.6: the conjugated forms of the user dictionary's words, which
@@ -467,7 +493,8 @@ bool DictionaryStore::HasUserWordForms(std::string_view reading) const {
 }
 
 core::LatticeResult DictionaryStore::ConvertLattice(std::string_view reading,
-                                                    const core::LatticeQuery& query) const {
+                                                    const core::LatticeQuery& query,
+                                                    const AutoWordStore* auto_words) const {
   if (!IsLatticeAvailable()) {
     core::LatticeResult result;
     result.status = core::LatticeStatus::Unavailable;
@@ -482,6 +509,9 @@ core::LatticeResult DictionaryStore::ConvertLattice(std::string_view reading,
     if (enabled_[static_.size() + i] && !mutable_[i].empty())
       mutable_words.emplace_back(*lattice_, mutable_[i]);
   for (const auto& words : mutable_words) vocabularies.push_back(&words);
+  std::optional<AutoWordLatticeVocabulary> confirmed_words;
+  if (auto_words && enabled_[IndexOf(LayerId::AutoWords)])
+    vocabularies.push_back(&confirmed_words.emplace(*lattice_, *auto_words));
   // user-dictionary-pos-spec section 4.6: after the mutable layers, with the user dictionary.
   const FormVocabulary forms(*this);
   if (enabled_[IndexOf(LayerId::User)] && !user_forms_.empty()) vocabularies.push_back(&forms);

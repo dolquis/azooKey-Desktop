@@ -373,7 +373,7 @@ std::vector<azookey::tsf::CandidateViewItem> BuildCandidateViews(
   items.reserve(candidates.size());
   for (const auto& candidate : candidates) {
     azookey::tsf::CandidateViewItem item{Utf8ToWide(candidate.field.surface),
-                                       Utf8ToWide(candidate.description)};
+                                         Utf8ToWide(candidate.description)};
     if (const auto& origin = candidate.exposure_origin) {
       item.exposure_id = std::shared_ptr<const std::string>(origin, &origin->id);
       item.response_index = candidate.response_index;

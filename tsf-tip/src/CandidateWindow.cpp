@@ -651,10 +651,9 @@ void CandidateWindow::Show(RECT anchor, const std::vector<CandidateViewItem>& it
     if (static_cast<std::size_t>(end) > items.size() ||
         !std::equal(items_.begin() + first, items_.begin() + end, items.begin() + first,
                     [](const CandidateViewItem& left, const CandidateViewItem& right) {
-                      const bool same_response =
-                          left.exposure_id == right.exposure_id ||
-                          (left.exposure_id && right.exposure_id &&
-                           *left.exposure_id == *right.exposure_id);
+                      const bool same_response = left.exposure_id == right.exposure_id ||
+                                                 (left.exposure_id && right.exposure_id &&
+                                                  *left.exposure_id == *right.exposure_id);
                       return same_response && left.response_index == right.response_index &&
                              left.surface == right.surface && left.description == right.description;
                     })) {

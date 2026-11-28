@@ -12625,9 +12625,8 @@ TEST(TsfTipCandidateExposureTest, EnglishCommitKeepsLearningWithoutExposure) {
   h.service.preedit_kana_ = "あっpぇ";
   azookey::ipc::CandidateField english{"Apple", "apple", 1.0, "heuristic"};
   english.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
-  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
-    h.service.set_cached_candidates_for_test({english}, "english-exposure");
-  }));
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test({english}, "english-exposure"); }));
   ASSERT_TRUE(h.service.candidate_window_for_test().IsVisible());
   FakeCompositionAttachment attachment(h);
   ASSERT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
@@ -13997,8 +13996,7 @@ void TypeTenkiWithCache(DocumentPreeditHarness& h, std::optional<std::string> ex
   for (const WPARAM key : {WPARAM{'T'}, WPARAM{'E'}, WPARAM{'N'}, WPARAM{'K'}, WPARAM{'I'}})
     ASSERT_TRUE(h.Press(key));
   h.service.mark_pending_ipc_query_sent_for_test();
-  h.service.set_cached_candidates_for_test({ModelField("天気", "てんき")},
-                                            std::move(exposure_id));
+  h.service.set_cached_candidates_for_test({ModelField("天気", "てんき")}, std::move(exposure_id));
   h.service.show_candidate_window_from_cache_for_test();
 }
 
@@ -16078,9 +16076,9 @@ TEST(TsfTipCandidateExposureTest, LifecycleTransitionsInvalidatePendingCommitExp
   enum class Transition { ChangeDocument, PushContext, PopContext, Deactivate, Cleanup };
   ResetCandidateExposureTime reset_exposure_time;
   azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
-  for (const auto transition : {Transition::ChangeDocument, Transition::PushContext,
-                                Transition::PopContext, Transition::Deactivate,
-                                Transition::Cleanup}) {
+  for (const auto transition :
+       {Transition::ChangeDocument, Transition::PushContext, Transition::PopContext,
+        Transition::Deactivate, Transition::Cleanup}) {
     SCOPED_TRACE(static_cast<int>(transition));
     FakeDocumentMgr old_document;
     FakeDocumentMgr new_document;

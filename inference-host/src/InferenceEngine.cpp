@@ -2608,7 +2608,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
           // As for the v1 suggestion below: the converter that did not fail, a fresh budget.
           const auto& again_converter =
               convert_failed && fallback_converter ? fallback_converter : converter;
-          const auto again_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
+          auto again_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
+          if (request_deadline) again_deadline = (std::min)(again_deadline, *request_deadline);
           std::vector<core::Candidate> again;
           {
             std::lock_guard<std::mutex> again_lock(converter_call_mutex_);
@@ -2621,7 +2622,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
               again.clear();
             }
           }
-          if (!canceled() && !again.empty() && KanaSurfaceReading(again.front().surface).empty() &&
+          if (!canceled() && !again.empty() && !again.front().surface.empty() &&
+              KanaSurfaceReading(again.front().surface).empty() &&
               std::none_of(result.begin(), result.end(), [&](const core::Candidate& existing) {
                 return existing.surface == again.front().surface;
               })) {

@@ -73,8 +73,8 @@ class TinyRerankerRuntime {
   TinyRerankOutcome Apply(std::vector<core::Candidate>& candidates, bool secure,
                           const std::atomic<bool>* cancel = nullptr, Deadline deadline = {});
   TinyRerankOutcome ApplyPredictionBatches(std::vector<core::Candidate>& dictionary,
-                                         std::vector<core::Candidate>& predictions, bool secure,
-                                         const std::atomic<bool>* cancel);
+                                           std::vector<core::Candidate>& predictions, bool secure,
+                                           const std::atomic<bool>* cancel);
 
  private:
   // Apply one forward without treating its success as a request-level success.

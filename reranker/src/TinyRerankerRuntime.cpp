@@ -122,8 +122,8 @@ TinyRerankOutcome TinyRerankerRuntime::Apply(std::vector<core::Candidate>& candi
 }
 
 TinyRerankOutcome TinyRerankerRuntime::ApplyPredictionBatches(
-    std::vector<core::Candidate>& dictionary, std::vector<core::Candidate>& predictions, bool secure,
-    const std::atomic<bool>* cancel) {
+    std::vector<core::Candidate>& dictionary, std::vector<core::Candidate>& predictions,
+    bool secure, const std::atomic<bool>* cancel) {
   using Outcome = TinyRerankOutcome;
   if (dictionary.empty()) return Apply(predictions, secure, cancel);
   if (predictions.empty() || !config_.enabled || secure) return Apply(dictionary, secure, cancel);
@@ -143,8 +143,8 @@ TinyRerankOutcome TinyRerankerRuntime::ApplyPredictionBatches(
 }
 
 TinyRerankOutcome TinyRerankerRuntime::ApplyBatch(std::vector<core::Candidate>& candidates,
-                                                 bool secure, const std::atomic<bool>* cancel,
-                                                 Deadline deadline) {
+                                                  bool secure, const std::atomic<bool>* cancel,
+                                                  Deadline deadline) {
   using Outcome = TinyRerankOutcome;
   using namespace std::chrono_literals;
   const auto canceled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };

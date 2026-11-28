@@ -2901,9 +2901,9 @@ TEST(InferenceEngineTest, TinyRerankerPredictionFailuresCountOnceAndKeepBothBatc
   cfg.lattice.enabled = false;
   cfg.tiny_reranker.model_path = azookey::core::PathToUtf8(model);
   cfg.tiny_reranker.failure_threshold = 2;
-  azookey::host::InferenceEngine engine(std::make_unique<ScriptedConverter>(
-                                           std::vector<Candidate>{{"予測", "かな", 0.6}}, true),
-                                       nullptr, cfg);
+  azookey::host::InferenceEngine engine(
+      std::make_unique<ScriptedConverter>(std::vector<Candidate>{{"予測", "かな", 0.6}}, true),
+      nullptr, cfg);
   engine.SetUserDictionary(&dictionary);
   ASSERT_TRUE(engine.AddUserWord({"辞書", "かなよみ"}));
   const auto baseline = engine.QueryPredictions("かな", "", kNowBase);

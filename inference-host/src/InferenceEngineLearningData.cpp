@@ -266,7 +266,8 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairSnapshot(learning::Lea
   try {
     legacy_ok = selected && selected->RemoveFromLegacyFile(reading, surface, &legacy_removed);
     saved = SaveLearningSnapshots(snapshots);
-    if (exposure_trace) exposure_saved = exposure_trace->Forget(reading, surface, &exposure_removed);
+    if (exposure_trace)
+      exposure_saved = exposure_trace->Forget(reading, surface, &exposure_removed);
   } catch (...) {
     std::scoped_lock lock(state_mutex_, english_mutex_);
     learning_erasure_in_progress_ = false;

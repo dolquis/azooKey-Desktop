@@ -1497,21 +1497,20 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
       if (!candidate.segments.empty() || IsEnglishObservation(candidate.reading, candidate.tag) ||
           candidate.source == "symbol" || candidate.source == "emoji")
         continue;
-      const auto match = std::find_if(exposure_features.begin(), exposure_features.end(),
-                                       [&](const auto& row) {
-                                         return row.surface == candidate.surface &&
-                                                row.reading == candidate.reading &&
-                                                SourceToWire(row.source) == candidate.source;
-                                       });
+      const auto match =
+          std::find_if(exposure_features.begin(), exposure_features.end(), [&](const auto& row) {
+            return row.surface == candidate.surface && row.reading == candidate.reading &&
+                   SourceToWire(row.source) == candidate.source;
+          });
       if (match != exposure_features.end()) features[i] = match->values;
     }
     const auto privacy =
         settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
     if ((!privacy || privacy->exposure_trace_enabled) &&
         LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy)))
-      res.exposure_id = engine_->PublishExposure(*exposure_generation, client_id_,
-                                                 parsed->left_context, res.candidates,
-                                                 std::move(features));
+      res.exposure_id =
+          engine_->PublishExposure(*exposure_generation, client_id_, parsed->left_context,
+                                   res.candidates, std::move(features));
   }
   trace.Finish(core::EtwResult::Success, res.candidates.size());
   return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
@@ -1839,8 +1838,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleListLearningEntries(const ipc::En
   res.total = page.total;
   if (*store == LearningDataStore::Learning) {
     const auto stats = engine_->ExposureTraceStats();
-    res.exposure_trace = ipc::ExposureTraceSummary{stats.records, stats.size_bytes,
-                                                   stats.retention_days};
+    res.exposure_trace =
+        ipc::ExposureTraceSummary{stats.records, stats.size_bytes, stats.retention_days};
   }
   for (auto& entry : page.entries) {
     res.entries.push_back({std::move(entry.id), std::move(entry.channel), std::move(entry.reading),
@@ -2462,8 +2461,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
     } else if (engine_->CommitObservation(
                    parsed->reading, parsed->chosen.surface, NowSec(), parsed->observation_id,
                    parsed->app ? parsed->app->process_name : std::string(), parsed->left_context,
-                   !privacy || privacy->exposure_trace_enabled ? &*parsed : nullptr, &req.payload_json,
-                   client_id_)) {
+                   !privacy || privacy->exposure_trace_enabled ? &*parsed : nullptr,
+                   &req.payload_json, client_id_)) {
       // M63-B (mixed-english-auto-conversion-spec section 11): the English the
       // composition was shown first, turned down.
       engine_->RecordRejectedEnglish(parsed->shown, parsed->chosen.surface, NowSec());
@@ -2484,11 +2483,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitCorrection(const ipc::Envel
   if (auto parsed = ipc::ParseCommitCorrectionRequest(req.payload_json);
       parsed &&
       LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy))) {
-    engine_->CommitCorrection(parsed->reading, parsed->rejected_surface, parsed->selected_surface,
-                              NowSec(), parsed->observation_id,
-                              parsed->app ? parsed->app->process_name : std::string(),
-                              parsed->left_context,
-                              !privacy || privacy->exposure_trace_enabled ? &*parsed : nullptr);
+    engine_->CommitCorrection(
+        parsed->reading, parsed->rejected_surface, parsed->selected_surface, NowSec(),
+        parsed->observation_id, parsed->app ? parsed->app->process_name : std::string(),
+        parsed->left_context, !privacy || privacy->exposure_trace_enabled ? &*parsed : nullptr);
     res.ok = true;
   }
   return MakeResponse(req, ipc::BuildCommitObservationResponse(res));
@@ -2672,7 +2670,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
   engine_->SetTinyRerankerPrivacyMode(privacy_secure);
   engine_->SetTypoWritesSuspended(privacy_secure);
   engine_->SetExposureTracePolicy(load_result.status == SettingsLoadStatus::Invalid
-                                      ? engine_->config().exposure_trace_enabled : exposure_enabled,
+                                      ? engine_->config().exposure_trace_enabled
+                                      : exposure_enabled,
                                   exposure_learning_allowed);
   core::CrashReporting::SetConsent(load_result.settings.crash_report_consent == "local"
                                        ? core::CrashConsent::Local

@@ -3861,13 +3861,13 @@ namespace {
 
 class ExposureTestConverter final : public azookey::core::IConverter {
  public:
-  std::vector<azookey::core::Candidate> Convert(
-      const std::string& reading, const azookey::core::ConversionContext&) override {
+  std::vector<azookey::core::Candidate> Convert(const std::string& reading,
+                                                const azookey::core::ConversionContext&) override {
     std::vector<azookey::core::Candidate> candidates;
     const int count = reading == "こうほ" ? 32 : 2;
     for (int i = 0; i < count; ++i) {
-      candidates.push_back({"候補" + std::to_string(i), reading, 100.0 - i,
-                            azookey::core::CandidateSource::Model});
+      candidates.push_back(
+          {"候補" + std::to_string(i), reading, 100.0 - i, azookey::core::CandidateSource::Model});
     }
     return candidates;
   }
@@ -3926,10 +3926,10 @@ class DispatcherExposureTest : public DispatcherTest {
     request.secure = secure;
     request.learning_allowed = allowed;
     const auto response = target.Dispatch(MakeReq(++request_id, ipc::MessageType::QueryCandidates,
-                                                   ipc::BuildQueryCandidatesRequest(request)));
+                                                  ipc::BuildQueryCandidatesRequest(request)));
     EXPECT_TRUE(response);
-    return response ? ipc::ParseQueryCandidatesResponse(response->payload_json).value_or(
-                          ipc::QueryCandidatesResponse{})
+    return response ? ipc::ParseQueryCandidatesResponse(response->payload_json)
+                          .value_or(ipc::QueryCandidatesResponse{})
                     : ipc::QueryCandidatesResponse{};
   }
 
@@ -3992,8 +3992,9 @@ class DispatcherExposureTest : public DispatcherTest {
   azookey::learning::RerankerTraceStore trace{trace_path, crypto, TraceOptions()};
   azookey::logging::RuntimeLogger trace_logger{LogOptions()};
   azookey::host::InferenceEngine trace_engine{std::make_unique<ExposureTestConverter>(),
-                                               &trace_learning, EngineSettings(), &trace_logger};
-  azookey::host::Dispatcher target{&trace_engine, &scheduler, &user_dict, DefaultDispatcherConfig()};
+                                              &trace_learning, EngineSettings(), &trace_logger};
+  azookey::host::Dispatcher target{&trace_engine, &scheduler, &user_dict,
+                                   DefaultDispatcherConfig()};
   std::chrono::steady_clock::time_point capture_time{};
   uint64_t request_id = 10000;
 };
@@ -4001,12 +4002,12 @@ class DispatcherExposureTest : public DispatcherTest {
 TEST_F(DispatcherExposureTest, UsesTheForwardBatchAndKeepsOnlyDisplayedRowsWithFeatures) {
   using namespace std::chrono;
   const auto now = duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
-  ASSERT_TRUE(trace_engine.CommitObservation("こうほ", "候補0",
-                                              static_cast<uint64_t>(now) - 30 * 86400));
+  ASSERT_TRUE(
+      trace_engine.CommitObservation("こうほ", "候補0", static_cast<uint64_t>(now) - 30 * 86400));
   ASSERT_TRUE(trace_engine.CommitObservation("こうほ", "候補0", static_cast<uint64_t>(now),
-                                              "seed-app", "app.exe"));
+                                             "seed-app", "app.exe"));
   ASSERT_TRUE(trace_engine.CommitObservation("こうほ", "候補0", static_cast<uint64_t>(now),
-                                              "seed-app-again", "app.exe"));
+                                             "seed-app-again", "app.exe"));
   auto config = trace_engine.config();
   config.exposure_trace_enabled = true;
   config.tiny_reranker.enabled = true;
@@ -4022,7 +4023,8 @@ TEST_F(DispatcherExposureTest, UsesTheForwardBatchAndKeepsOnlyDisplayedRowsWithF
               forward->assign(rows.begin(), rows.end());
               return std::vector<float>(rows.size(), 1.0f);
             });
-      }, seconds(2));
+      },
+      seconds(2));
   const auto query = Query();
   ASSERT_TRUE(query.exposure_id);
   ASSERT_EQ(query.candidates.size(), 32u);
@@ -4096,8 +4098,8 @@ TEST_F(DispatcherExposureTest, DeniesIneligibleResponsesAndKeepsLegacyLearning) 
   }
   EXPECT_NE(logs.find("reranker_trace_skipped"), std::string::npos);
   EXPECT_NE(logs.find("response_unavailable"), std::string::npos);
-  for (const auto text : {kContext, std::string_view("こうほ"),
-                          std::string_view(legacy.chosen.surface)})
+  for (const auto text :
+       {kContext, std::string_view("こうほ"), std::string_view(legacy.chosen.surface)})
     EXPECT_EQ(logs.find(text), std::string::npos);
 }
 
@@ -4108,7 +4110,7 @@ TEST_F(DispatcherExposureTest, DictionaryCategorySelectsTheLearningHalfLife) {
       azookey::learning::LayerId::TechnicalTerms,
       std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "profile" / "technical_terms.azdic", true));
   ASSERT_TRUE(trace_engine.CommitObservation("てんそるあーるてぃー", "TensorRT",
-                                              static_cast<uint64_t>(now) - 120 * 86400));
+                                             static_cast<uint64_t>(now) - 120 * 86400));
   trace_engine.SetExposureTracePolicy(true, true);
   const auto query = Query(false, true, "てんそるあーるてぃー");
   ASSERT_TRUE(query.exposure_id);
@@ -4199,8 +4201,9 @@ TEST_F(DispatcherExposureTest, LearningSummaryIsIndependentOfSearchAndForgetRemo
     request.query = "no-matching-entries";
     request.offset = 100;
     request.limit = 1;
-    const auto response = target.Dispatch(MakeReq(++request_id, ipc::MessageType::ListLearningEntries,
-                                                   ipc::BuildListLearningEntriesRequest(request)));
+    const auto response =
+        target.Dispatch(MakeReq(++request_id, ipc::MessageType::ListLearningEntries,
+                                ipc::BuildListLearningEntriesRequest(request)));
     return response ? ipc::ParseListLearningEntriesResponse(response->payload_json) : std::nullopt;
   };
   const auto list = summary("learning");
@@ -4212,8 +4215,8 @@ TEST_F(DispatcherExposureTest, LearningSummaryIsIndependentOfSearchAndForgetRemo
   const auto dictionary = summary("user_dict");
   ASSERT_TRUE(dictionary);
   EXPECT_FALSE(dictionary->exposure_trace);
-  const auto page = trace_engine.ListLearningEntries(azookey::host::LearningDataStore::Learning,
-                                                     "", 0, 10);
+  const auto page =
+      trace_engine.ListLearningEntries(azookey::host::LearningDataStore::Learning, "", 0, 10);
   ASSERT_EQ(page.entries.size(), 1u);
   EXPECT_EQ(trace_engine.ForgetLearningEntry(azookey::host::LearningDataStore::Learning,
                                              page.entries.front().id),
@@ -4246,8 +4249,8 @@ TEST_F(DispatcherExposureTest, FailedTraceDeletionRollsBackLearningButInvalidate
   ASSERT_TRUE(std::filesystem::create_directory(blocked_sidecar));
   EXPECT_EQ(trace_engine.ResetLearningStore(azookey::host::LearningDataStore::Learning),
             azookey::host::InferenceEngine::ResetOutcome::SaveFailed);
-  const auto page = trace_engine.ListLearningEntries(azookey::host::LearningDataStore::Learning,
-                                                     "", 0, 10);
+  const auto page =
+      trace_engine.ListLearningEntries(azookey::host::LearningDataStore::Learning, "", 0, 10);
   EXPECT_EQ(page.total, 2u);
   EXPECT_TRUE(SendCommit(CommitRequest(query, 0, "old-response", {0})));
   ASSERT_TRUE(trace.Flush());

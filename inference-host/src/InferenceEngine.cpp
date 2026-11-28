@@ -1524,7 +1524,7 @@ void InferenceEngine::ApplyTinyRerankerLocked(std::vector<core::Candidate>& cand
                                               reranker::TinyRerankerRuntime::Deadline deadline,
                                               const reranker::TinyRerankerBatch& batch) {
   LogTinyRerankOutcome(tiny_reranker_.Apply(candidates, secure || tiny_reranker_privacy_secure_,
-                                           cancel, deadline, &batch));
+                                            cancel, deadline, &batch));
 }
 
 void InferenceEngine::LogTinyRerankOutcome(reranker::TinyRerankOutcome outcome) const {
@@ -1537,9 +1537,9 @@ void InferenceEngine::LogTinyRerankOutcome(reranker::TinyRerankOutcome outcome) 
   }
 }
 
-void InferenceEngine::ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
-                                                        const std::atomic<bool>* cancel,
-                                                        std::span<const reranker::UserSignals> user) const {
+void InferenceEngine::ObserveTinyRerankerFeaturesLocked(
+    std::vector<core::Candidate>& candidates, const std::atomic<bool>* cancel,
+    std::span<const reranker::UserSignals> user) const {
   if (!tiny_reranker_feature_observer_for_tests_ ||
       (cancel && cancel->load(std::memory_order_relaxed))) {
     return;
@@ -2131,7 +2131,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
   // reading, so the reading not chosen stays in the window: its first `limit`
   // ones when `dictionary_only` is false, its dictionary words otherwise.
   const auto transfer_exposure = [](CandidatesResult& into, const CandidatesResult& from,
-                                     const core::Candidate& candidate) {
+                                    const core::Candidate& candidate) {
     std::erase_if(into.exposure_features,
                   [&](const auto& row) { return row.surface == candidate.surface; });
     if (auto it = std::find_if(from.exposure_features.begin(), from.exposure_features.end(),
@@ -2139,8 +2139,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
         it != from.exposure_features.end())
       into.exposure_features.push_back(*it);
   };
-  const auto append_other = [&](CandidatesResult& into, CandidatesResult& from, bool dictionary_only,
-                                size_t limit) {
+  const auto append_other = [&](CandidatesResult& into, CandidatesResult& from,
+                                bool dictionary_only, size_t limit) {
     size_t appended = 0;
     for (auto& candidate : from.candidates) {
       if (appended == limit) break;
@@ -2321,10 +2321,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     using_model_converter = model_converter_ && converter == model_converter_;
     // Preserve M9's explicit user word score while static layers use M53 scoring.
     RefreshDictionaryLocked();
-    const bool need_categories = !(mixed && mixed->secure) && !tiny_reranker_privacy_secure_ &&
-                                 (config.tiny_reranker.enabled ||
-                                  tiny_reranker_feature_observer_for_tests_ ||
-                                  (mixed && mixed->capture_exposure_features));
+    const bool need_categories =
+        !(mixed && mixed->secure) && !tiny_reranker_privacy_secure_ &&
+        (config.tiny_reranker.enabled || tiny_reranker_feature_observer_for_tests_ ||
+         (mixed && mixed->capture_exposure_features));
     merged = DictionaryCandidates(dictionaries_, kana, learning::LookupMode::Exact, now_epoch_sec,
                                   32, false, config.user_word_default_score,
                                   need_categories ? &categories : nullptr);
@@ -2706,9 +2706,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                           ? TinyUserSignalsForCandidatesLocked(merged, now_epoch_sec, categories)
                           : std::vector<reranker::UserSignals>{};
     ObserveTinyRerankerFeaturesLocked(merged, cancel, user);
-    auto batch = capture || (!secure && !tiny_reranker_privacy_secure_ && config_.tiny_reranker.enabled)
-                     ? reranker::PrepareTinyRerankerBatch(merged, user)
-                     : reranker::TinyRerankerBatch{};
+    auto batch =
+        capture || (!secure && !tiny_reranker_privacy_secure_ && config_.tiny_reranker.enabled)
+            ? reranker::PrepareTinyRerankerBatch(merged, user)
+            : reranker::TinyRerankerBatch{};
     if (capture) {
       for (size_t i = 0; i < batch.indices.size(); ++i) {
         const auto& candidate = merged[batch.indices[i]];
@@ -2981,23 +2982,23 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(
   RefreshDictionaryLocked();
   if (rerank_canceled()) return {};
   DictionaryCategoryMasks categories;
-  const bool use_signals = !tiny_reranker_privacy_secure_ &&
-                           (config_.tiny_reranker.enabled || tiny_reranker_feature_observer_for_tests_);
-  auto dictionary_predictions =
-      DictionaryCandidates(dictionaries_, kana, learning::LookupMode::PredictivePrefix,
-                           now_epoch_sec, 32, true, config_.user_word_default_score,
-                           use_signals ? &categories : nullptr);
-  const auto dictionary_user = use_signals
-                                   ? TinyUserSignalsForCandidatesLocked(dictionary_predictions,
-                                                                        now_epoch_sec, categories)
-                                   : std::vector<reranker::UserSignals>{};
-  const auto prediction_user = use_signals ? TinyUserSignalsForCandidatesLocked(candidates, now_epoch_sec, categories)
+  const bool use_signals =
+      !tiny_reranker_privacy_secure_ &&
+      (config_.tiny_reranker.enabled || tiny_reranker_feature_observer_for_tests_);
+  auto dictionary_predictions = DictionaryCandidates(
+      dictionaries_, kana, learning::LookupMode::PredictivePrefix, now_epoch_sec, 32, true,
+      config_.user_word_default_score, use_signals ? &categories : nullptr);
+  const auto dictionary_user = use_signals ? TinyUserSignalsForCandidatesLocked(
+                                                 dictionary_predictions, now_epoch_sec, categories)
                                            : std::vector<reranker::UserSignals>{};
+  const auto prediction_user =
+      use_signals ? TinyUserSignalsForCandidatesLocked(candidates, now_epoch_sec, categories)
+                  : std::vector<reranker::UserSignals>{};
   ObserveTinyRerankerFeaturesLocked(dictionary_predictions, cancel, dictionary_user);
   ObserveTinyRerankerFeaturesLocked(candidates, cancel, prediction_user);
-  LogTinyRerankOutcome(tiny_reranker_.ApplyPredictionBatches(
-      dictionary_predictions, candidates, tiny_reranker_privacy_secure_, cancel, dictionary_user,
-      prediction_user));
+  LogTinyRerankOutcome(tiny_reranker_.ApplyPredictionBatches(dictionary_predictions, candidates,
+                                                             tiny_reranker_privacy_secure_, cancel,
+                                                             dictionary_user, prediction_user));
   dictionary_predictions =
       ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec, cancel);
   if (rerank_canceled()) return {};
@@ -3084,8 +3085,9 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
     candidates = converter->Correct(kana, hint, conversion_context);
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
-  const bool use_signals = !tiny_reranker_privacy_secure_ &&
-                           (config_.tiny_reranker.enabled || tiny_reranker_feature_observer_for_tests_);
+  const bool use_signals =
+      !tiny_reranker_privacy_secure_ &&
+      (config_.tiny_reranker.enabled || tiny_reranker_feature_observer_for_tests_);
   const auto user = use_signals ? TinyUserSignalsForCandidatesLocked(candidates, now_epoch_sec)
                                 : std::vector<reranker::UserSignals>{};
   ObserveTinyRerankerFeaturesLocked(candidates, nullptr, user);
@@ -3323,7 +3325,8 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
       throw;
     }
     finish_observation();
-    if (exposure && payload) exposure_skipped = RecordExposureLocked(*exposure, *payload, client_id);
+    if (exposure && payload)
+      exposure_skipped = RecordExposureLocked(*exposure, *payload, client_id);
   }
   if (exposure_skipped) LogExposureSkipped(exposure_skipped);
   if (auto_word_store) {
@@ -3370,8 +3373,7 @@ bool InferenceEngine::CommitCorrection(const std::string& reading,
                                        const std::string& rejected_surface,
                                        const std::optional<std::string>& selected_surface,
                                        uint64_t now_epoch_sec, const std::string& observation_id,
-                                       const std::string& app_name,
-                                       const std::string& left_context,
+                                       const std::string& app_name, const std::string& left_context,
                                        const ipc::CommitCorrectionRequest* exposure) {
   std::lock_guard history_lock(learning_history_mutex_);
   const auto context_hash = learning::ContextHash(left_context);
@@ -3611,8 +3613,8 @@ void InferenceEngine::LearningFlushWorker() {
     }
     const auto typo_due = typo_flush_due_steady_;
     const auto exposure_due = exposure_expiry();
-    const auto wake_due = (std::min)({persona_due, typo_due.value_or(persona_due),
-                                      exposure_due.value_or(persona_due)});
+    const auto wake_due = (std::min)(
+        {persona_due, typo_due.value_or(persona_due), exposure_due.value_or(persona_due)});
     const auto schedule_changed = [&] {
       return learning_flush_stop_ || typo_flush_due_steady_ != typo_due ||
              exposure_expiry() != exposure_due;
@@ -3622,21 +3624,19 @@ void InferenceEngine::LearningFlushWorker() {
         config_.learning_flush_interval_sec == 0 ||
         !first_unsaved_observation_steady_.has_value()) {
       learning_flush_cv_.wait_until(lock, wake_due, [&]() {
-        return schedule_changed() ||
-               (!learning_erasure_in_progress_ && store_ && store_->dirty() &&
-                config_.learning_flush_interval_sec > 0 &&
-                first_unsaved_observation_steady_.has_value());
+        return schedule_changed() || (!learning_erasure_in_progress_ && store_ && store_->dirty() &&
+                                      config_.learning_flush_interval_sec > 0 &&
+                                      first_unsaved_observation_steady_.has_value());
       });
       continue;
     }
 
     const auto flush_deadline = *first_unsaved_observation_steady_ +
                                 std::chrono::seconds(config_.learning_flush_interval_sec);
-    const bool changed = learning_flush_cv_.wait_until(
-        lock, (std::min)(flush_deadline, wake_due), [&]() {
-          return schedule_changed() ||
-                 learning_erasure_in_progress_ || !store_ || !store_->dirty() ||
-                 config_.learning_flush_interval_sec == 0 ||
+    const bool changed =
+        learning_flush_cv_.wait_until(lock, (std::min)(flush_deadline, wake_due), [&]() {
+          return schedule_changed() || learning_erasure_in_progress_ || !store_ ||
+                 !store_->dirty() || config_.learning_flush_interval_sec == 0 ||
                  !first_unsaved_observation_steady_.has_value();
         });
     if (changed || std::chrono::steady_clock::now() < flush_deadline) {

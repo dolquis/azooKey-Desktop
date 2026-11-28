@@ -192,12 +192,12 @@ TEST_F(TinyRerankerRuntimeTest, PredictionBatchesUseTheirOwnUserSignals) {
     return std::vector<float>(rows.size(), 0.0f);
   });
   ASSERT_EQ(runtime_.ApplyPredictionBatches(dictionary, predictions, false, nullptr,
-                                             dictionary_user, prediction_user),
+                                            dictionary_user, prediction_user),
             Outcome::Applied);
   dictionary.clear();
-  ASSERT_EQ(runtime_.ApplyPredictionBatches(dictionary, predictions, false, nullptr, {},
-                                             prediction_user),
-            Outcome::Applied);
+  ASSERT_EQ(
+      runtime_.ApplyPredictionBatches(dictionary, predictions, false, nullptr, {}, prediction_user),
+      Outcome::Applied);
   ASSERT_EQ(observed->size(), 3u);
   EXPECT_EQ((*observed)[0][2], 2.0f);
   EXPECT_EQ((*observed)[0][3], 0.25f);

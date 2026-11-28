@@ -39,9 +39,9 @@
 #include "azookey/learning/DictionaryStore.h"
 #include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
-#include "azookey/learning/RerankerTraceStore.h"
 #include "azookey/learning/Persona.h"
 #include "azookey/learning/Reranker.h"
+#include "azookey/learning/RerankerTraceStore.h"
 #include "azookey/learning/TypoLearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/learning/UserDictionaryTextImport.h"
@@ -811,8 +811,8 @@ class InferenceEngine {
                                reranker::TinyRerankerRuntime::Deadline deadline,
                                const reranker::TinyRerankerBatch& batch);
   reranker::UserSignals TinyUserSignalsLocked(const std::string& reading,
-                                             const std::string& surface, uint16_t category_mask,
-                                             uint64_t now_epoch_sec) const;
+                                              const std::string& surface, uint16_t category_mask,
+                                              uint64_t now_epoch_sec) const;
   std::vector<reranker::UserSignals> TinyUserSignalsForCandidatesLocked(
       const std::vector<core::Candidate>& candidates, uint64_t now_epoch_sec,
       const DictionaryCategoryMasks& categories = {}) const;

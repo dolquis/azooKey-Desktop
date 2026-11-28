@@ -376,7 +376,7 @@ void LearningPane::OnShown() {
 }
 
 void LearningPane::SetExposureTraceSetting(std::optional<std::filesystem::path> path,
-                                            bool enabled) {
+                                           bool enabled) {
   exposure_trace_settings_path_ = std::move(path);
   exposure_trace_enabled_ = enabled;
   exposure_trace_toggle_.IsOn(enabled);
@@ -384,7 +384,8 @@ void LearningPane::SetExposureTraceSetting(std::optional<std::filesystem::path> 
 }
 
 winrt::fire_and_forget LearningPane::SaveExposureTraceOptIn(bool enabled) {
-  if (!exposure_trace_settings_path_ || exposure_trace_saving_ || enabled == exposure_trace_enabled_) {
+  if (!exposure_trace_settings_path_ || exposure_trace_saving_ ||
+      enabled == exposure_trace_enabled_) {
     co_return;
   }
   const auto self = shared_from_this();

@@ -33,8 +33,14 @@ constexpr uint64_t kDayMs = 24 * 60 * 60 * 1000;
 
 RerankerExposure Exposure(std::string id, std::string surface, uint64_t time = kNowMs) {
   const auto chosen = surface;
-  return RerankerExposure{std::move(id), "0xabcdef01", "synthetic-reading", std::move(surface),
-                          {"synthetic-other", chosen}, {{0.25f}, {0.5f}}, time - 500, time};
+  return RerankerExposure{std::move(id),
+                          "0xabcdef01",
+                          "synthetic-reading",
+                          std::move(surface),
+                          {"synthetic-other", chosen},
+                          {{0.25f}, {0.5f}},
+                          time - 500,
+                          time};
 }
 
 std::string ReadBytes(const fs::path& path) {

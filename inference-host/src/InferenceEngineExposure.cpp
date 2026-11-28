@@ -1,8 +1,7 @@
-#include "azookey/host/InferenceEngine.h"
-
 #include <algorithm>
 #include <cmath>
 
+#include "azookey/host/InferenceEngine.h"
 #include "azookey/ipc/TraceId.h"
 #include "azookey/learning/ContextHash.h"
 #include "azookey/learning/LearningDecay.h"
@@ -46,7 +45,8 @@ bool InferenceEngine::ExposureAllowedLocked() const {
 }
 
 void InferenceEngine::SyncExposurePolicyLocked() {
-  const bool allow_learning = exposure_learning_allowed_ && health_.state() != HealthState::SafeMode;
+  const bool allow_learning =
+      exposure_learning_allowed_ && health_.state() != HealthState::SafeMode;
   if (!config_.exposure_trace_enabled || !allow_learning) InvalidateExposuresLocked();
   if (exposure_trace_store_) {
     exposure_trace_store_->SetRecording(config_.exposure_trace_enabled, allow_learning);
@@ -82,7 +82,7 @@ std::optional<uint64_t> InferenceEngine::BeginExposureCapture(bool allowed, bool
     std::lock_guard lock(state_mutex_);
     if (!exposure_trace_store_) return std::nullopt;
     if (allowed && ExposureAllowedLocked()) return exposure_generation_;
-    reason = secure                             ? "secure"
+    reason = secure                            ? "secure"
              : !config_.exposure_trace_enabled ? "opt_in_disabled"
                                                : "learning_disallowed";
   }
@@ -106,7 +106,8 @@ std::optional<std::string> InferenceEngine::PublishExposure(
     const std::vector<ipc::CandidateField>& candidates,
     std::vector<std::optional<std::array<float, 12>>> features) {
   if (features.size() != candidates.size() ||
-      std::none_of(features.begin(), features.end(), [](const auto& row) { return row.has_value(); }))
+      std::none_of(features.begin(), features.end(),
+                   [](const auto& row) { return row.has_value(); }))
     return std::nullopt;
 
   std::unique_lock lock(state_mutex_);
@@ -132,8 +133,8 @@ std::optional<std::string> InferenceEngine::PublishExposure(
 }
 
 const char* InferenceEngine::RecordExposureLocked(const ipc::CommitObservationRequest& request,
-                                                   const std::string& payload,
-                                                   std::string_view client_id) {
+                                                  const std::string& payload,
+                                                  std::string_view client_id) {
   if (!ExposureAllowedLocked() || !request.exposure_id) return nullptr;
   if (request.observation_id.empty()) return "missing_observation_id";
   PruneExpiredExposuresLocked(ExposureNowLocked());
@@ -186,8 +187,8 @@ reranker::UserSignals InferenceEngine::TinyUserSignalsLocked(const std::string& 
   for (const auto& [app, row] : *rows) {
     const double weight = std::log1p(static_cast<double>(row.commit_count));
     frequency += weight;
-    weighted_recency += weight * learning::HalfLifeRecency(row.last_updated_epoch_sec,
-                                                          now_epoch_sec, half_life);
+    weighted_recency +=
+        weight * learning::HalfLifeRecency(row.last_updated_epoch_sec, now_epoch_sec, half_life);
   }
   return frequency > 0 ? reranker::UserSignals{frequency, weighted_recency / frequency}
                        : reranker::UserSignals{};

@@ -684,7 +684,7 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
 
 // The caller holds the shared settings file lock through the final replacement.
 std::optional<j::Object> ReadSettingsForSave(const std::filesystem::path& path,
-                                           SettingsSaveResult& result) {
+                                             SettingsSaveResult& result) {
   SettingsDocumentStatus read_status = SettingsDocumentStatus::Missing;
   std::optional<std::string> read_error;
   auto root = ReadAndSanitize(path, &read_status, &read_error, &result.warnings);
@@ -703,7 +703,8 @@ std::optional<j::Object> ReadSettingsForSave(const std::filesystem::path& path,
 void ReplaceSettingsFile(const std::filesystem::path& path, j::Object root,
                          SettingsSaveResult& result) {
   if (const auto it = root.find("openAiApiKey"); it != root.end() && it->second.IsString() &&
-      !it->second.AsString().empty() && it->second.AsString().rfind("dpapi:", 0) != 0) {
+                                                 !it->second.AsString().empty() &&
+                                                 it->second.AsString().rfind("dpapi:", 0) != 0) {
     const auto protected_key = azookey::learning::ProtectSecret(it->second.AsString());
     if (!protected_key) {
       result.error = "failed to protect OpenAI API key";
@@ -887,7 +888,7 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
 }
 
 SettingsSaveResult SaveExposureTraceSetting(const std::filesystem::path& path, bool enabled,
-                                             std::chrono::milliseconds lock_timeout) {
+                                            std::chrono::milliseconds lock_timeout) {
   SettingsSaveResult result;
   const auto lock = azookey::learning::AcquireExclusiveFileLockForPath(path, lock_timeout);
   if (!lock) {

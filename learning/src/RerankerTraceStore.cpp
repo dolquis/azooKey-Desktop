@@ -87,8 +87,12 @@ std::optional<TraceRow> MakeTraceCommit(RerankerExposure exposure) {
                             {"features", std::move(features)},
                             {"shown_at_ms", exposure.shown_at_ms},
                             {"commit_ts", exposure.commit_ts}};
-  return TraceRow{std::move(exposure.observation_id), {}, std::move(exposure.reading),
-                  std::move(exposure.chosen_surface), {}, exposure.commit_ts,
+  return TraceRow{std::move(exposure.observation_id),
+                  {},
+                  std::move(exposure.reading),
+                  std::move(exposure.chosen_surface),
+                  {},
+                  exposure.commit_ts,
                   trace_json::Stringify(trace_json::Value(std::move(object)))};
 }
 
@@ -154,8 +158,9 @@ std::optional<TraceRow> ParseTraceRow(std::string_view line) {
         !TraceCommitFieldsAreValid(*object, *surface)) {
       return std::nullopt;
     }
-    return TraceRow{std::move(*id), {}, std::move(*reading), std::move(*surface), {},
-                    *object->GetUInt("commit_ts"), std::string(line)};
+    return TraceRow{std::move(*id),      {}, std::move(*reading),
+                    std::move(*surface), {}, *object->GetUInt("commit_ts"),
+                    std::string(line)};
   }
   const auto type = object->GetString("event_type");
   auto target = object->GetString("target_observation_id");
@@ -174,8 +179,9 @@ std::optional<TraceRow> ParseTraceRow(std::string_view line) {
   } else if (*type != "correction_reject" || object->AsObject().size() != 6) {
     return std::nullopt;
   }
-  return TraceRow{std::move(*id),      std::move(*target),  std::move(*reading),
-                  std::move(*rejected), std::move(accepted), *ts, std::string(line)};
+  return TraceRow{std::move(*id),       std::move(*target),  std::move(*reading),
+                  std::move(*rejected), std::move(accepted), *ts,
+                  std::string(line)};
 }
 
 bool ParseTraceSnapshot(std::string_view plaintext, std::vector<TraceRow>& rows) {
@@ -355,9 +361,8 @@ class RerankerTraceStore::Impl {
     auto file_lock = LockFile();
     TraceSnapshot snapshot;
     if (!file_lock || !ReadSnapshot(snapshot, false)) return SaveFailed();
-    const auto erased = std::erase_if(snapshot.rows, [&](const TraceRow& row) {
-      return row.MatchesPair(reading, surface);
-    });
+    const auto erased = std::erase_if(
+        snapshot.rows, [&](const TraceRow& row) { return row.MatchesPair(reading, surface); });
     if (erased != 0) {
       std::vector<uint8_t> cipher;
       bool limit_evicted = false;
@@ -590,9 +595,8 @@ class RerankerTraceStore::Impl {
     }
     const auto now = NowMs();
     const auto cutoff = now > kTraceRetentionMs ? now - kTraceRetentionMs : 0;
-    const bool expired = std::ranges::any_of(snapshot.rows, [cutoff](const TraceRow& row) {
-      return row.timestamp < cutoff;
-    });
+    const bool expired = std::ranges::any_of(
+        snapshot.rows, [cutoff](const TraceRow& row) { return row.timestamp < cutoff; });
     bool appended = false;
     if (!batch.empty()) {
       std::unordered_set<std::string> disk_ids;

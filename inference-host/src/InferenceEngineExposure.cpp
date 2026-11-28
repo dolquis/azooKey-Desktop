@@ -82,9 +82,8 @@ std::optional<uint64_t> InferenceEngine::BeginExposureCapture(bool allowed, bool
     std::lock_guard lock(state_mutex_);
     if (!exposure_trace_store_) return std::nullopt;
     if (allowed && ExposureAllowedLocked()) return exposure_generation_;
-    reason = secure                            ? "secure"
-             : !config_.exposure_trace_enabled ? "opt_in_disabled"
-                                               : "learning_disallowed";
+    if (!secure && !config_.exposure_trace_enabled) return std::nullopt;
+    reason = secure ? "secure" : "learning_disallowed";
   }
   LogExposureSkipped(reason);
   return std::nullopt;

@@ -3884,6 +3884,22 @@ class ExposureTestConverter final : public azookey::core::IConverter {
   void Learn(const std::string&, const std::string&) override {}
 };
 
+class ExposureTestCrypto final : public azookey::learning::ByteCrypto {
+ public:
+  bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+    return crypto_.Encrypt(plain, cipher);
+  }
+
+  bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+    return !reject_decryption.load() && crypto_.Decrypt(cipher, plain);
+  }
+
+  std::atomic<bool> reject_decryption{false};
+
+ private:
+  azookey::learning::test::TestByteCrypto crypto_;
+};
+
 class DispatcherExposureTest : public DispatcherTest {
  protected:
   static constexpr uint64_t kCommitMs = 1'800'000'000'000;
@@ -3918,15 +3934,17 @@ class DispatcherExposureTest : public DispatcherTest {
   }
 
   ipc::QueryCandidatesResponse Query(bool secure = false, bool allowed = true,
-                                     std::string_view reading = "こうほ") {
+                                     std::string_view reading = "こうほ",
+                                     azookey::host::Dispatcher* receiver = nullptr) {
     ipc::QueryCandidatesRequest request;
     request.reading = reading;
     request.left_context = kContext;
     request.max_candidates = 40;
     request.secure = secure;
     request.learning_allowed = allowed;
-    const auto response = target.Dispatch(MakeReq(++request_id, ipc::MessageType::QueryCandidates,
-                                                  ipc::BuildQueryCandidatesRequest(request)));
+    auto& selected_dispatcher = receiver ? *receiver : target;
+    const auto response = selected_dispatcher.Dispatch(MakeReq(
+        ++request_id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(request)));
     EXPECT_TRUE(response);
     return response ? ipc::ParseQueryCandidatesResponse(response->payload_json)
                           .value_or(ipc::QueryCandidatesResponse{})
@@ -3956,12 +3974,16 @@ class DispatcherExposureTest : public DispatcherTest {
     return request;
   }
 
-  bool SendCommit(const ipc::CommitObservationRequest& commit) {
-    return Observe(ipc::MessageType::CommitObservation, ipc::BuildCommitObservationRequest(commit));
+  bool SendCommit(const ipc::CommitObservationRequest& commit,
+                  azookey::host::Dispatcher* receiver = nullptr) {
+    return Observe(ipc::MessageType::CommitObservation, ipc::BuildCommitObservationRequest(commit),
+                   receiver);
   }
 
-  bool Observe(ipc::MessageType type, std::string payload) {
-    const auto response = target.Dispatch(MakeReq(++request_id, type, payload));
+  bool Observe(ipc::MessageType type, std::string payload,
+               azookey::host::Dispatcher* receiver = nullptr) {
+    auto& selected_dispatcher = receiver ? *receiver : target;
+    const auto response = selected_dispatcher.Dispatch(MakeReq(++request_id, type, payload));
     const auto parsed =
         response ? ipc::ParseCommitObservationResponse(response->payload_json) : std::nullopt;
     return parsed && parsed->ok;
@@ -3989,7 +4011,8 @@ class DispatcherExposureTest : public DispatcherTest {
   azookey::learning::test::TestByteCrypto crypto;
   azookey::learning::LearningStore trace_learning{temp_directory.path() / "trace-learning.tsv",
                                                   &crypto};
-  azookey::learning::RerankerTraceStore trace{trace_path, crypto, TraceOptions()};
+  ExposureTestCrypto trace_crypto;
+  azookey::learning::RerankerTraceStore trace{trace_path, trace_crypto, TraceOptions()};
   azookey::logging::RuntimeLogger trace_logger{LogOptions()};
   azookey::host::InferenceEngine trace_engine{std::make_unique<ExposureTestConverter>(),
                                               &trace_learning, EngineSettings(), &trace_logger};
@@ -3998,6 +4021,153 @@ class DispatcherExposureTest : public DispatcherTest {
   std::chrono::steady_clock::time_point capture_time{};
   uint64_t request_id = 10000;
 };
+
+class DispatcherExposurePolicyTest : public DispatcherExposureTest {
+ protected:
+  static constexpr std::string_view kEnabled =
+      R"({"privacy":{"mode":"normal"},"reranker":{"exposureTraceEnabled":true}})";
+  static constexpr std::string_view kDisabled =
+      R"({"privacy":{"mode":"normal"},"reranker":{"exposureTraceEnabled":false}})";
+
+  void SetUp() override {
+    DispatcherExposureTest::SetUp();
+    ASSERT_TRUE(WriteSettings(kEnabled));
+    ASSERT_EQ(settings.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+    EnableEventPrivacy(configured_dispatcher);
+  }
+
+  bool WriteSettings(std::string_view json) {
+    std::ofstream file(settings_path, std::ios::binary | std::ios::trunc);
+    file << json;
+    file.close();
+    return file.good();
+  }
+
+  std::optional<ipc::UpdateConfigResponse> UpdateConfig(std::string_view json) {
+    EXPECT_TRUE(WriteSettings(json));
+    const auto response = configured_dispatcher.Dispatch(
+        MakeReq(++request_id, ipc::MessageType::UpdateConfig, "{}"));
+    return response ? ipc::ParseUpdateConfigResponse(response->payload_json) : std::nullopt;
+  }
+
+  ipc::QueryCandidatesResponse QueryWithSettings() {
+    return Query(false, true, "こうほ", &configured_dispatcher);
+  }
+
+  std::filesystem::path settings_path{temp_directory.path() / "exposure-settings.json"};
+  azookey::host::SettingsStore settings{settings_path};
+  azookey::host::Dispatcher configured_dispatcher{&trace_engine, &scheduler, &user_dict,
+                                                    DefaultDispatcherConfig(), &settings};
+};
+
+TEST_F(DispatcherExposurePolicyTest, PublishedOptInGatesQueryAndCommitBeforeEngineUpdate) {
+  trace_engine.SetExposureTracePolicy(true, true);
+  const auto issued = QueryWithSettings();
+  ASSERT_TRUE(issued.exposure_id);
+  ASSERT_FALSE(issued.candidates.empty());
+
+  // Reload publishes settings privacy before UpdateConfig applies the engine's copy.
+  ASSERT_TRUE(WriteSettings(kDisabled));
+  ASSERT_EQ(settings.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  ASSERT_TRUE(trace_engine.config().exposure_trace_enabled);
+  EXPECT_FALSE(QueryWithSettings().exposure_id);
+  auto commit = CommitRequest(issued, 0, "stale-engine-opt-in", {0});
+  ASSERT_TRUE(SendCommit(commit, &configured_dispatcher));
+  ASSERT_TRUE(trace.Flush());
+  EXPECT_EQ(trace.Stats().records, 0u);
+  const auto* rows = trace_learning.Rows(commit.reading, commit.chosen.surface);
+  ASSERT_NE(rows, nullptr);
+  EXPECT_EQ(rows->at("").commit_count, 1u);
+}
+
+TEST_F(DispatcherExposurePolicyTest, InvalidUpdateConfigPausesTraceWithoutDroppingOptInOrQueue) {
+  const auto enabled = UpdateConfig(kEnabled);
+  ASSERT_TRUE(enabled && enabled->ok);
+  const auto issued = QueryWithSettings();
+  ASSERT_TRUE(issued.exposure_id);
+  ASSERT_FALSE(issued.candidates.empty());
+  ASSERT_TRUE(SendCommit(CommitRequest(issued, 0, "pending-before-invalid", {0}),
+                         &configured_dispatcher));
+
+  const auto invalid = UpdateConfig("{ invalid json");
+  ASSERT_TRUE(invalid);
+  EXPECT_FALSE(invalid->ok);
+  EXPECT_TRUE(invalid->error);
+  EXPECT_TRUE(trace_engine.config().exposure_trace_enabled);
+  EXPECT_FALSE(QueryWithSettings().exposure_id);
+  ASSERT_TRUE(trace.Flush());
+  EXPECT_EQ(trace.Stats().records, 0u);
+
+  const auto recovered = UpdateConfig(kEnabled);
+  ASSERT_TRUE(recovered && recovered->ok);
+  ASSERT_TRUE(SendCommit(CommitRequest(issued, 0, "invalidated-response", {0}),
+                         &configured_dispatcher));
+  EXPECT_TRUE(QueryWithSettings().exposure_id);
+  ASSERT_TRUE(trace.Flush());
+  const auto records = ReadTrace();
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records.front().GetString("observation_id"), "pending-before-invalid");
+}
+
+TEST_F(DispatcherExposurePolicyTest, UpdateConfigPausesTraceForSecureOrLearningDenied) {
+  const auto enabled = UpdateConfig(kEnabled);
+  ASSERT_TRUE(enabled && enabled->ok);
+  size_t saved = 0;
+  for (std::string_view blocked : {
+           R"({"privacy":{"mode":"secure"},"reranker":{"exposureTraceEnabled":true}})",
+           R"({"privacy":{"mode":"custom","custom":{"learning":false}},"reranker":{"exposureTraceEnabled":true}})",
+       }) {
+    SCOPED_TRACE(blocked);
+    const auto issued = QueryWithSettings();
+    ASSERT_TRUE(issued.exposure_id);
+    ASSERT_FALSE(issued.candidates.empty());
+    const auto commit = CommitRequest(issued, 0, "pending-" + std::to_string(saved), {0});
+    ASSERT_TRUE(SendCommit(commit, &configured_dispatcher));
+    const auto changed = UpdateConfig(blocked);
+    ASSERT_TRUE(changed && changed->ok);
+    EXPECT_FALSE(QueryWithSettings().exposure_id);
+    EXPECT_FALSE(SendCommit(CommitRequest(issued, 0, "blocked-" + std::to_string(saved), {0}),
+                            &configured_dispatcher));
+    ASSERT_TRUE(trace.Flush());
+    EXPECT_EQ(trace.Stats().records, saved);
+
+    const auto recovered = UpdateConfig(kEnabled);
+    ASSERT_TRUE(recovered && recovered->ok);
+    ASSERT_TRUE(trace.Flush());
+    ++saved;
+    EXPECT_EQ(trace.Stats().records, saved);
+  }
+}
+
+TEST_F(DispatcherExposureTest, SafeModeTransitionAndRestoreStopIssuingAndPauseTrace) {
+  using azookey::host::HealthEvent;
+  using azookey::host::HealthState;
+  trace_engine.SetExposureTracePolicy(true, true);
+  size_t saved = 0;
+  for (bool restore : {false, true}) {
+    SCOPED_TRACE(restore);
+    const auto issued = Query();
+    ASSERT_TRUE(issued.exposure_id);
+    ASSERT_FALSE(issued.candidates.empty());
+    ASSERT_TRUE(SendCommit(CommitRequest(issued, 0, "pre-safe-" + std::to_string(saved), {0})));
+    if (restore) {
+      trace_engine.RestoreHealthState(HealthState::SafeMode);
+    } else {
+      ASSERT_TRUE(trace_engine.ApplyHealthEvent(HealthEvent::CrashLoopDetected));
+    }
+    ASSERT_EQ(trace_engine.health_state(), HealthState::SafeMode);
+    EXPECT_FALSE(Query().exposure_id);
+    ASSERT_TRUE(trace.Flush());
+    EXPECT_EQ(trace.Stats().records, saved);
+
+    ASSERT_TRUE(trace_engine.ApplyHealthEvent(HealthEvent::SafeModeCleared));
+    ASSERT_TRUE(SendCommit(CommitRequest(issued, 0, "stale-safe-" + std::to_string(saved), {0})));
+    EXPECT_TRUE(Query().exposure_id);
+    ASSERT_TRUE(trace.Flush());
+    ++saved;
+    EXPECT_EQ(trace.Stats().records, saved);
+  }
+}
 
 TEST_F(DispatcherExposureTest, UsesTheForwardBatchAndKeepsOnlyDisplayedRowsWithFeatures) {
   using namespace std::chrono;
@@ -4098,6 +4268,7 @@ TEST_F(DispatcherExposureTest, DeniesIneligibleResponsesAndKeepsLegacyLearning) 
   }
   EXPECT_NE(logs.find("reranker_trace_skipped"), std::string::npos);
   EXPECT_NE(logs.find("response_unavailable"), std::string::npos);
+  EXPECT_EQ(logs.find("opt_in_disabled"), std::string::npos);
   for (const auto text :
        {kContext, std::string_view("こうほ"), std::string_view(legacy.chosen.surface)})
     EXPECT_EQ(logs.find(text), std::string::npos);
@@ -4135,14 +4306,14 @@ TEST_F(DispatcherExposureTest, CorrectionsFindPendingAndSavedCommitsById) {
   ASSERT_TRUE(query.exposure_id);
   ASSERT_GE(query.candidates.size(), 2u);
   ASSERT_TRUE(SendCommit(CommitRequest(query, 0, "pending", {0})));
-  const auto correction = [&](std::string id, std::string target,
+  const auto correction = [&](std::string id, std::string target_id,
                               std::optional<std::string> accepted = {}) {
     ipc::CommitCorrectionRequest request;
     request.kind = accepted ? "reconvert" : "undo";
     request.reading = "こうほ";
     request.rejected_surface = query.candidates[0].surface;
     request.observation_id = std::move(id);
-    request.target_observation_id = std::move(target);
+    request.target_observation_id = std::move(target_id);
     request.selected_surface = std::move(accepted);
     request.timestamp_ms = kCommitMs + 400;
     request.secure = false;
@@ -4233,6 +4404,42 @@ TEST_F(DispatcherExposureTest, LearningSummaryIsIndependentOfSearchAndForgetRemo
   EXPECT_EQ(trace_engine.ForgetLearningPair(commit.reading, commit.chosen.surface),
             azookey::host::InferenceEngine::ForgetOutcome::Forgotten);
   EXPECT_EQ(trace.Stats().records, 0u);
+}
+
+TEST_F(DispatcherExposureTest, TraceForgetRecoversAfterTheLearningEntryIdDisappears) {
+  trace_engine.SetExposureTracePolicy(true, true);
+  const auto issued = Query();
+  ASSERT_TRUE(issued.exposure_id);
+  ASSERT_FALSE(issued.candidates.empty());
+  ASSERT_TRUE(SendCommit(CommitRequest(issued, 0, "forget-by-id", {0})));
+  ASSERT_TRUE(trace.Flush());
+  ASSERT_EQ(trace.Stats().records, 1u);
+
+  using azookey::host::LearningDataStore;
+  const auto page = trace_engine.ListLearningEntries(LearningDataStore::Learning, "", 0, 10);
+  ASSERT_EQ(page.entries.size(), 1u);
+  ipc::ForgetLearningEntryRequest request;
+  request.store = "learning";
+  request.id = page.entries.front().id;
+  trace_crypto.reject_decryption.store(true);
+  const auto response = target.Dispatch(MakeReq(++request_id, ipc::MessageType::ForgetLearningEntry,
+                                                 ipc::BuildForgetLearningEntryRequest(request)));
+  // A second transient failure during retry also leaves the encrypted snapshot in place.
+  EXPECT_FALSE(trace.Flush());
+  EXPECT_TRUE(std::filesystem::exists(trace_path));
+  trace_crypto.reject_decryption.store(false);
+  ASSERT_TRUE(response);
+  const auto failure = ipc::ParseForgetLearningEntryResponse(response->payload_json);
+  ASSERT_TRUE(failure);
+  EXPECT_FALSE(failure->ok);
+  EXPECT_EQ(failure->error, ipc::kLearningDataErrorSaveFailed);
+  EXPECT_TRUE(trace_engine.ListLearningEntries(LearningDataStore::Learning, "", 0, 10)
+                  .entries.empty());
+  EXPECT_EQ(trace.Stats().records, 1u);
+
+  ASSERT_TRUE(trace.Flush());
+  EXPECT_EQ(trace.Stats().records, 0u);
+  EXPECT_FALSE(std::filesystem::exists(trace_path));
 }
 
 TEST_F(DispatcherExposureTest, FailedTraceDeletionRollsBackLearningButInvalidatesPending) {

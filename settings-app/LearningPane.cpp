@@ -14,8 +14,10 @@
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.System.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -31,6 +33,10 @@ namespace {
 namespace xaml = winrt::Microsoft::UI::Xaml;
 namespace controls = winrt::Microsoft::UI::Xaml::Controls;
 using winrt::Microsoft::Windows::ApplicationModel::Resources::ResourceLoader;
+
+// The wire offset is uint32_t. Stop at its last page-aligned offset.
+constexpr uint64_t kLastLearningPageOffset =
+    (std::numeric_limits<uint32_t>::max)() / kLearningPageSize * kLearningPageSize;
 
 winrt::hstring Str(const ResourceLoader& resources, const std::string& name) {
   return resources.GetString(winrt::to_hstring(name));
@@ -272,10 +278,10 @@ void LearningPane::Build(controls::StackPanel panel,
   next_button_.Content(winrt::box_value(resources.GetString(L"Learning_NextPage")));
   SetId(next_button_, L"LearningNextPageButton");
   next_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
-    if (const auto self = weak.lock()) {
-      self->offset_ += kLearningPageSize;
-      self->LoadPage();
-    }
+    const auto self = weak.lock();
+    if (!self || self->offset_ >= kLastLearningPageOffset) return;
+    self->offset_ += kLearningPageSize;
+    self->LoadPage();
   });
   pager.Children().Append(next_button_);
   page_text_ = Block(L"", true);
@@ -559,7 +565,7 @@ std::vector<std::string> LearningPane::CheckedStores() const {
 void LearningPane::UpdatePager() {
   const auto range = ComputeLearningPage(offset_, entries_.size(), total_);
   previous_button_.IsEnabled(!busy_ && range.has_previous);
-  next_button_.IsEnabled(!busy_ && range.has_next);
+  next_button_.IsEnabled(!busy_ && range.has_next && offset_ < kLastLearningPageOffset);
   ResourceLoader resources;
   if (entries_.empty()) {
     page_text_.Text(total_ == 0 ? resources.GetString(L"Learning_NoEntries") : winrt::hstring());
@@ -577,14 +583,14 @@ void LearningPane::ShowExposureTraceSummary(
   }
   const ResourceLoader resources;
   std::wstring text(resources.GetString(L"Learning_ExposureTraceSummary"));
-  const auto replace = [&](std::wstring_view marker, uint64_t value) {
+  const auto replace = [&](std::wstring_view marker, std::wstring_view value) {
     if (const auto at = text.find(marker); at != std::wstring::npos) {
-      text.replace(at, marker.size(), std::to_wstring(value));
+      text.replace(at, marker.size(), value);
     }
   };
-  replace(L"{records}", summary->records);
-  replace(L"{bytes}", summary->size_bytes);
-  replace(L"{days}", summary->retention_days);
+  replace(L"{records}", std::to_wstring(summary->records));
+  replace(L"{capacity}", std::wstring(winrt::to_hstring(FormatByteSize(summary->size_bytes))));
+  replace(L"{days}", std::to_wstring(summary->retention_days));
   exposure_trace_text_.Text(winrt::hstring(text));
   exposure_trace_text_.Visibility(xaml::Visibility::Visible);
 }
@@ -597,7 +603,8 @@ winrt::fire_and_forget LearningPane::LoadPage(bool keep_status) {
   request.store = std::string(kLearningStoreTabs[static_cast<size_t>(tab_index_)].id);
   request.query = query_;
   request.limit = kLearningPageSize;
-  request.offset = offset_;
+  offset_ = (std::min)(offset_, kLastLearningPageOffset);
+  request.offset = static_cast<uint32_t>(offset_);
   SetBusy(true);
   if (!keep_status) status_bar_.IsOpen(false);
   const auto dispatcher = dispatcher_;

@@ -2,10 +2,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <string>
 #include <string_view>
@@ -115,6 +118,49 @@ class BlockingTraceCrypto final : public ByteCrypto {
   TestByteCrypto inner_;
 };
 
+class CountingTraceCrypto final : public ByteCrypto {
+ public:
+  bool Encrypt(const std::vector<uint8_t>& plaintext, std::vector<uint8_t>& cipher) const override {
+    return inner_.Encrypt(plaintext, cipher);
+  }
+
+  bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plaintext) const override {
+    ++decryptions;
+    return inner_.Decrypt(cipher, plaintext);
+  }
+
+  mutable std::atomic<int> decryptions{};
+
+ private:
+  TestByteCrypto inner_;
+};
+
+class BlockingTraceReadCrypto final : public ByteCrypto {
+ public:
+  explicit BlockingTraceReadCrypto(std::shared_future<void> release)
+      : release_(std::move(release)) {}
+
+  bool Encrypt(const std::vector<uint8_t>& plaintext, std::vector<uint8_t>& cipher) const override {
+    return inner_.Encrypt(plaintext, cipher);
+  }
+
+  bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plaintext) const override {
+    if (!started_once_.exchange(true)) {
+      started_.set_value();
+      if (release_.wait_for(5s) != std::future_status::ready) return false;
+    }
+    return inner_.Decrypt(cipher, plaintext);
+  }
+
+  std::future<void> Started() { return started_.get_future(); }
+
+ private:
+  const std::shared_future<void> release_;
+  mutable std::atomic<bool> started_once_{};
+  mutable std::promise<void> started_;
+  TestByteCrypto inner_;
+};
+
 class RerankerTraceStoreTest : public testing::Test {
  protected:
   void SetUp() override {
@@ -149,6 +195,7 @@ TEST_F(RerankerTraceStoreTest, EncryptedRoundTripAndCorrectionsRequireAnExactCom
   {
     RerankerTraceStore store(path_, crypto_, options_);
     EXPECT_FALSE(store.Enqueue(Exposure("off", "synthetic-secret")));
+    ASSERT_TRUE(store.Flush());
     store.SetRecording(true, true);
     auto exposure = Exposure("commit", "synthetic-secret");
     exposure.shown_surfaces.resize(32, "synthetic-fallback");
@@ -167,6 +214,7 @@ TEST_F(RerankerTraceStoreTest, EncryptedRoundTripAndCorrectionsRequireAnExactCom
   }
 
   RerankerTraceStore restored(path_, crypto_, options_);
+  ASSERT_TRUE(restored.Flush());
   restored.SetRecording(true, true);
   EXPECT_FALSE(restored.Enqueue(Exposure("commit", "synthetic-secret")));
   ASSERT_TRUE(restored.EnqueueCorrection("replace", "commit", "synthetic-replaced", kNowMs + 2));
@@ -188,6 +236,7 @@ TEST_F(RerankerTraceStoreTest, EncryptedRoundTripAndCorrectionsRequireAnExactCom
 
 TEST_F(RerankerTraceStoreTest, RecordingPauseKeepsPendingButOptOutDropsIt) {
   RerankerTraceStore store(path_, crypto_, options_);
+  ASSERT_TRUE(store.Flush());
   store.SetRecording(true, true);
   ASSERT_TRUE(store.Enqueue(Exposure("before-pause", "synthetic-chosen")));
   store.SetRecording(true, false);
@@ -211,6 +260,7 @@ TEST_F(RerankerTraceStoreTest, OptOutDuringEncryptionPreventsPublication) {
   BlockingTraceCrypto crypto(release.get_future().share());
   auto started = crypto.Started();
   RerankerTraceStore store(path_, crypto, options_);
+  ASSERT_TRUE(store.Flush());
   store.SetRecording(true, true);
   ASSERT_TRUE(store.Enqueue(Exposure("in-flight", "synthetic-chosen")));
   auto flush = std::async(std::launch::async, [&store] { return store.Flush(); });
@@ -239,6 +289,79 @@ TEST_F(RerankerTraceStoreTest, SweepingExpiredRecordsIgnoresRecordingGates) {
   EXPECT_FALSE(fs::exists(path_));
 }
 
+TEST_F(RerankerTraceStoreTest, BackgroundSweepsSkipDecryptUntilOldestRecordExpires) {
+  {
+    RerankerTraceStore seed(path_, crypto_, options_);
+    seed.SetRecording(true, true);
+    ASSERT_TRUE(seed.Enqueue(Exposure("seed", "synthetic-chosen")));
+    ASSERT_TRUE(seed.Flush());
+  }
+
+  CountingTraceCrypto crypto;
+  std::mutex mutex;
+  std::condition_variable wake;
+  size_t clock_calls = 0;
+  options_.sweep_interval = 1ms;
+  options_.wall_clock_ms = [&] {
+    std::lock_guard lock(mutex);
+    ++clock_calls;
+    wake.notify_one();
+    return now_.load();
+  };
+  RerankerTraceStore store(path_, crypto, options_);
+  {
+    std::unique_lock lock(mutex);
+    ASSERT_TRUE(wake.wait_for(lock, 5s, [&] { return clock_calls >= 4; }));
+  }
+  EXPECT_EQ(crypto.decryptions.load(), 1);
+
+  now_.store(kNowMs + 30 * kDayMs + 1);
+  {
+    std::unique_lock lock(mutex);
+    ASSERT_TRUE(wake.wait_for(lock, 5s, [&] {
+      return store.Stats().records == 0 && crypto.decryptions.load() >= 2;
+    }));
+  }
+  EXPECT_EQ(crypto.decryptions.load(), 2);
+  EXPECT_FALSE(fs::exists(path_));
+}
+
+TEST_F(RerankerTraceStoreTest, StartupLoadsOnWorkerAndPreservesCorrectionsToExistingCommits) {
+  {
+    RerankerTraceStore seed(path_, crypto_, options_);
+    seed.SetRecording(true, true);
+    ASSERT_TRUE(seed.Enqueue(Exposure("seed", "synthetic-chosen")));
+    ASSERT_TRUE(seed.Flush());
+  }
+
+  std::promise<void> release;
+  BlockingTraceReadCrypto crypto(release.get_future().share());
+  auto started = crypto.Started();
+  auto construct = std::async(std::launch::async, [&] {
+    return std::make_unique<RerankerTraceStore>(path_, crypto, options_);
+  });
+  EXPECT_EQ(started.wait_for(5s), std::future_status::ready);
+  const auto constructed = construct.wait_for(1s);
+  EXPECT_EQ(constructed, std::future_status::ready);
+  if (constructed != std::future_status::ready) {
+    release.set_value();
+    return;
+  }
+  auto store = construct.get();
+  store->SetRecording(true, true);
+  EXPECT_TRUE(store->EnqueueCorrection("found", "seed", std::nullopt, kNowMs + 1));
+  EXPECT_TRUE(store->EnqueueCorrection("unmatched", "unknown", std::nullopt, kNowMs + 2));
+  release.set_value();
+  store->WaitForPublication();
+  EXPECT_EQ(store->Stats().records, 1u);
+  ASSERT_TRUE(store->Flush());
+  const auto rows = ReadRows(path_, crypto_);
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[1].GetString("observation_id"), "found");
+  EXPECT_EQ(rows[1].GetString("target_observation_id"), "seed");
+  EXPECT_FALSE(store->EnqueueCorrection("also-unmatched", "unknown", std::nullopt, kNowMs + 3));
+}
+
 TEST_F(RerankerTraceStoreTest, LimitsKeepNewestAndUseEncryptedSize) {
   {
     RerankerTraceStore sample(path_, crypto_, options_);
@@ -252,6 +375,7 @@ TEST_F(RerankerTraceStoreTest, LimitsKeepNewestAndUseEncryptedSize) {
   std::vector<std::string> reasons;
   options_.log_reason = [&](std::string_view reason) { reasons.emplace_back(reason); };
   RerankerTraceStore store(path_, crypto_, options_);
+  ASSERT_TRUE(store.Flush());
   store.SetRecording(true, true);
   ASSERT_TRUE(store.Enqueue(Exposure("new", "synthetic-chosen", kNowMs + 1)));
   ASSERT_TRUE(store.Enqueue(Exposure("xxx", "synthetic-chosen", kNowMs - 1)));
@@ -280,6 +404,39 @@ TEST_F(RerankerTraceStoreTest, ForgetRemovesChosenAndCorrectionSurfacesOnly) {
   EXPECT_EQ(rows[0].GetString("observation_id"), "commit-b");
   ASSERT_NE(rows[0].GetArray("shown_surfaces"), nullptr);
   EXPECT_EQ(rows[0].GetArray("shown_surfaces")->at(0).AsString(), "synthetic-other");
+}
+
+TEST_F(RerankerTraceStoreTest, FailedForgetRetriesExactPairsWithoutRecording) {
+  SwitchableTraceCrypto crypto;
+  RerankerTraceStore store(path_, crypto, options_);
+  store.SetRecording(true, true);
+  ASSERT_TRUE(store.Enqueue(Exposure("forgotten", "synthetic-shared")));
+  auto other_reading = Exposure("other-reading", "synthetic-shared");
+  other_reading.reading = "synthetic-other-reading";
+  ASSERT_TRUE(store.Enqueue(std::move(other_reading)));
+  ASSERT_TRUE(store.Enqueue(Exposure("other-surface", "synthetic-keep")));
+  ASSERT_TRUE(
+      store.EnqueueCorrection("correction", "other-surface", "synthetic-shared", kNowMs + 1));
+  ASSERT_TRUE(store.Flush());
+  const auto before = ReadBytes(path_);
+
+  ASSERT_TRUE(store.Enqueue(Exposure("pending", "synthetic-shared", kNowMs + 2)));
+  crypto.fail.store(true);
+  EXPECT_FALSE(store.Forget("synthetic-reading", "synthetic-shared"));
+  EXPECT_EQ(ReadBytes(path_), before);
+  EXPECT_FALSE(store.EnqueueCorrection("late-undo", "forgotten", std::nullopt, kNowMs + 3));
+  const auto blocked_sidecar = Sidecar(".tmp.11.22.33");
+  ASSERT_TRUE(fs::create_directory(blocked_sidecar));
+  EXPECT_FALSE(store.Reset());
+  ASSERT_TRUE(fs::remove(blocked_sidecar));
+
+  store.SetRecording(false, false);
+  crypto.fail.store(false);
+  ASSERT_TRUE(store.Flush());
+  const auto rows = ReadRows(path_, crypto);
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].GetString("observation_id"), "other-reading");
+  EXPECT_EQ(rows[1].GetString("observation_id"), "other-surface");
 }
 
 TEST_F(RerankerTraceStoreTest, ResetFailureKeepsMainAndInvalidatesPending) {

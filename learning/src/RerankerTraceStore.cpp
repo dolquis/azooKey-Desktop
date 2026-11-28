@@ -6,6 +6,7 @@
 #include <deque>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <system_error>
 #include <thread>
@@ -49,7 +50,13 @@ struct TraceRow {
   std::string json_line;
 
   bool IsCommit() const { return target_id.empty(); }
+  bool NeedsTarget() const { return !IsCommit() && json_line.empty(); }
   size_t LineBytes() const { return json_line.size() + 1; }
+  size_t QueueBytes() const {
+    if (!NeedsTarget()) return LineBytes();
+    return sizeof(timestamp) + observation_id.size() + target_id.size() +
+           (accepted_surface ? accepted_surface->size() : 0);
+  }
 
   bool MatchesPair(std::string_view target_reading, std::string_view target_surface) const {
     return reading == target_reading &&
@@ -265,13 +272,12 @@ bool RemoveTraceSidecars(const std::filesystem::path& path) {
 }  // namespace
 
 class RerankerTraceStore::Impl {
+  enum class FlushMode { Explicit, Initial, Background };
+
  public:
   Impl(std::filesystem::path path, const ByteCrypto& crypto, RerankerTraceOptions options)
       : path_(std::move(path)), crypto_(crypto), options_(std::move(options)) {
-    if (!path_.empty()) {
-      Flush();
-      worker_ = std::thread([this] { Run(); });
-    }
+    if (!path_.empty()) worker_ = std::thread([this] { Run(); });
   }
 
   ~Impl() {
@@ -310,7 +316,12 @@ class RerankerTraceStore::Impl {
     const auto pending = std::ranges::find_if(pending_, [&target_id](const QueuedRow& queued) {
       return queued.row->IsCommit() && queued.row->observation_id == target_id;
     });
-    if (durable == commits_.end() && pending == pending_.end()) return false;
+    if (durable == commits_.end() && pending == pending_.end()) {
+      if (snapshot_ready_) return false;
+      // Resolve unknown targets after loading the durable index on the worker.
+      return QueueLocked(TraceRow{std::move(observation_id), std::move(target_id), {}, {},
+                                  std::move(accepted), ts, {}});
+    }
     const auto& reading = durable != commits_.end() ? durable->second.first : pending->row->reading;
     const auto& surface =
         durable != commits_.end() ? durable->second.second : pending->row->surface;
@@ -336,9 +347,11 @@ class RerankerTraceStore::Impl {
 
   void WaitForPublication() { std::lock_guard barrier(transaction_mutex_); }
 
-  bool Flush() {
+  bool Flush() { return Flush(FlushMode::Explicit); }
+
+  bool Flush(FlushMode mode) {
     try {
-      return FlushSnapshot();
+      return FlushSnapshot(mode);
     } catch (...) {
       detail::ReportPersistenceFailure("trace-flush");
       return SaveFailed();
@@ -349,20 +362,21 @@ class RerankerTraceStore::Impl {
     if (removed) *removed = false;
     if (path_.empty()) return true;
     std::lock_guard transaction(transaction_mutex_);
-    size_t pending_erased;
+    bool found = false;
     {
       std::lock_guard lock(state_mutex_);
-      pending_erased = std::erase_if(pending_, [&](const QueuedRow& queued) {
-        if (!queued.row->MatchesPair(reading, surface)) return false;
-        pending_bytes_ -= queued.row->LineBytes();
-        return true;
+      tombstones_[std::string(reading)][std::string(surface)] = next_sequence_;
+      found = ErasePendingLocked([&](const QueuedRow& queued) {
+                return queued.row->MatchesPair(reading, surface);
+              }) != 0;
+      std::erase_if(commits_, [&](const auto& entry) {
+        return entry.second.first == reading && entry.second.second == surface;
       });
     }
     auto file_lock = LockFile();
     TraceSnapshot snapshot;
     if (!file_lock || !ReadSnapshot(snapshot, false)) return SaveFailed();
-    const auto erased = std::erase_if(
-        snapshot.rows, [&](const TraceRow& row) { return row.MatchesPair(reading, surface); });
+    const auto erased = ApplyTombstones(snapshot, {reading, surface}, &found);
     if (erased != 0) {
       std::vector<uint8_t> cipher;
       bool limit_evicted = false;
@@ -374,7 +388,8 @@ class RerankerTraceStore::Impl {
       snapshot.size_bytes = cipher.size();
     }
     PublishSnapshot(snapshot, std::nullopt);
-    if (removed) *removed = pending_erased != 0 || erased != 0;
+    tombstones_.clear();
+    if (removed) *removed = found;
     return true;
   }
 
@@ -389,6 +404,7 @@ class RerankerTraceStore::Impl {
     auto file_lock = LockFile();
     if (!file_lock || !RemoveTraceSidecars(path_) || !RemoveTraceFile(path_)) return SaveFailed();
     PublishSnapshot({}, std::nullopt);
+    tombstones_.clear();
     return true;
   }
 
@@ -398,11 +414,112 @@ class RerankerTraceStore::Impl {
     std::shared_ptr<const TraceRow> row;
   };
 
+  using TracePair = std::pair<std::string_view, std::string_view>;
+  using CommitIndex = std::unordered_map<std::string_view, const TraceRow*>;
+
+  static CommitIndex IndexCommits(const std::vector<TraceRow>& rows) {
+    CommitIndex commits;
+    for (const auto& row : rows) {
+      if (row.IsCommit()) commits.try_emplace(row.observation_id, &row);
+    }
+    return commits;
+  }
+
+  bool HasTombstone(std::string_view reading, std::string_view surface,
+                    std::optional<uint64_t> sequence) const {
+    const auto by_reading = tombstones_.find(reading);
+    if (by_reading == tombstones_.end()) return false;
+    const auto match = by_reading->second.find(surface);
+    return match != by_reading->second.end() && (!sequence || *sequence < match->second);
+  }
+
+  // Delete from the durable snapshot, and resolve enough of deferred startup
+  // corrections to suppress any that predate a matching forget request.
+  size_t ApplyTombstones(TraceSnapshot& snapshot, TracePair requested = {}, bool* found = nullptr) {
+    if (tombstones_.empty()) return 0;
+    {
+      std::lock_guard lock(state_mutex_);
+      const auto is_deferred = [](const QueuedRow& queued) { return queued.row->NeedsTarget(); };
+      if (std::ranges::any_of(pending_, is_deferred)) {
+        const auto commits = IndexCommits(snapshot.rows);
+        ErasePendingLocked([&](const QueuedRow& queued) {
+          if (!queued.row->NeedsTarget()) return false;
+          const auto target = commits.find(queued.row->target_id);
+          if (target == commits.end()) return false;
+          const auto& original = *target->second;
+          const auto& accepted = queued.row->accepted_surface;
+          const bool erase =
+              HasTombstone(original.reading, original.surface, queued.sequence) ||
+              (accepted && HasTombstone(original.reading, *accepted, queued.sequence));
+          if (erase && found && original.reading == requested.first &&
+              (original.surface == requested.second ||
+               (accepted && *accepted == requested.second))) {
+            *found = true;
+          }
+          return erase;
+        });
+      }
+    }
+    return std::erase_if(snapshot.rows, [&](const TraceRow& row) {
+      const bool erase = HasTombstone(row.reading, row.surface, std::nullopt) ||
+                         (row.accepted_surface &&
+                          HasTombstone(row.reading, *row.accepted_surface, std::nullopt));
+      if (erase && found && row.MatchesPair(requested.first, requested.second)) *found = true;
+      return erase;
+    });
+  }
+
+  bool AppendBatch(TraceSnapshot& snapshot, const std::vector<QueuedRow>& batch, uint64_t cutoff) {
+    if (batch.empty()) return false;
+    // Keep backing addresses stable while resolving deferred corrections. They
+    // can match the loaded snapshot only, as pending matches are resolved at enqueue.
+    snapshot.rows.reserve(snapshot.rows.size() + batch.size());
+    const auto needs_target = [](const QueuedRow& queued) { return queued.row->NeedsTarget(); };
+    const auto commits = std::ranges::any_of(batch, needs_target) ? IndexCommits(snapshot.rows)
+                                                                 : CommitIndex{};
+    std::unordered_set<std::string> disk_ids;
+    disk_ids.reserve(snapshot.rows.size() + batch.size());
+    for (const auto& row : snapshot.rows) disk_ids.insert(row.observation_id);
+    size_t deferred_budget = options_.max_pending_bytes;
+    for (const auto& queued : batch) {
+      if (!queued.row->NeedsTarget()) deferred_budget -= queued.row->QueueBytes();
+    }
+    bool appended = false;
+    for (const auto& queued : batch) {
+      const auto& row = *queued.row;
+      if (!disk_ids.insert(row.observation_id).second) continue;
+      if (row.NeedsTarget()) {
+        const auto target = commits.find(row.target_id);
+        if (target == commits.end() || target->second->timestamp < cutoff) continue;
+        const auto& original = *target->second;
+        if (row.accepted_surface && *row.accepted_surface == original.surface) continue;
+        auto resolved = MakeTraceCorrection(row.observation_id, row.target_id, original.reading,
+                                            original.surface, row.accepted_surface, row.timestamp);
+        if (resolved.LineBytes() > deferred_budget) continue;
+        deferred_budget -= resolved.LineBytes();
+        snapshot.rows.push_back(std::move(resolved));
+      } else {
+        snapshot.rows.push_back(row);
+      }
+      appended = true;
+    }
+    return appended;
+  }
+
+  template <class Predicate>
+  size_t ErasePendingLocked(Predicate predicate) {
+    return std::erase_if(pending_, [&](const QueuedRow& queued) {
+      if (!predicate(queued)) return false;
+      pending_bytes_ -= queued.row->QueueBytes();
+      return true;
+    });
+  }
+
   bool CanRecordLocked() const { return !path_.empty() && enabled_ && learning_allowed_; }
 
   bool QueueLocked(TraceRow row) {
     if (!CanRecordLocked() || pending_.size() >= options_.max_pending_records ||
-        row.LineBytes() > options_.max_pending_bytes - pending_bytes_) {
+        row.QueueBytes() > options_.max_pending_bytes - pending_bytes_) {
       return false;
     }
     if (observation_ids_.contains(row.observation_id) ||
@@ -411,7 +528,7 @@ class RerankerTraceStore::Impl {
         })) {
       return false;
     }
-    const auto bytes = row.LineBytes();
+    const auto bytes = row.QueueBytes();
     pending_.push_back({next_sequence_++, std::make_shared<const TraceRow>(std::move(row))});
     pending_bytes_ += bytes;
     wake_.notify_one();
@@ -569,47 +686,58 @@ class RerankerTraceStore::Impl {
       ids.insert(row.observation_id);
       if (row.IsCommit()) commits.try_emplace(row.observation_id, row.reading, row.surface);
     }
+    const auto oldest = std::ranges::min_element(snapshot.rows, {}, &TraceRow::timestamp);
+    oldest_published_ms_ =
+        oldest == snapshot.rows.end() ? std::nullopt : std::optional(oldest->timestamp);
     std::lock_guard lock(state_mutex_);
+    snapshot_ready_ = true;
     commits_.swap(commits);
     observation_ids_.swap(ids);
     stats_.records = static_cast<uint64_t>(snapshot.rows.size());
     stats_.size_bytes = static_cast<uint64_t>(snapshot.size_bytes);
     while (last_sequence && !pending_.empty() && pending_.front().sequence <= *last_sequence) {
-      pending_bytes_ -= pending_.front().row->LineBytes();
+      pending_bytes_ -= pending_.front().row->QueueBytes();
       pending_.pop_front();
     }
   }
 
-  bool FlushSnapshot() {
+  bool FlushSnapshot(FlushMode mode) {
     if (path_.empty()) return true;
     std::lock_guard transaction(transaction_mutex_);
+    const auto now = NowMs();
+    const auto cutoff = now > kTraceRetentionMs ? now - kTraceRetentionMs : 0;
+    if (mode != FlushMode::Explicit) {
+      std::lock_guard lock(state_mutex_);
+      const bool clean = tombstones_.empty() &&
+                         (!oldest_published_ms_ || *oldest_published_ms_ >= cutoff) &&
+                         stats_.records <= options_.max_records &&
+                         stats_.size_bytes <= options_.max_ciphertext_bytes;
+      if (snapshot_ready_ && clean &&
+          (mode == FlushMode::Initial || !CanRecordLocked() || pending_.empty())) {
+        return true;
+      }
+    }
     auto file_lock = LockFile();
     TraceSnapshot snapshot;
-    if (!file_lock || !ReadSnapshot(snapshot, true)) return SaveFailed();
+    // A forget retry needs the original rows to verify the exact pair. Preserve
+    // the ciphertext and keep the deletion request if it still cannot be read.
+    if (!file_lock || !ReadSnapshot(snapshot, tombstones_.empty())) return SaveFailed();
+    const auto erased = ApplyTombstones(snapshot);
     std::vector<QueuedRow> batch;
     uint64_t epoch = 0;
     {
       std::lock_guard lock(state_mutex_);
-      if (CanRecordLocked()) batch.assign(pending_.begin(), pending_.end());
+      // Startup loads and maintains the existing file. Events arriving during
+      // the load follow the regular batching schedule.
+      if (mode != FlushMode::Initial && CanRecordLocked()) {
+        batch.assign(pending_.begin(), pending_.end());
+      }
       epoch = recording_epoch_;
     }
-    const auto now = NowMs();
-    const auto cutoff = now > kTraceRetentionMs ? now - kTraceRetentionMs : 0;
     const bool expired = std::ranges::any_of(
         snapshot.rows, [cutoff](const TraceRow& row) { return row.timestamp < cutoff; });
-    bool appended = false;
-    if (!batch.empty()) {
-      std::unordered_set<std::string> disk_ids;
-      disk_ids.reserve(snapshot.rows.size() + batch.size());
-      for (const auto& row : snapshot.rows) disk_ids.insert(row.observation_id);
-      for (const auto& queued : batch) {
-        if (disk_ids.insert(queued.row->observation_id).second) {
-          snapshot.rows.push_back(*queued.row);
-          appended = true;
-        }
-      }
-    }
-    if (appended || expired || snapshot.rows.size() > options_.max_records ||
+    const bool appended = AppendBatch(snapshot, batch, cutoff);
+    if (erased != 0 || appended || expired || snapshot.rows.size() > options_.max_records ||
         snapshot.size_bytes > options_.max_ciphertext_bytes) {
       std::vector<uint8_t> cipher;
       bool limit_evicted = false;
@@ -621,10 +749,12 @@ class RerankerTraceStore::Impl {
     }
     const auto last_sequence = batch.empty() ? std::nullopt : std::optional(batch.back().sequence);
     PublishSnapshot(snapshot, last_sequence);
+    tombstones_.clear();
     return true;
   }
 
   void Run() {
+    Flush(FlushMode::Initial);
     std::unique_lock lock(state_mutex_);
     auto sweep_due = TraceSteadyClock::now() + options_.sweep_interval;
     while (!stop_) {
@@ -639,7 +769,7 @@ class RerankerTraceStore::Impl {
       }
       if (changed) continue;
       lock.unlock();
-      Flush();
+      Flush(FlushMode::Background);
       lock.lock();
       if (TraceSteadyClock::now() >= sweep_due) {
         sweep_due = TraceSteadyClock::now() + options_.sweep_interval;
@@ -654,6 +784,9 @@ class RerankerTraceStore::Impl {
   // Transaction mutex serializes potentially slow file operations. The worker
   // never holds the state mutex during encryption or I/O.
   std::mutex transaction_mutex_;
+  // Each pair stores the queue sequence at the time it was forgotten.
+  std::map<std::string, std::map<std::string, uint64_t, std::less<>>, std::less<>> tombstones_;
+  std::optional<uint64_t> oldest_published_ms_;
   mutable std::mutex state_mutex_;
   std::condition_variable wake_;
   std::thread worker_;
@@ -664,6 +797,7 @@ class RerankerTraceStore::Impl {
   bool enabled_{};
   bool learning_allowed_{};
   bool stop_{};
+  bool snapshot_ready_{};
   RerankerTraceStats stats_;
   std::unordered_map<std::string, std::pair<std::string, std::string>> commits_;
   std::unordered_set<std::string> observation_ids_;

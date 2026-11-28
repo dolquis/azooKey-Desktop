@@ -519,7 +519,7 @@
   <data name="Learning_PreviousPage" xml:space="preserve"><value>前へ</value></data>
   <data name="Learning_NextPage" xml:space="preserve"><value>次へ</value></data>
   <data name="Learning_NoEntries" xml:space="preserve"><value>該当する項目はありません。</value></data>
-  <data name="Learning_ExposureTraceSummary" xml:space="preserve"><value>露出トレース：{records} 件 / {bytes} バイト / 保持期間 {days} 日</value></data>
+  <data name="Learning_ExposureTraceSummary" xml:space="preserve"><value>露出トレース：{records} 件 / {capacity} / 保持期間 {days} 日</value></data>
   <data name="Learning_Col_Reading" xml:space="preserve"><value>読み</value></data>
   <data name="Learning_Col_Surface" xml:space="preserve"><value>候補</value></data>
   <data name="Learning_Col_LastUsed" xml:space="preserve"><value>最終使用</value></data>

@@ -591,8 +591,8 @@ activate_typo_correction(reading, observed_pattern):
 - 発動しても補正候補が第一候補になるとは限らない。順位は §12.10 のスコアと
   §12.11 の誤補正防止条件で決まる。発動は「補正 hypothesis を **生成する**
   か」だけを決める前段ゲートである。
-- Host は `dict_best` を 2 値で近似し、M52 の校正（§12.16、DEV-2150）で見直す。元の読みに辞書（システム辞書・
-  ユーザー辞書・新語）の語があれば 1、無ければ 0 とする。このため `weak` は `no_dict` と同じになる。`observed_pattern` は仮説ごとに決まるので、
+- Host は `dict_best` を、元の読みの辞書（システム辞書・ユーザー辞書・新語）の語の辞書スコアの最大値を
+  `D_FULL`（§12.16）で割って `[0, 1]` に収めた値とする。語が無ければ 0 とする。`observed_pattern` は仮説ごとに決まるので、
   `strong_pat` は仮説ごとに評価する。`weak`・`small_gap`・`no_dict` のどれも立たない読みでは、warm-up（§12.11）を
   満たし confidence が `minConfidenceForRanking` 以上の個人パターン（§12.8）に当たる仮説だけを作る。
   どの個人パターンも warm-up を満たさなければ、仮説を作らない。
@@ -1060,8 +1060,11 @@ overcorrection_penalty =
   `context_score = 1.0` フォールバック。
 - 係数 `P_*` / `S_STRONG` は初期値であり M52（`typo_overcorrection_rate`）で
   校正する（§12.16）。
-- Host は `dictionary_hit_score` を 1（§12.4.4 で語のある仮説だけが残る）、`s1_strength` を元の top1 が辞書の語なら 1、
-  そうでなければ 0 で近似し、M52 の校正（§12.16、DEV-2150）で見直す。`context_score` と `app_factor_typo` は 1.0 とする。
+- Host は `dictionary_hit_score` を 1 とする（§12.4.4 で語のある仮説だけが残る）。仮説の語の辞書スコアで仮説を
+  並べると、層の優先度が高い語（新語辞書のカタカナ語、技術用語）が正解の読みの語を押し出すため、仮説の順位は
+  `reading_similarity` だけで決める。`s1_strength` は、元の top1 が
+  元の読みの辞書の語ならその辞書スコアを `D_FULL`（§12.16）で割って `[0, 1]` に収めた値、そうでなければ 0 とする。
+  `context_score` と `app_factor_typo` は 1.0 とする。
   個人パターンの confidence（§12.2）は、照会の時点の §12.9 の値で、app bonus を含めない。
 
 ### 12.11 誤補正防止条件
@@ -1399,6 +1402,7 @@ M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
 | `P_lowconf`（§12.10） | 0.50 | — | overcorrection 率（aggressive） |
 | `minConfidenceForRanking`（§12.14） | 0.70 | `< minConfidenceForTopCandidate` | FP 率（rank） |
 | `minConfidenceForTopCandidate`（§12.14） | 0.90 | `> minConfidenceForRanking` | overcorrection 率（aggressive） |
+| `D_FULL`（§12.5/§12.10） | 1.4 | `D_FULL > 0`。頻度が最大の Sudachi の語の辞書スコア（頻度 + 層の優先度 + 完全一致の加点 − 1）に合わせ、その語で `dict_best` と `s1_strength` が 1 になる | top5 accuracy（rank）、overcorrection 率（aggressive） |
 | `personal_cost_reduction`（§12.4.1） | 0.5 | `0 <= personal_cost_reduction <= 1` | top5 accuracy（rank） |
 | `HYP_MAX_READING` / `HYP_MAX_KEYS`（§12.4） | 10 / 20 | `HYP_MAX_READING > LEN_MIN`。読みがこのコードポイント数を、または `raw_keys` がこのキー数を超えると、`rank` / `aggressive` でも仮説を作らず v1 の読みの組だけを引く。設定キーではない | 候補表示の p95 と top5 accuracy（rank） |
 
@@ -1412,3 +1416,9 @@ M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
   該当するのは `accept_weight` / `reject_weight` / `B_rec` / `B_app` / `P_reject`、
   `minConfidenceForTopCandidate`、warm-up の `typo_min_count`（§12.11）。これらは表の既定を使う。
   運用での校正は、`typo_accept` / `typo_reject` を記録する経路（DEV-2197）ができてから行う。
+- `rank` / `aggressive` では、v2 枠（§12.7）を置いたあと、枠の先頭の語の読みを 1 回だけ変換し直し、その第一候補を
+  枠の先頭に足す。足すのは、その候補がまだ候補に無く（枠の先頭の語そのものを含む）、かなだけで書かれていないときだけとする。
+  足した候補は先頭の語と同じ「もしかして: <読み>」の表示を持ち、枠は `maxReadingHypotheses` 語に保つ（あふれた
+  末尾の語を外す）。かなだけの候補を足さないのは、誤った読みのかながそのまま正解を top5 から押し出すためである。
+  変換し直しは元の変換と同じ時間予算で打ち切り、失敗したときは枠を変えない。aggressive で先頭に出た語は枠に
+  含めず、変換の第一候補の後ろの最初の語を枠の先頭とする。

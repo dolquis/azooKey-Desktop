@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -10,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -472,6 +474,11 @@ class InferenceEngine {
   // Test-only: receives the context QueryCandidates gives NLL rerank, whenever NLL is enabled and
   // the request is not live, before the model check. Set it before any query.
   void SetNllContextObserverForTests(std::function<void(const core::ConversionContext&)> hook);
+  using TinyRerankerFeatureObserverForTests =
+      std::function<void(std::span<const core::Candidate>, std::span<const std::array<float, 12>>)>;
+  // Test-only: runs under state_mutex_ just before applying the learned ranking. The views are
+  // valid only during the callback, which must not call back into the engine.
+  void SetTinyRerankerFeatureObserverForTests(TinyRerankerFeatureObserverForTests hook);
 
   bool LoadModel();
   AiTransformResult TransformLocal(const AiTransformRequest& request,
@@ -743,6 +750,8 @@ class InferenceEngine {
   void ApplyEnglishNegativesLocked(const std::vector<std::string>& rejected,
                                    const std::vector<std::string>& released, uint64_t now_epoch_sec,
                                    size_t max_records, double min_weight);
+  void ObserveTinyRerankerFeaturesLocked(std::vector<core::Candidate>& candidates,
+                                         const std::atomic<bool>* cancel) const;
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec,
@@ -865,6 +874,7 @@ class InferenceEngine {
   size_t user_dict_import_word_limit_{learning::kTextImportMaxWords};
   std::function<void(std::chrono::milliseconds)> before_learning_save_for_tests_;
   std::function<void(const core::ConversionContext&)> nll_context_observer_for_tests_;
+  TinyRerankerFeatureObserverForTests tiny_reranker_feature_observer_for_tests_;
   // Nanoseconds, set by the constructor; read by every query that falls back from the model.
   std::atomic<int64_t> lattice_fallback_budget_ns_{0};
   // Guarded by state_mutex_.

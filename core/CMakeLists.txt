@@ -6,6 +6,7 @@ add_library(azookey_core STATIC
   src/BracketSettings.cpp
   src/BracketTable.cpp
   src/CalculatorRewriter.cpp
+  src/Candidate.cpp
   src/CharacterFormCycle.cpp
   src/CommandLine.cpp
   src/CrashRetention.cpp

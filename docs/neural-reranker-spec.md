@@ -66,17 +66,14 @@ top1 を baseline 比 +3% 以上 / p95 latency 悪化 +10ms 以内を目標。
 
 ## 3. アーキテクチャ
 
-```
-CandidateGenerator output (最大 30 候補)
-        ↓
-FeatureExtractor
-        ↓
-TinyNeuralReranker (MLP, ONNX)
-        ↓
-final_score を更新
-        ↓
-ScorePipeline へ
-```
+候補生成と重複除去の後、NLL を適用する経路では NLL の後、`ApplyRerankerOrRaw` の前に
+TinyNeuralReranker を適用する。`ExtractFeaturesV1` が最大 30 候補の生信号を §4 の
+順に並べ、MLP が候補ごとのスコアを返す。既存の学習加点は `ApplyRerankerOrRaw` で行う。
+
+同じ表層を重複除去する際は、既存の順位規則で代表候補を選ぶ。生の辞書スコアと
+Zenzai の平均 logprob は別々に保持する。各スコア、typo confidence、ラティスの
+文節数は、代表候補に値があればその値を使い、欠損していればもう一方の値を引き継ぐ。
+flag は論理和を取る。重複除去後の `candidate_length` は代表候補の表層から算出する。
 
 ## 4. 入力特徴量
 
@@ -85,17 +82,17 @@ ScorePipeline へ
 | `left_context_embedding` | vector<128> | 文脈 embedding | §4.1 |
 | `reading_embedding` | vector<128> | こうしょうする | §4.1 |
 | `candidate_embedding` | vector<128> | 交渉する | §4.1 |
-| `zenzai_score` | float | -1.82 | Zenzai 出力 |
-| `dictionary_score` | float | 0.64 | M53 |
+| `zenzai_score` | float | -1.82 | Zenzai の生の平均 logprob |
+| `dictionary_score` | float | 0.64 | 辞書検索のスコア（§5.4） |
 | `user_frequency` | float | 0.25 | M54 |
 | `recency_score` | float | 0.41 | M54 |
 | `typo_confidence` | float | 0.82 | M55 |
-| `app_profile_score` | float | 0.08 | M48（未完了時は 0.0 既定） |
-| `candidate_length` | int | 4 | length |
-| `segment_count` | int | 2 | M55 segments |
-| `is_named_entity` | bool | false | M53 category |
-| `is_user_dict` | bool | false | M9 |
-| `is_neologism` | bool | false | M53 category |
+| `app_profile_score` | float | 0.0 | v1 は 0.0 固定 |
+| `candidate_length` | int | 4 | 表層の Unicode コードポイント数 |
+| `segment_count` | int | 2 | ラティスの文節数、それ以外は 1 |
+| `is_named_entity` | bool | false | 辞書カテゴリ bit 1、2、3、4、7 のいずれか |
+| `is_user_dict` | bool | false | 出所に `LayerId::User` を含む |
+| `is_neologism` | bool | false | 辞書カテゴリ bit 9 |
 | `is_typo_corrected` | bool | true | M55 |
 
 合計入力次元: 128 × 3（embeddings）+ scalar 8（zenzai / dictionary /
@@ -109,13 +106,8 @@ v1（§5.2 Option C 採用）は 3 種類の embedding（合計 384 次元）を
 shape とする（`[batch, 12]`）。FeatureExtractor は ONNX メタ情報
 `model_version` で v1 / v2 を切り替える（§5.2 と整合）。
 
-**M48（AppProfile）が未完了の環境への fallback**: M56 の hard prerequisite
-は M52 + M53 + M54 + M55 の 4 つで、M48 は含まれない（roadmap M56 §前提と
-整合）。M48 未完了 / 未配置の環境では、FeatureExtractor が
-`app_profile_score` を **0.0（neutral）** で埋める。これにより v1 ONNX の
-入力 shape `[batch, 12]` は M48 の完了状況によらず常に確定する。M48 が
-後から有効化されても feature の物理位置・dtype は変えず、値の供給元のみ
-切り替わる。
+v1 の `app_profile_score` は **0.0** に固定する。M48 のタグ加点は
+`ApplyRerankerOrRaw` の後に行われるため、特徴抽出の時点では供給されない。
 
 ### 4.1 Embedding 供給元（決定）
 
@@ -191,11 +183,11 @@ shape とする（`[batch, 12]`）。FeatureExtractor は ONNX メタ情報
 - 入力: §4 から **128 次元 embedding 3 つを除いた** 12 次元
   （scalar 8 + flag 4 = 12）。Option C を採用するため §4 の 396 次元
   契約とは別の v1 専用 input shape を持つ
-- ONNX 入力名: `features_v1`（shape `[batch, 12]`）。`features_v2`
+- ONNX 入力名: `features_v1`（fp32、shape `[batch, 12]`）。`features_v2`
   （shape `[batch, 396]`、embedding 込み）は v2 以降で導入
 - 隠れ層: 2 層、各 64 ユニット、GELU
-- 出力: 1 unit（rerank_score）
-- パラメータ数: 約 6 KB（量子化なし）
+- ONNX 出力名: `rerank_score`（fp32、shape `[batch, 1]`）
+- パラメータ数: 5,057（バイアス込み）。fp32 で約 20 KB
 
 runtime FeatureExtractor は v1 / v2 で別ビルダーを持ち、ONNX のメタ情報
 `model_version`（`v1` / `v2`）から入力形を切り替える。両者を同時に
@@ -221,6 +213,7 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
   gain / split ベースの feature importance を算出し、低寄与特徴の除外候補・
   正規化方針の根拠とする。importance は M52 ベンチ成果物として残す
   （roadmap M56 の v0 / v1 比較レポートに含める）。
+  v0 はオフライン評価で使用し、Host の推論は v1 を使う。
 - **v1（MLP）の重みは学習で決定する**: 隠れ 2 層 × 64 unit の重みは学習データ
   （§6）から学習し、手動調整しない。特徴の寄与は学習後の ablation（特徴を
   1 つ落として再評価）で確認し、roadmap M56 の比較レポートに記す。
@@ -228,13 +221,19 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
   `dictionary_score` / `user_frequency` / `recency_score` / `typo_confidence` /
   `app_profile_score`）は学習データ統計から推定した per-feature 標準化
   （z-score または min-max）を ONNX グラフ内に持たせ、runtime では生値を入力する。
+  学習データで標準偏差が 0 の特徴には平均 0、スケール 1 を使い、入力値をそのまま通す。
   正規化統計はモデルと一緒に versioning する。flag / int 特徴
   （`candidate_length` / `segment_count` / 4 つの bool）は正規化せず素の値
   （bool は 0 / 1）を入力する。
-- **欠損特徴の既定値を固定する**: M48 未完了時の `app_profile_score`=0.0（§4）、
-  タグ未整備時の `is_named_entity` / `is_neologism`=false、M55 非適用時の
-  `typo_confidence`=0.0 / `is_typo_corrected`=false を既定とし、欠損が score を
-  不当に押し上げない安全側に倒す。
+- **生スコアの尺度**: `zenzai_score` は生成時の総 logprob を対象トークン数で
+  割った値。`dictionary_score` は `DictionaryCandidates` が受け取る
+  `DictionaryEntry::score` の値。どちらも Host で標準化や再スケールは行わない。
+  `user_frequency` と `recency_score` は Host が供給する `UserSignals` の値を使う。
+- **欠損特徴の既定値**: Zenzai の平均 logprob が無い場合や有限でない場合は
+  `zenzai_score` を −10.0 とする。
+  `dictionary_score`、`user_frequency`、`recency_score`、`typo_confidence` は
+  欠損時に 0.0。文節数と flag の既定値はそれぞれ 1 と false。
+  `app_profile_score` は §4 のとおり 0.0 に固定する。
 - **score 統合の重み（§9）は別レイヤ**: §9 の `final_score` 係数は reranker
   内部重みとは別に、LightGBM / logistic regression で学習する。M56 reranker は
   `tiny_score` を出力するのみで、`final_score` 係数の校正は M52 ベンチの責務。
@@ -512,14 +511,16 @@ final_score =
 
 ## 11. テスト
 
-- unit: 特徴量抽出（NaN / 欠損値）
+- unit: §4 の特徴名と並び、共有 golden JSON の 12 要素、重複候補の生信号の保持、
+  NaN / Inf と欠損値の扱い
 - unit: 既定 OFF（`tinyNeuralEnabled=false`）で ONNX セッションを生成せず、候補列・
   `final_score` が Track A 導入前と等価（§8）
 - unit: ONNX load 失敗時の fallback
 - unit: timeout 時の fallback
 - unit: 連続失敗で circuit breaker が開き、再ロードで閉じる（§7.2）
 - integration: M52 ベンチで top1 +3% / p95 latency +10ms 以内
-- integration: M55 typo 候補に対する正しい boost / penalty
+- unit: M55 から値が渡らない場合は `typo_confidence`=0.0、
+  `is_typo_corrected`=false
 - snapshot: ONNX schema 固定（input / output 名）
 
 ## 12. M56 受け入れ条件

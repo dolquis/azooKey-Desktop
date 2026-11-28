@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -2354,11 +2356,40 @@ TEST(InferenceEngineTest, ZenzaiConvertRejectsPrivateUseGenerationsDirectly) {
   for (const auto& candidate : candidates) {
     surfaces.push_back(candidate.surface);
     EXPECT_EQ(candidate.source, azookey::core::CandidateSource::Model);
+    ASSERT_TRUE(candidate.rerank_signals.zenzai_avg_logprob.has_value());
+    const bool partial = candidate.surface == "複数";
+    EXPECT_DOUBLE_EQ(*candidate.rerank_signals.zenzai_avg_logprob, partial ? -0.25 : -1.0 / 3.0);
+    EXPECT_EQ(candidate.rerank_signals.candidate_length, partial ? 2U : 3U);
+    EXPECT_FALSE(candidate.rerank_signals.dictionary_score.has_value());
   }
   std::sort(surfaces.begin(), surfaces.end());
   EXPECT_EQ(surfaces, (std::vector<std::string>{"複数", "複数形"}));
 
   std::remove(model_path.c_str());
+}
+
+TEST(InferenceEngineTest, ZenzaiConvertLeavesTheFeatureMissingForNonFiniteLogprobs) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const std::string model_path = TempPath("azookey_nonfinite_logprob_convert.gguf");
+  WriteMinimalGguf(model_path);
+  azookey::host::ZenzaiRuntimeOptions runtime_options;
+  runtime_options.mock_candidates_for_tests = true;
+  auto loaded = azookey::host::LoadZenzaiGgufModel(model_path, runtime_options);
+  std::remove(model_path.c_str());
+  ASSERT_TRUE(loaded.ok);
+  azookey::host::ZenzaiModelConverter converter(std::move(loaded), nullptr);
+
+  const auto candidates = converter.Convert("ひゆうげん", {});
+  ASSERT_EQ(candidates.size(), 2U);
+  for (const auto& candidate : candidates) {
+    SCOPED_TRACE(candidate.surface);
+    EXPECT_EQ(candidate.source, azookey::core::CandidateSource::Model);
+    EXPECT_FALSE(candidate.rerank_signals.zenzai_avg_logprob.has_value());
+  }
 }
 
 TEST(InferenceEngineTest, ZenzaiGenerationWithControlMarkersNeverReachesCandidates) {
@@ -2675,6 +2706,83 @@ TEST(InferenceEngineTest, BenchInstructionProfileReachesConversionAndNllContexts
   (void)engine.QueryCandidates("にほん", "", kNowBase);
   EXPECT_TRUE(all_equal(converted, profile));
   EXPECT_TRUE(all_equal(scored, profile));
+}
+
+TEST(InferenceEngineTest, TinyRerankerObserverSeesMergedFeaturesWithoutChangingRanking) {
+  using azookey::core::Candidate;
+  using azookey::core::CandidateSource;
+  for (const std::string_view path : {"normal", "live", "mixed"}) {
+    SCOPED_TRACE(path);
+    const bool live = path == "live";
+    const bool mixed = path == "mixed";
+    const std::string reading = mixed ? "PCをみる" : "にほん";
+    Candidate model_word{"日本", reading, 0.875, CandidateSource::Model, "model"};
+    model_word.rerank_signals.zenzai_avg_logprob = -1.25;
+    Candidate dictionary_word{"変換候補", reading, 0.25, CandidateSource::SystemDictionary, "dict"};
+    dictionary_word.rerank_signals.dictionary_score = dictionary_word.score;
+    Candidate model_duplicate{"変換候補", reading, 0.75, CandidateSource::Model, "model"};
+    model_duplicate.rerank_signals.zenzai_avg_logprob = -2.0;
+    Candidate heuristic{"補助", reading, 0.5, CandidateSource::Heuristic, "heuristic"};
+
+    ScopedTempDirectory temp;
+    azookey::learning::UserDictionary dictionary(temp.File("user.json"),
+                                                 &azookey::learning::test::Crypto());
+    ASSERT_TRUE(dictionary.Load());
+    azookey::host::EngineConfig config;
+    config.nll.enabled = true;
+    config.lattice.enabled = false;
+    azookey::host::InferenceEngine engine(
+        std::make_unique<ScriptedConverter>(
+            std::vector<Candidate>{model_word, dictionary_word, model_duplicate, heuristic}),
+        nullptr, config);
+    engine.SetUserDictionary(&dictionary);
+    azookey::learning::UserWord word{"日本", reading};
+    word.value = 0.625;
+    ASSERT_TRUE(engine.AddUserWord(word));
+
+    bool saw_nll_context = false;
+    engine.SetNllContextObserverForTests(
+        [&](const azookey::core::ConversionContext&) { saw_nll_context = true; });
+    azookey::host::MixedConversionOptions mixed_options;
+    mixed_options.english_ranges = {{0, 2}};
+    const auto query = [&]() -> std::vector<Candidate> {
+      if (live) {
+        const auto candidate = engine.QueryLiveConversion(reading, "", kNowBase, nullptr);
+        if (candidate) return {*candidate};
+        return {};
+      }
+      return engine
+          .QueryCandidatesEx(reading, "", kNowBase, nullptr, 0, false, nullptr, nullptr,
+                             mixed ? &mixed_options : nullptr)
+          .candidates;
+    };
+    const auto baseline = query();
+    ASSERT_EQ(baseline.size(), live ? 1U : 3U);
+    saw_nll_context = false;
+
+    size_t observations = 0;
+    engine.SetTinyRerankerFeatureObserverForTests([&](auto candidates, auto features) {
+      ++observations;
+      EXPECT_EQ(saw_nll_context, !live);
+      ASSERT_EQ(candidates.size(), 3U);
+      ASSERT_EQ(features.size(), candidates.size());
+      EXPECT_EQ(candidates[0].surface, "日本");
+      EXPECT_EQ(candidates[0].source, CandidateSource::UserDictionary);
+      EXPECT_EQ(features[0], (std::array<float, 12>{-1.25f, 0.625f, 0, 0, 0, 0, 2, 1, 0, 1, 0, 0}));
+      EXPECT_EQ(candidates[1].surface, "変換候補");
+      EXPECT_EQ(candidates[1].source, CandidateSource::Model);
+      EXPECT_EQ(features[1], (std::array<float, 12>{-2.0f, 0.25f, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0}));
+      EXPECT_EQ(candidates[2].surface, "補助");
+      EXPECT_EQ(features[2], (std::array<float, 12>{-10.0f, 0, 0, 0, 0, 0, 2, 1, 0, 0, 0, 0}));
+    });
+    const auto observed = query();
+    EXPECT_EQ(observations, 1U);
+    ASSERT_EQ(observed.size(), baseline.size());
+    for (size_t i = 0; i < observed.size(); ++i) {
+      EXPECT_EQ(observed[i].surface, baseline[i].surface);
+      EXPECT_EQ(observed[i].score, baseline[i].score);
+    }
+  }
 }
 
 // DEV-1648: live conversion takes the candidate window's final filters, and a
@@ -4811,17 +4919,22 @@ TEST(EngineTypoCorrectionTest, TheFramesFirstReadingIsConvertedAgain) {
   for (const uint32_t max_words : {3u, 2u}) {
     SCOPED_TRACE(max_words);
     cfg.typo_max_reading_hypotheses = max_words;
-    TypoHypothesisEngine f(cfg, {{"てんき", "天気"}, {"でんき", "電機"}, {"てんぎ", "天儀"}});
+    TypoHypothesisEngine f(cfg, {{"てんき", "天気"}, {"でんき", "電機製品"}, {"てんぎ", "天儀式"}});
     const auto result = f.engine->QueryCandidatesEx("てんき", "", kNowBase, nullptr);
     ASSERT_GE(result.candidates.size(), 3u);
     EXPECT_EQ(result.candidates[0].surface, "天気");
     const auto& added = result.candidates[1];
     const auto& head = result.candidates[2];
-    EXPECT_EQ(added.surface, head.reading == "でんき" ? "電機" : "天儀");
+    EXPECT_EQ(added.surface, head.reading == "でんき" ? "電機製品" : "天儀式");
     EXPECT_EQ(added.reading, head.reading);
     EXPECT_EQ(added.debug_info, "typo-correction");
     EXPECT_EQ(added.description, "もしかして: " + head.reading);
     EXPECT_EQ(head.surface, head.reading == "でんき" ? "電気" : "転義");
+    EXPECT_TRUE(head.rerank_signals.is_typo_corrected);
+    ASSERT_TRUE(head.rerank_signals.typo_confidence.has_value());
+    EXPECT_TRUE(added.rerank_signals.is_typo_corrected);
+    EXPECT_EQ(added.rerank_signals.typo_confidence, head.rerank_signals.typo_confidence);
+    EXPECT_EQ(added.rerank_signals.candidate_length, head.reading == "でんき" ? 4U : 3U);
     EXPECT_EQ(f.Suggested("てんき").size(), size_t{max_words});
   }
 }

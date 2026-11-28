@@ -384,7 +384,10 @@ void DedupBySurface(std::vector<core::Candidate>& candidates) {
     if (existing == deduped.end()) {
       deduped.push_back(std::move(candidate));
     } else if (candidate.score > existing->score) {
+      core::PreserveRerankSignals(candidate, *existing);
       *existing = std::move(candidate);
+    } else {
+      core::PreserveRerankSignals(*existing, candidate);
     }
   }
   candidates = std::move(deduped);
@@ -1243,6 +1246,10 @@ struct ZenzaiModelRuntime {
     if (ToKatakana(kana) == "ムコウ") {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};
     }
+    if (ToKatakana(kana) == "ヒユウゲン") {
+      return {GeneratedCandidate{"非数", std::numeric_limits<double>::quiet_NaN(), 2},
+              GeneratedCandidate{"負の無限大", -std::numeric_limits<double>::infinity(), 5}};
+    }
     if (ToKatakana(kana) == "チュウダン") {
       ZenzaiDecodeStats decode_stats;
       decode_stats.deadline_exceeded = true;
@@ -1839,6 +1846,10 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
       candidate.reading = kana;
       candidate.score = NormalizeLogprob(item.total_logprob, item.token_count);
       candidate.source = core::CandidateSource::Model;
+      if (item.token_count > 0 && std::isfinite(avg)) {
+        candidate.rerank_signals.zenzai_avg_logprob = avg;
+      }
+      candidate.rerank_signals.candidate_length = core::ComputeCandidateLength(candidate.surface);
       candidate.debug_info =
           "zenzai;lp=" + FormatDouble(item.total_logprob) + ";avg=" + FormatDouble(avg);
       if (trimmed_incomplete_utf8_suffix) {

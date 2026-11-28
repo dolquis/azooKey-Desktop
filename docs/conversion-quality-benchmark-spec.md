@@ -29,7 +29,7 @@ canonical_for: ["評価ベンチ"]
 | §10 | M52 |
 | §11〜§12 | M52 |
 | §13〜§14 | M52 |
-| §7 の `--dict-dir`・`--lattice`、§10 のモデル無効構成、§14.1 の `dictionary_bundle_sha256`・`lattice` | M65（`docs/lattice-conversion-spec.md` §10） |
+| §7 の `--dict-dir`・`--lattice`・`--lattice-with-model`・`--lattice-band`・`--nll-breaker`・`--first-clause-probe`、§10 のモデル無効構成、§14.1 の `dictionary_bundle_sha256`・`lattice`・`lattice_with_model`・`nll_breaker`・`first_clause_probe` | M65（`docs/lattice-conversion-spec.md` §10） |
 | §7 の `--personal-eval`・`--profile`・`--profile-file`、§8 と §14.1 の `eval_source`・`profile_sha256`、§15 | M74 |
 
 ## 1. 目的
@@ -415,7 +415,11 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--dict-dir <dir>` | 同梱辞書（`dictbuild/build_bundled.py` が出力する `dict` ディレクトリ）を静的層として読む。同じディレクトリの `lattice_core.azdic` は層に登録せず、ラティス変換だけが読む（`docs/lattice-conversion-spec.md` §8.2）。省略時は静的層を読まない。`config.dictionary_bundle_sha256` に記録（§14.1 互換キー） |
 | `--lattice on\|off` | ラティス変換の段階 1（`docs/lattice-conversion-spec.md` §3.2 の内部設定）を設定する。`--dict-dir` があるときの既定は製品と同じ `on`、無いときは `off`。`--dict-dir` 無しの `on` と、`on` で lattice_core を読めないときはエラーで止める。`config.lattice` に記録（§14.1 互換キー） |
 | `--nll on\|off` | NLL rerank を設定する（既定は製品と同じ off）。`--model` が要る。`config.nll` に記録（§14.1 互換キー） |
-| `--decode-stats <jsonl>` | 1 回の変換ごとに、所要時間、`docs/zenzai-inference-spec.md` §8.2 の deadline による打ち切りの有無、候補の source と未完了の印を 1 行ずつ出す（同 §2.4.3 の評価に使う） |
+| `--lattice-with-model <K>` | 計測用に、ラティス変換の段階 2（`docs/lattice-conversion-spec.md` §3.3）を有効にする。ラティスの上位 K 経路（1〜8）を NLL rerank の候補に加える。`--eval`、`--model`、`--nll on`、`--lattice on` が要る。`config.lattice_with_model` に記録（§14.1 互換キー） |
+| `--lattice-band best\|lowest` | 段階 2 の経路を置く score 帯。`best`（既定）はモデルの最上位の候補の直下、`lowest` はモデルの最下位の候補の直下に置く。`--lattice-with-model` が要る |
+| `--nll-breaker product\|per-request` | NLL の breaker（`docs/neural-reranker-nll-spec.md` §B8）の扱い。`product`（既定）は製品と同じ。`per-request` は、設定の変更と同じく変換ごとに breaker を閉じ、予算を超えた変換が後の変換の NLL を止めないようにする。`--eval` と `--nll on` が要る。`config.nll_breaker` に記録（§14.1 互換キー） |
+| `--first-clause-probe` | 各ケースの変換の後に、ラティスの 1 位経路が 2 文節以上なら、その先頭文節を、先頭文節の要求（`docs/segment-editing-spec.md` §5）として続けて照会する。終了時に、読み全体・先頭文節・両者の和の所要時間と、先頭文節の要求の deadline 打ち切りの件数を標準出力に出す。ケースの所要時間は両方の要求を含み、先頭文節の要求の NLL rerank も breaker に数える。`--eval`、`--model`、`--dict-dir` が要る。`config.first_clause_probe` に記録（§14.1 互換キー） |
+| `--decode-stats <jsonl>` | 1 回の変換ごとに、所要時間、`docs/zenzai-inference-spec.md` §8.2 の deadline による打ち切りの有無、候補の source と未完了の印を 1 行ずつ出す（同 §2.4.3 の評価に使う）。候補ごとに、段階 2 が足した経路か（`lattice_model`）と NLL rerank が採点したか（`nll_scored`）も出す。`--first-clause-probe` があれば、先頭文節の要求の境目・所要時間・deadline 打ち切り・1 位を `first_clause` に出す |
 | `--trace` | M51 trace ログを出す |
 | `--trace-output <jsonl>` | `--trace` の出力先（既定 `trace.jsonl`、`docs/observability-spec.md` §7.7.4） |
 | `--category <name>` | カテゴリ絞込 |
@@ -473,6 +477,9 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "dictionary_bundle_sha256": "none",
     "lattice": "off",
     "nll": "off",
+    "lattice_with_model": "off",
+    "nll_breaker": "product",
+    "first_clause_probe": "off",
     "eval_source": "bundled",
     "profile_sha256": "none",
     "category_filter": "all",
@@ -857,6 +864,12 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - `nll`（`on` / `off`。採取で NLL 再ランク（§7 の `--nll`）が有効だったか。NLL は候補の並びを変えるので互換キーに入れる。
   値は engine の設定値で、各変換で実際に再ランクが走ったか（モデル未ロードや deadline で飛ばした変換を含む）ではない。
   このキーを持たない結果は、製品の既定と同じ `off` として扱う）
+- `lattice_with_model`（`off`、または `k=<K>;band=<best|lowest>`。§7 の `--lattice-with-model` と `--lattice-band` の値。
+  段階 2 は候補集合を変えるので互換キーに入れる。このキーを持たない結果は `off` として扱う）
+- `nll_breaker`（`product` / `per_request`。§7 の `--nll-breaker` の値。breaker の扱いは NLL が走る変換を変えるので
+  互換キーに入れる。このキーを持たない結果は `product` として扱う）
+- `first_clause_probe`（`on` / `off`。§7 の `--first-clause-probe` の有無。ケースの所要時間と breaker の状態を変えるので
+  互換キーに入れる。このキーを持たない結果は `off` として扱う）
 - `eval_source`（`bundled` / `personal`。§4 の同梱データを評価した結果は `bundled`、§15 の個人回帰ベンチの
   結果は `personal`。このキーを持たない結果は `bundled` として扱う。同梱データと利用者の確定履歴の結果を
   比べない）
@@ -898,7 +911,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
   `thread_count` / `batch_size` / `typo_correction_mode` / `learning_state` /
-  `dictionary_bundle_sha256` / `lattice` / `nll` / `eval_source` / `profile_sha256` /
+  `dictionary_bundle_sha256` / `lattice` / `lattice_with_model` / `nll` / `nll_breaker` / `first_clause_probe` / `eval_source` / `profile_sha256` /
   `category_filter` / `eval_dataset_sha256` / `version`）の組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
   （=通常の commit 差）では無効化しない。よって `main` の直前の成功 run の結果（§10）に

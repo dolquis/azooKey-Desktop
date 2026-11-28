@@ -20,6 +20,9 @@
 #include "IpcBenchmark.h"
 #include "PersonalEval.h"
 #include "TemporaryLearningFile.h"
+#include "azookey/core/DoubleArrayTrie.h"
+#include "azookey/core/LatticeDictionary.h"
+#include "azookey/core/LatticeSearch.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/UserDataPaths.h"
@@ -57,6 +60,8 @@ void PrintUsage(const char* exe) {
          " [--iterations N] [--typo-mode off|suggest|rank|aggressive]"
          " [--trace [--trace-output PATH]]"
          " [--nll on|off] [--decode-stats JSONL] [--dict-dir DIR [--lattice on|off]]"
+         " [--lattice-with-model K [--lattice-band best|lowest]] [--first-clause-probe]"
+         " [--nll-breaker product|per-request]"
          " [--profile TEXT | --profile-file PATH]\n"
       << "       " << exe
       << " --personal-eval --output JSON [--learning PATH] [--settings PATH] [--max-cases N]"
@@ -71,7 +76,16 @@ void PrintUsage(const char* exe) {
          "setting). --decode-stats writes one line per query with its latency, deadline "
          "cut-off and candidate sources. --dict-dir loads the bundled static layers of DIR "
          "(the dict directory of dictbuild/build_bundled.py); --lattice defaults to on with it "
-         "and then needs DIR/lattice_core.azdic. --personal-eval "
+         "and then needs DIR/lattice_core.azdic. --lattice-with-model K (1 to 8) turns on "
+         "lattice stage 2 for measurement: the lattice's first K paths join NLL rerank below "
+         "the model's best candidate (--lattice-band best, the default) or its lowest; it needs "
+         "--model, --nll on and --lattice on. --first-clause-probe also asks each reading's "
+         "first segment (the lattice's best path) after the reading, as a first segment's "
+         "request, and prints the latency of the two; it needs --model and --dict-dir. "
+         "--nll-breaker per-request closes the NLL breaker before every request, so a request "
+         "over the budget does not switch NLL off for the next ones (the default, product, keeps "
+         "the shipped breaker); it needs --nll on. "
+         "--personal-eval "
          "evaluates your own learning store, read without changing it, and writes aggregates "
          "only; --profile places a bench-only Zenzai profile in the prompt and needs --model.\n";
 }
@@ -131,11 +145,73 @@ bool HasDebugTag(const std::string& debug_info, std::string_view tag) {
   return false;
 }
 
+// DEV-2110 (segment-editing-spec section 9): the legacy Space candidates put the first segment's
+// candidates first, which asks Zenzai twice, for the reading and then for its first segment. The
+// probe takes the first segment from the lattice's best path of the whole reading
+// (lattice-conversion-spec section 7.1) and times the first segment's request after the reading's.
+class FirstClauseProbe {
+ public:
+  explicit FirstClauseProbe(const std::filesystem::path& dict_dir) {
+    const auto core_path = dict_dir / "lattice_core.azdic";
+    if (!dictionary_.Load(core_path))
+      throw std::runtime_error("--first-clause-probe could not load lattice_core.azdic: " +
+                               std::string(dictionary_.Error()));
+    for (const char* name : {"base_lexicon", "sudachi_lexicon", "neologd_lexicon",
+                             "named_entity_lexicon", "technical_terms_lexicon"}) {
+      const auto path = dict_dir / (std::string(name) + ".azdic");
+      if (!std::filesystem::exists(path)) continue;
+      auto trie = std::make_unique<azookey::core::DoubleArrayTrie>();
+      if (!trie->Load(path))
+        throw std::runtime_error("--first-clause-probe could not load " + std::string(name));
+      layers_.push_back(
+          std::make_unique<azookey::core::StaticLatticeVocabulary>(dictionary_, *trie));
+      vocabularies_.push_back(layers_.back().get());
+      tries_.push_back(std::move(trie));
+    }
+  }
+
+  // The first segment's end in code points, or nullopt when the best path is one segment.
+  std::optional<uint32_t> FirstSegmentEnd(const std::string& kana) const {
+    azookey::core::LatticeQuery query;
+    query.max_paths = 1;
+    const auto result = azookey::core::ConvertLattice(azookey::core::NormalizeReading(kana),
+                                                      dictionary_, vocabularies_, query);
+    if (result.paths.empty() || result.paths.front().segments.size() < 2) return std::nullopt;
+    return result.paths.front().segments.front().end;
+  }
+
+ private:
+  azookey::core::LatticeDictionary dictionary_;
+  std::vector<std::unique_ptr<azookey::core::DoubleArrayTrie>> tries_;
+  std::vector<std::unique_ptr<azookey::core::StaticLatticeVocabulary>> layers_;
+  std::vector<const azookey::core::ILatticeVocabulary*> vocabularies_;
+};
+
+// The byte offset of code point `count` of UTF-8 `text`.
+size_t CodepointOffset(const std::string& text, uint32_t count) {
+  size_t offset = 0;
+  for (uint32_t seen = 0; offset < text.size(); ++offset) {
+    if ((static_cast<unsigned char>(text[offset]) & 0xC0) == 0x80) continue;
+    if (seen++ == count) break;
+  }
+  return offset;
+}
+
+// The first segment's request of one query (DEV-2110).
+struct FirstClauseSample {
+  uint32_t end{};
+  double latency_ms{};
+  bool deadline_exceeded{};
+  std::string top1;
+};
+
 // One line per query, so latency quantiles can exclude deadline cut-offs
-// (docs/zenzai-inference-spec.md section 8.1) and unfinished generations can be counted.
-std::string DecodeStatsLine(uint64_t call, const std::string& input, const std::string& context,
-                            double latency_ms, azookey::host::InferenceEngine& engine,
-                            const std::vector<azookey::core::Candidate>& candidates) {
+// (docs/zenzai-inference-spec.md section 8.1) and unfinished generations can be counted. Taken
+// right after the query, before another request replaces the engine's last decode stats.
+azookey::ipc::json::Object DecodeStatsLine(
+    uint64_t call, const std::string& input, const std::string& context, double latency_ms,
+    azookey::host::InferenceEngine& engine,
+    const std::vector<azookey::core::Candidate>& candidates) {
   namespace j = azookey::ipc::json;
   j::Object line;
   line.emplace("call", j::Value(call));
@@ -154,10 +230,24 @@ std::string DecodeStatsLine(uint64_t call, const std::string& input, const std::
     value.emplace("surface", j::Value(candidate.surface));
     value.emplace("source", j::Value(CandidateSourceName(candidate.source)));
     value.emplace("unfinished", j::Value(HasDebugTag(candidate.debug_info, "unfinished")));
+    // Lattice stage 2 (DEV-2102): a path it added, and whether NLL rerank scored the candidate.
+    value.emplace("lattice_model", j::Value(candidate.debug_info.starts_with("lattice-model;")));
+    value.emplace("nll_scored", j::Value(candidate.debug_info.starts_with("nll=") ||
+                                         candidate.debug_info.find(";nll=") != std::string::npos));
     values.emplace_back(std::move(value));
   }
   line.emplace("candidates", j::Value(std::move(values)));
-  return j::Stringify(j::Value(std::move(line)));
+  return line;
+}
+
+azookey::ipc::json::Value FirstClauseValue(const FirstClauseSample& sample) {
+  namespace j = azookey::ipc::json;
+  j::Object probe;
+  probe.emplace("end", j::Value(static_cast<uint64_t>(sample.end)));
+  probe.emplace("latency_ms", j::Value(sample.latency_ms));
+  probe.emplace("deadline_exceeded", j::Value(sample.deadline_exceeded));
+  probe.emplace("top1", j::Value(sample.top1));
+  return j::Value(std::move(probe));
 }
 
 double ParseDouble(const std::string& value, const char* name) {
@@ -268,6 +358,13 @@ int main(int argc, char** argv) {
   std::filesystem::path dict_dir;
   std::optional<bool> nll_enabled;
   std::optional<bool> lattice_enabled;
+  // Lattice stage 2 (lattice-conversion-spec section 3.3, DEV-2102): K paths, and the band.
+  std::optional<size_t> lattice_with_model;
+  std::optional<std::string> lattice_band;
+  // DEV-2110: the two Zenzai requests of Space with the first segment's candidates first.
+  bool first_clause_probe = false;
+  // DEV-2102: whether each request's NLL runs apart from the breaker the earlier ones opened.
+  bool nll_breaker_per_request = false;
   azookey::bench::ConversionQualityOptions quality_options;
   bool personal_eval = false;
   std::filesystem::path learning_path;
@@ -366,6 +463,23 @@ int main(int argc, char** argv) {
           throw std::invalid_argument("--lattice must be on or off");
         }
         lattice_enabled = value == "on";
+      } else if (arg == "--lattice-with-model") {
+        const auto paths =
+            ParseSize(RequireValue(argc, argv, i, "--lattice-with-model"), "--lattice-with-model");
+        if (paths > 8) throw std::invalid_argument("--lattice-with-model must be 1 to 8");
+        lattice_with_model = paths;
+      } else if (arg == "--lattice-band") {
+        const auto value = RequireValue(argc, argv, i, "--lattice-band");
+        if (value != "best" && value != "lowest")
+          throw std::invalid_argument("--lattice-band must be best or lowest");
+        lattice_band = value;
+      } else if (arg == "--first-clause-probe") {
+        first_clause_probe = true;
+      } else if (arg == "--nll-breaker") {
+        const auto value = RequireValue(argc, argv, i, "--nll-breaker");
+        if (value != "product" && value != "per-request")
+          throw std::invalid_argument("--nll-breaker must be product or per-request");
+        nll_breaker_per_request = value == "per-request";
       } else if (hide_arguments) {
         throw std::invalid_argument("unknown option at argument " + std::to_string(i));
       } else {
@@ -437,6 +551,22 @@ int main(int argc, char** argv) {
     }
     if (nll_enabled && quality_options.model.empty()) {
       throw std::invalid_argument("--nll requires --model");
+    }
+    // Stage 2 adds only the paths NLL scored, on requests the model answered.
+    if (lattice_band && !lattice_with_model) {
+      throw std::invalid_argument("--lattice-band requires --lattice-with-model");
+    }
+    if (lattice_with_model && (personal_eval || quality_options.eval_path.empty() ||
+                               !nll_enabled.value_or(false) || !*lattice_enabled)) {
+      throw std::invalid_argument(
+          "--lattice-with-model requires --eval, --model, --nll on and --lattice on");
+    }
+    if (first_clause_probe && (personal_eval || quality_options.eval_path.empty() ||
+                               quality_options.model.empty() || dict_dir.empty())) {
+      throw std::invalid_argument("--first-clause-probe requires --eval, --model and --dict-dir");
+    }
+    if (nll_breaker_per_request && (personal_eval || !nll_enabled.value_or(false))) {
+      throw std::invalid_argument("--nll-breaker per-request requires --eval and --nll on");
     }
     if (!decode_stats_path.empty() &&
         (SamePath(decode_stats_path, output_path) ||
@@ -581,6 +711,15 @@ int main(int argc, char** argv) {
   if (nll_enabled) engine_config.nll.enabled = *nll_enabled;
   // lattice-conversion-spec section 10.1: A and B differ only in the lattice's internal switch.
   engine_config.lattice.enabled = *lattice_enabled;
+  if (lattice_with_model) {
+    engine_config.lattice.with_model = true;
+    engine_config.lattice.with_model_paths = *lattice_with_model;
+    engine_config.lattice.with_model_band = lattice_band.value_or("best") == "lowest"
+                                                ? azookey::host::LatticeModelBand::BelowModelLowest
+                                                : azookey::host::LatticeModelBand::BelowModelBest;
+    quality_options.lattice_with_model =
+        "k=" + std::to_string(*lattice_with_model) + ";band=" + lattice_band.value_or("best");
+  }
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
                                         engine_config, trace_logger ? &*trace_logger : nullptr);
   if (typo_store) engine.SetTypoStore(&*typo_store);
@@ -622,6 +761,8 @@ int main(int argc, char** argv) {
   quality_options.lattice = *lattice_enabled ? "on" : "off";
   // Recorded from the engine, so the compatibility key reflects the setting it ran with.
   quality_options.nll = engine.config().nll.enabled ? "on" : "off";
+  if (nll_breaker_per_request) quality_options.nll_breaker = "per_request";
+  if (first_clause_probe) quality_options.first_clause_probe = "on";
   if (profile) {
     // Spec section 15.5: only a format with [PROF] can carry the profile.
     const auto format = engine.health_snapshot().prompt_format;
@@ -662,9 +803,28 @@ int main(int argc, char** argv) {
     std::string error;
     uint64_t request_id = 0;
     uint64_t decode_stats_call = 0;
+    std::optional<FirstClauseProbe> probe;
+    if (first_clause_probe) {
+      try {
+        probe.emplace(dict_dir);
+      } catch (const std::exception& ex) {
+        std::cerr << ex.what() << std::endl;
+        return 2;
+      }
+    }
+    // DEV-2110: per query of a reading the probe splits, the reading's latency, the first
+    // segment's, and whether the first segment's request hit the Zenzai deadline.
+    size_t probe_queries = 0;
+    std::vector<double> probe_whole_ms;
+    std::vector<double> probe_first_ms;
+    std::vector<double> probe_sum_ms;
+    size_t probe_first_deadline = 0;
     const azookey::bench::CandidateQuery query =
-        [&engine, &request_id, &trace_logger, &quality_options, &decode_stats, &decode_stats_call](
+        [&engine, &request_id, &trace_logger, &quality_options, &decode_stats, &decode_stats_call,
+         &probe, &probe_queries, &probe_whole_ms, &probe_first_ms, &probe_sum_ms,
+         &probe_first_deadline, nll_breaker_per_request](
             const std::string& input, const std::string& context, const std::string& raw_keys) {
+          if (nll_breaker_per_request) engine.ResetNllBreakerForBench();
           const auto now = static_cast<uint64_t>(
               std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
           const auto start = std::chrono::steady_clock::now();
@@ -673,12 +833,44 @@ int main(int argc, char** argv) {
               static_cast<uint32_t>(azookey::bench::kConversionQualityCandidateLimit),
               trace_logger ? &*trace_logger : nullptr, request_id, quality_options.backend,
               raw_keys);
-          if (decode_stats.is_open()) {
-            const auto latency_ms =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
-                    .count();
-            decode_stats << DecodeStatsLine(++decode_stats_call, input, context, latency_ms, engine,
-                                            result.candidates)
+          const auto latency_ms =
+              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                  .count();
+          std::optional<azookey::ipc::json::Object> stats_line;
+          if (decode_stats.is_open())
+            stats_line = DecodeStatsLine(++decode_stats_call, input, context, latency_ms, engine,
+                                         result.candidates);
+          if (probe) {
+            ++probe_queries;
+            if (const auto end = probe->FirstSegmentEnd(input)) {
+              const auto split = CodepointOffset(input, *end);
+              // segment-editing-spec section 5.1: the first segment's request, as the TIP sends it.
+              azookey::host::MixedConversionOptions options;
+              options.typo_correction = false;
+              options.remaining_reading = input.substr(split);
+              const auto first_start = std::chrono::steady_clock::now();
+              const auto first = engine.QueryCandidatesEx(
+                  input.substr(0, split), context, now, nullptr,
+                  static_cast<uint32_t>(azookey::bench::kConversionQualityCandidateLimit), false,
+                  nullptr, nullptr, &options);
+              FirstClauseSample sample;
+              sample.end = *end;
+              sample.latency_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - first_start)
+                                      .count();
+              const auto first_stats = engine.last_zenzai_decode_stats();
+              sample.deadline_exceeded = first_stats && first_stats->deadline_exceeded;
+              if (!first.candidates.empty()) sample.top1 = first.candidates.front().surface;
+              probe_whole_ms.push_back(latency_ms);
+              probe_first_ms.push_back(sample.latency_ms);
+              probe_sum_ms.push_back(latency_ms + sample.latency_ms);
+              probe_first_deadline += sample.deadline_exceeded;
+              if (stats_line) stats_line->emplace("first_clause", FirstClauseValue(sample));
+            }
+          }
+          if (stats_line) {
+            decode_stats << azookey::ipc::json::Stringify(
+                                azookey::ipc::json::Value(std::move(*stats_line)))
                          << '\n';
             if (!decode_stats) throw std::runtime_error("cannot write decode stats output");
           }
@@ -693,6 +885,24 @@ int main(int argc, char** argv) {
     if (!ok) {
       std::cerr << error << std::endl;
       return 2;
+    }
+    if (probe) {
+      // The 750 ms is the TIP's wait for the candidate window (host-availability-spec
+      // section 8.5.2).
+      const auto over = static_cast<size_t>(std::count_if(probe_sum_ms.begin(), probe_sum_ms.end(),
+                                                          [](double ms) { return ms > 750.0; }));
+      const auto quantile = [](const std::vector<double>& values, double fraction) {
+        return azookey::bench::LatencyPercentile(values, fraction);
+      };
+      std::cout << "first_clause_probe queries=" << probe_queries
+                << " split=" << probe_sum_ms.size()
+                << " whole_p50_ms=" << quantile(probe_whole_ms, 0.5)
+                << " whole_p95_ms=" << quantile(probe_whole_ms, 0.95)
+                << " first_p50_ms=" << quantile(probe_first_ms, 0.5)
+                << " first_p95_ms=" << quantile(probe_first_ms, 0.95)
+                << " sum_p50_ms=" << quantile(probe_sum_ms, 0.5)
+                << " sum_p95_ms=" << quantile(probe_sum_ms, 0.95) << " sum_over_750ms=" << over
+                << " first_deadline_exceeded=" << probe_first_deadline << std::endl;
     }
     if (decode_stats.is_open()) {
       decode_stats.flush();

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
@@ -486,6 +487,15 @@ TEST(EngineLattice, ARegisteredVerbConvertsConjugatedWithoutTheModel) {
 }
 
 #if !AZOOKEY_WITH_LLAMA_CPP
+constexpr std::string_view kLatticeModelPrefix = "lattice-model;rank=";
+
+std::vector<Candidate> LatticeModelCandidates(const std::vector<Candidate>& candidates) {
+  std::vector<Candidate> paths;
+  for (const auto& candidate : candidates)
+    if (candidate.debug_info.starts_with(kLatticeModelPrefix)) paths.push_back(candidate);
+  return paths;
+}
+
 // Section 3.2: a request the model converter fell back on gets the lattice; one it answered
 // does not. The minimal GGUF loads only with the mock runtime (no real llama.cpp).
 TEST(EngineLattice, ModelFallbacksGetTheLatticeAndAnsweredRequestsDoNot) {
@@ -717,6 +727,126 @@ TEST(EngineLattice, TheConjugatedUserWordPathStaysWithinTOfTheBestPath) {
   engine->SetUserDictionary(at.get());
   EXPECT_EQ(UserWordPaths(engine->QueryCandidates("にほんご", "", kNow)).size(), 1U);
   engine->SetUserDictionary(nullptr);
+  std::error_code ec;
+  std::filesystem::remove(model, ec);
+}
+
+// Stage 2 (lattice-conversion-spec section 3.3, DEV-2102) on the lattice_user fixture: a request
+// the model answered and NLL scores gets the lattice's paths below the model's best candidate, as
+// new surfaces, and keeps only the ones NLL scored. The stand-in for NLL scores the system
+// dictionary candidates whose surface `scored` accepts, or fails (budget_exceeded) without a tag.
+TEST(EngineLattice, StageTwoKeepsTheLatticePathsNllScoredBelowTheModel) {
+  const auto model = UniqueTempPath("azookey_engine_lattice_stage_two", ".gguf");
+  auto config = NoLimitConfig();
+  config.nll.enabled = true;
+  const auto engine = MakeModelEngine(config, model);
+  std::vector<Candidate> seen;
+  bool fail = false;
+  std::function<bool(const Candidate&)> scored = [](const Candidate&) { return true; };
+  engine->SetNllRerankForTests([&](std::vector<Candidate>& candidates) {
+    seen = candidates;
+    azookey::host::NllOutcome outcome;
+    if (fail) {
+      outcome.reason = "budget_exceeded";
+      return outcome;
+    }
+    for (auto& candidate : candidates)
+      if (candidate.source == CandidateSource::SystemDictionary && scored(candidate)) {
+        candidate.debug_info += candidate.debug_info.empty() ? "" : ";";
+        candidate.debug_info += "nll=1.000000;nlld=0.000000";
+        ++outcome.applied;
+      }
+    outcome.targets = outcome.applied;
+    outcome.reason = outcome.applied ? "applied" : "no_target";
+    return outcome;
+  });
+  const auto model_scores = [](const std::vector<Candidate>& candidates) {
+    std::vector<double> scores;
+    for (const auto& c : candidates)
+      if (c.source == CandidateSource::Model) scores.push_back(c.score);
+    return scores;
+  };
+
+  // Stage 2 off: the candidates the rest of the test compares against.
+  fail = true;
+  const auto off = engine->QueryCandidates("にほんご", "", kNow);
+  ASSERT_FALSE(off.empty());
+  EXPECT_EQ(off.front().source, CandidateSource::Model);
+  EXPECT_TRUE(LatticeModelCandidates(seen).empty());
+  const auto scores = model_scores(off);
+  ASSERT_FALSE(scores.empty());
+  const double model_best = *std::max_element(scores.begin(), scores.end());
+  const double model_lowest = *std::min_element(scores.begin(), scores.end());
+
+  config.lattice.with_model = true;
+  config.lattice.with_model_paths = 4;
+  engine->ApplyConfig(config);
+  // NLL failed: its candidates had the paths, and the result is as with stage 2 off.
+  const auto failed = engine->QueryCandidates("にほんご", "", kNow);
+  const auto offered = LatticeModelCandidates(seen);
+  ASSERT_FALSE(offered.empty()) << ::testing::PrintToString(Describe(seen));
+  ASSERT_LE(offered.size(), 4U);
+  EXPECT_EQ(Describe(failed), Describe(off));
+
+  // NLL scored them: they stay, ranked below the model's best (and below the slot of the
+  // conjugated user word path), as system dictionary candidates of new surfaces.
+  fail = false;
+  const auto applied = engine->QueryCandidates("にほんご", "", kNow);
+  const auto kept = LatticeModelCandidates(applied);
+  ASSERT_EQ(kept.size(), offered.size()) << ::testing::PrintToString(Describe(applied));
+  std::set<std::string> other_surfaces;
+  for (const auto& c : off) other_surfaces.insert(c.surface);
+  for (size_t i = 0; i < kept.size(); ++i) {
+    EXPECT_EQ(kept[i].source, CandidateSource::SystemDictionary);
+    EXPECT_EQ(kept[i].reading, "にほんご");
+    EXPECT_FALSE(other_surfaces.contains(kept[i].surface)) << kept[i].surface;
+    const auto rank = std::stoul(kept[i].debug_info.substr(kLatticeModelPrefix.size()));
+    EXPECT_DOUBLE_EQ(kept[i].score, (std::max)(0.1, model_best - 0.01 - 0.01 * rank));
+    EXPECT_LT(kept[i].score, model_best);
+  }
+  EXPECT_EQ(applied.front().source, CandidateSource::Model);
+
+  // Only the paths NLL scored stay. The lattice's first path here is 日本語, the model's surface,
+  // so the first path offered has a later rank.
+  const std::string first_offered = offered.front().debug_info;
+  scored = [&](const Candidate& c) { return c.debug_info == first_offered; };
+  const auto first_query = engine->QueryCandidates("にほんご", "", kNow);
+  const auto first_only = LatticeModelCandidates(first_query);
+  ASSERT_EQ(first_only.size(), 1U) << ::testing::PrintToString(Describe(first_query));
+  EXPECT_TRUE(first_only.front().debug_info.starts_with(first_offered + ";nll="));
+  scored = [](const Candidate&) { return true; };
+
+  // The other band starts below the model's lowest candidate; k limits the paths, the model's
+  // surface among them (path 1, 日本語) too.
+  config.lattice.with_model_band = azookey::host::LatticeModelBand::BelowModelLowest;
+  config.lattice.with_model_paths = 2;
+  engine->ApplyConfig(config);
+  const auto lowest = LatticeModelCandidates(engine->QueryCandidates("にほんご", "", kNow));
+  ASSERT_EQ(lowest.size(), 1U);
+  EXPECT_TRUE(lowest.front().debug_info.starts_with(std::string(kLatticeModelPrefix) + "2;"));
+  EXPECT_DOUBLE_EQ(lowest.front().score, (std::max)(0.1, model_lowest - 0.02));
+
+  // Without NLL, live, or stage 2 off, stage 2 adds nothing and NLL is not asked.
+  seen.clear();
+  auto without_nll = config;
+  without_nll.nll.enabled = false;
+  engine->ApplyConfig(without_nll);
+  const auto plain = engine->QueryCandidates("にほんご", "", kNow);
+  EXPECT_TRUE(LatticeModelCandidates(plain).empty());
+  EXPECT_TRUE(seen.empty());
+  auto stage_two_off = without_nll;
+  stage_two_off.lattice.with_model = false;
+  engine->ApplyConfig(stage_two_off);
+  EXPECT_EQ(Describe(engine->QueryCandidates("にほんご", "", kNow)), Describe(plain));
+  engine->ApplyConfig(config);
+  EXPECT_TRUE(LatticeModelCandidates(
+                  engine->QueryCandidatesEx("にほんご", "", kNow, nullptr, 0, true).candidates)
+                  .empty());
+  EXPECT_TRUE(seen.empty());  // A live request runs no NLL rerank.
+  // A request the model fell back on gets stage 1's lattice only.
+  const auto fallen = engine->QueryCandidates("にほんごです", "", kNow);
+  EXPECT_FALSE(LatticeCandidates(fallen).empty());
+  EXPECT_TRUE(LatticeModelCandidates(fallen).empty());
   std::error_code ec;
   std::filesystem::remove(model, ec);
 }

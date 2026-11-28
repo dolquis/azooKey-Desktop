@@ -45,6 +45,15 @@ struct ConversionQualityOptions {
   // of --dict-dir, and whether lattice conversion stage 1 was on.
   std::string dictionary_bundle_sha256{"none"};
   std::string lattice{"off"};
+  // Lattice conversion stage 2 (lattice-conversion-spec section 3.3): "off", or "k=<K>;band=<B>"
+  // of --lattice-with-model and --lattice-band. A result without the key counts as off.
+  std::string lattice_with_model{"off"};
+  // --nll-breaker: "product", or "per_request" with the NLL breaker closed before every request.
+  // A result without the key counts as product.
+  std::string nll_breaker{"product"};
+  // --first-clause-probe: "on" when each case also ran its first segment's request, which the
+  // case's latency includes. A result without the key counts as off.
+  std::string first_clause_probe{"off"};
   // Whether NLL rerank was on (spec section 14.1). A result without the key counts as off.
   std::string nll{"off"};
   // SHA-256 of the bench-only Zenzai profile (spec section 15.5), "none" without one.

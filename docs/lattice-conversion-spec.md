@@ -111,10 +111,54 @@ identity・長音・鉤括弧の候補、`Learn` / `Forget` / `Contains`（M36-A
 ### 3.3 段階 2: Zenzai が動いているとき
 
 Zenzai が正常に候補を返した要求で、ラティスの上位 k 件を `SystemDictionary` の候補として足し、NLL 再ランクの
-候補集合（`docs/neural-reranker-nll-spec.md` §B5）に入れる。段階 2 は既定で無効とし、エンジンの内部設定で切り替える。
-利用者向けの設定キーにするか、k と score 帯をどう置くかは、M52 で遅延と top1 を測ってから決める。score 帯は
-モデルの 1 位より下に置き、`docs/zenzai-inference-spec.md` §7.5 の score 統合と矛盾させない。M65 の受け入れ条件は
-段階 2 を含まない。段階 2 の採否は、段階 1 とは別の作業として測ってから決める。
+候補集合（`docs/neural-reranker-nll-spec.md` §B5）に入れる。段階 2 は既定で無効とし、エンジンの内部設定
+（`LatticeConfig.with_model`）で切り替える。利用者向けの設定キーは持たない。M65 の受け入れ条件は段階 2 を含まない。
+
+有効にしたときの規則は次のとおりとする。
+
+- 対象: 段階 1 の内部設定（§3.2）が有効で、live 変換でなく、モデルから落ちておらず、NLL 再ランクを試みる要求。
+  読みを言い換えたもう一方の読みの照会（DEV-2101）では足さない。breaker（`docs/neural-reranker-nll-spec.md` §B8）が
+  開いている要求でも経路を探し、採点されないので全部外す。先頭文節の要求（`docs/segment-editing-spec.md` §5.3）では、
+  段階 1 と違って残りの読みをつながず、活用語の経路（`docs/user-dictionary-pos-spec.md` §5）と同じく要求の読み
+  （先頭文節の読み）だけでラティスを探す。
+- 時間: 段階 1 のモデル経路から落ちた要求と同じく、探し始めた時刻から最大 15 ms とし、要求の期限の残りを超えない（§3.2）。
+  打ち切りは §3.6 の `lattice_conversion` に出る。
+- 件数: k（内部設定の既定 4）と、§3.5 の N の小さい方。モデルや辞書の候補と同じ表層の経路は足さない。
+- `score`: i 位の経路を `max(0.1, a − 0.01·i)` とする。a は、帯 best（既定）ではモデルの最上位の score − 0.01、
+  帯 lowest ではモデルの最下位の score とする。モデルの 1 位より下に置き、`docs/zenzai-inference-spec.md` §7.5 の
+  score 統合と矛盾させない。
+- `debug_info`: `lattice-model;rank=<i>`。
+- NLL が採点しなかった経路は、再ランクの後に外す。NLL が予算を超えたり失敗したりした要求の候補は、段階 2 が無効のときと
+  同じになる（`docs/neural-reranker-nll-spec.md` §B7 の all-or-nothing）。NLL が成功した要求では、足した経路も
+  `SystemDictionary` として NLL の対象（同 §B5 の上位件数）と減点の基準（同 §B6.2）に入るので、既存の辞書の候補の
+  補正も変わりうる。
+
+段階 2 は既定で有効にしない（DEV-2102）。理由は次の 4 つである。
+
+- top1 は変わらないが、これは構造上の結果である。NLL は `Model` の候補を採点せず、補正は 0 以下なので、モデルの最上位の
+  直下に置いた経路は 1 位になれない。順位を決めるのは NLL ではなく帯である。
+- 帯 best では、経路がほぼ 2 位に入り top3 を下げる（k = 2〜5 で −0.85〜−2.1pp）。帯 lowest では順位が動かず、
+  遅延と常駐（+25 MB）だけが増える。
+- NLL を試みる要求が増え（off の 960 から 2190〜2360 へ。全 2360 要求）、長い読みで NLL の予算（20 ms）を超える。
+  超過した要求の割合は k = 2 で 3%、k = 4 で 32%、k = 5 で 43% だった。超過が 3 回続くと breaker
+  （`docs/neural-reranker-nll-spec.md` §B8）が開き、以後は段階 2 を含まない要求でも NLL が止まる。breaker を外して
+  要求ごとに測っても、p50 は +6〜18 ms、p95 は +19〜35 ms になった。
+- 次の変種も採らない。(a) 段階 2 を予算と breaker の計上から外す案は、要求ごとの測定がそのまま当てはまり、品質が良くならない。
+  (b) 読みの長さに上限を置く案は、超過が 7〜12 字から始まる一方で top5 を改善した唯一のケースが 16 字なので、損失だけが残る。
+  (c) NLL の予算を広げる案は、長い読みにも経路が残る方向で、top3 が下がり遅延が増える。
+
+改善の余地があるのは、帯ではなく NLL で順位を決める形（`Model` の候補も NLL で採点する）である。これは
+`docs/neural-reranker-nll-spec.md` §B5 の対象集合を変える別の設計になる。段階 2 の配線は既定で無効のまま残し、
+`azookey_bench` の `--lattice-with-model` と `--lattice-band`（`docs/conversion-quality-benchmark-spec.md` §7）で
+再計測できる。
+
+測定の条件: Release（llama.cpp 入り）、CPU、スレッド数は製品の既定。モデルは `ggml-model-Q5_K_M.gguf`（SHA-256
+`29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）。辞書は `dictbuild/build_bundled.py` の同梱辞書 20260723
+（bundle SHA-256 `acb33c5c33548de126f19d122a2f4af6b311008cb0f6d0674269f32bc9654cf4`）。データは `bench/data/kana_kanji_eval.jsonl`
+（dataset SHA-256 `85b1a2a16495ddae45dcaf731b178c5ba13c42f713702e0fb6a2a6772143e5f9`）。引数は `--nll on --lattice on --typo-mode off
+--iterations 10` に `--lattice-with-model 2|4|5 --lattice-band best|lowest` を足した。breaker が働く測定は commit bda1e302 で、
+要求ごとの測定は 9e27876e の内容で `--nll-breaker per-request` を足した。
+
 段階 2 とは別に、読みがユーザー辞書の展開形に当たる要求で 1 件を足す活用語の経路は、`docs/user-dictionary-pos-spec.md` §5 が定める。
 
 ### 3.4 score 帯、source、debug_info
@@ -409,7 +453,7 @@ lattice_core と各層の `META` は `connection_space` を持つ。値は `suda
 M52 のモデル無効構成で、ラティスが受け入れ条件の top1 と CER に届かない場合は、次の順で検討する。
 
 1. ラティスを候補の生成に限り、順位はモデルと NLL 再ランクに任せる（段階 2 を主にする）。モデルを通らない経路では、
-   N-best を辞書の完全一致の候補より下の帯に置く。
+   N-best を辞書の完全一致の候補より下の帯に置く。モデルありの構成で段階 2 を測った結果は §3.3 にある。
 2. 変換用の語コストを推定し直す。コーパスの来歴とライセンスを `docs/licensing-policy.md` の手順で審査する。
 3. 連接情報の入手元を替える（Mozc 系の連接表、AzooKeyKanaKanjiConverter の辞書と連接データなど）。どちらも採否の審査が要る。
    形式は §8.4 の `connection_space` で入手元を区別するので、`CONN` と `CMAT` の配置は変えずに済む。

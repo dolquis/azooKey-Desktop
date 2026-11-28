@@ -16,10 +16,11 @@ uv run --no-config --locked --script $trainer check-reproducibility --dataset-di
 ```
 
 `synthesize` は `bench/data/` の評価 JSONL を照合用の SHA256 に変換する。
-読みと期待表層・許容表層、または左文脈と読みが重なれば、データセットの作成を止める。
-混在入力の評価では明示された読みも除外する。出力には評価セットの指紋と照合キーだけを保存する。
+読みと期待表層・許容表層、左文脈と読み、または混在入力の評価で明示された読みが重なる変換機会を除外する。
+除外件数は `synthesis.json` の `counts.m52_overlaps` に記録し、最終データに重複が残れば作成を止める。
+評価セットの内容は指紋と照合キーだけを保存する。
 ラベルには表示順の先頭 9 件から正例 1 件、負例を最大 8 件使う。§6.2 のキーで多数決し、同数は除外する。
-holdout は作品単位で固定し、同じ変換機会が分割をまたぐと失敗する。
+holdout は作品単位で固定する。両分割に現れる変換機会は両側から除外し、`counts.cross_split_opportunities` に件数を記録する。
 
 `train` は LightGBM と GELU 付き 2 層 MLP を学習する。
 標準化は学習分割の先頭 6 特徴から推定し、ONNX 内で実行する。
@@ -30,6 +31,7 @@ holdout は作品単位で固定し、同じ変換機会が分割をまたぐと
 配布候補の v1 `tiny_reranker.onnx` は標準 opset 20 を使う。
 各モデルの SHA256 と domain ごとの opset は `receipt.json` に記録し、v0 のメタ情報にも
 `opsets` を持たせる。`verify` は両モデルを ORT 1.32.0 の CPU EP で検査する。
+`check-reproducibility` は異なる `PYTHONHASHSEED` を指定した二つのプロセスで学習し、モデルと receipt の SHA256 を照合する。
 実コーパスで学習したモデルと receipt の採用には DEV-2228 の帰属確定を要する。
 
 ## 公開コーパスの入力
@@ -40,6 +42,7 @@ holdout は作品単位で固定し、同じ変換機会が分割をまたぐと
 `fetch` の既定動作はキャッシュ照合で、承認後の明示的な `fetch --download` が作品 ZIP を取得する。
 SudachiDict core の ZIP は `reading_dictionary` に記録した SHA256 を確定し、キャッシュの
 `asset-sudachidict-core-20260723.zip` に配置する。`fetch` の取得対象は作品 ZIP である。
+`prepare` は検証済み ZIP の辞書を SHA256 付きの名前でキャッシュに展開し、再利用時も内容を照合する。
 
 `prepare --output-dir <dir>` は承認済みのキャッシュから、青空文庫のルビを優先し、残りを Sudachi で
 読んだ `queries.jsonl` を作る。各行は `id`、`work`、`left_context`、`input`、`chosen` を持つ。

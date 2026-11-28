@@ -9,6 +9,8 @@ from pathlib import Path
 import platform
 from typing import cast
 
+from google.protobuf.descriptor import FieldDescriptor
+from google.protobuf.message import Message
 from lightgbm import LGBMClassifier
 import numpy as np
 from numpy.typing import NDArray
@@ -71,7 +73,7 @@ def _graph(
     )
     imports = [
         helper.make_opsetid("" if domain == "ai.onnx" else domain, version)
-        for domain, version in opsets.items()
+        for domain, version in sorted(opsets.items())
     ]
     model = helper.make_model(graph, producer_name="azooKey M56", opset_imports=imports,
                               ir_version=IR_VERSION)
@@ -149,6 +151,17 @@ def _v1(
     return model, cast(Array, expected)
 
 
+def _has_external_tensor(message: Message) -> bool:
+    if isinstance(message, TensorProto):
+        return message.data_location == TensorProto.EXTERNAL
+    for field, value in message.ListFields():
+        if field.type == FieldDescriptor.TYPE_MESSAGE:
+            children = value if field.is_repeated else (value,)
+            if any(_has_external_tensor(child) for child in children):
+                return True
+    return False
+
+
 def _session(path: Path, variant: str, dataset_hash: str) -> ort.InferenceSession:
     if ort.__version__ != ORT_VERSION:
         raise TrainingError(f"verification requires ONNX Runtime {ORT_VERSION}")
@@ -156,7 +169,7 @@ def _session(path: Path, variant: str, dataset_hash: str) -> ort.InferenceSessio
     opsets = _opsets(model)
     if model.ir_version != IR_VERSION or opsets != MODEL_OPSETS[variant]:
         raise TrainingError(f"unexpected {variant} ONNX IR or opsets")
-    if any(tensor.data_location == TensorProto.EXTERNAL for tensor in model.graph.initializer):
+    if _has_external_tensor(model):
         raise TrainingError("external ONNX weights are unsupported")
     onnx.checker.check_model(model)
     options = ort.SessionOptions()

@@ -135,17 +135,32 @@ class _Morpheme(Protocol):
     def reading_form(self) -> str: ...
 
 
-def sudachi_reader(
-    dictionary: Asset, cache: Path, scratch: Path,
-) -> Callable[[str], list[ReadingUnit]]:
+def sudachi_reader(dictionary: Asset, cache: Path) -> Callable[[str], list[ReadingUnit]]:
     from sudachipy import dictionary as sudachi_dictionary  # type: ignore[import-untyped]
 
     archive_path = verify_cached(dictionary, cache)
-    dic_path = scratch / "system_core.dic"
-    with zipfile.ZipFile(archive_path) as archive, archive.open(dictionary.member) as source:
-        with dic_path.open("wb") as target:
-            shutil.copyfileobj(source, target)
-    tokenizer = sudachi_dictionary.Dictionary(dict=str(dic_path)).create()
+    with zipfile.ZipFile(archive_path) as archive:
+        with archive.open(dictionary.member) as source:
+            hasher = hashlib.sha256()
+            for chunk in iter(lambda: source.read(1 << 20), b""):
+                hasher.update(chunk)
+            digest = hasher.hexdigest()
+        dic_path = cache / f"sudachi-{digest}.dic"
+        if not dic_path.exists():
+            with tempfile.TemporaryDirectory(dir=cache) as scratch:
+                staged = Path(scratch) / dic_path.name
+                with archive.open(dictionary.member) as source, staged.open("wb") as target:
+                    shutil.copyfileobj(source, target)
+                if sha256_file(staged) != digest:
+                    raise TrainingError("Sudachi dictionary SHA256 mismatch during extraction")
+                try:
+                    staged.rename(dic_path)
+                except FileExistsError:
+                    # A concurrent prepare already published the dictionary.
+                    pass
+    if sha256_file(dic_path) != digest:
+        raise TrainingError("cached Sudachi dictionary SHA256 mismatch")
+    tokenizer = sudachi_dictionary.Dictionary(dict=str(dic_path.resolve())).create()
 
     def read(text: str) -> list[ReadingUnit]:
         tokens: list[_Morpheme] = tokenizer.tokenize(text)
@@ -155,7 +170,7 @@ def sudachi_reader(
 
 
 _ANNOTATION = re.compile(r"［＃[^］]*］")
-_RUBY = re.compile(r"｜([^｜《》\n]+)《([^《》\n]+)》|([一-龯㐀-䶿々〆〇]+)《([^《》\n]+)》")
+_RUBY = re.compile(r"｜([^｜《》\n]+)《([^《》\n]+)》|([一-龯㐀-䶿々〆〇ヶ仝]+)《([^《》\n]+)》")
 
 
 def to_hiragana(text: str) -> str:

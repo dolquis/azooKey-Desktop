@@ -73,6 +73,12 @@ def exclusion_keys(context: str, readings: Iterable[str], surfaces: Iterable[str
     return keys
 
 
+def _opportunity_keys(context: str, reading: str, surfaces: Iterable[str]) -> set[str]:
+    return exclusion_keys(context, (reading,), surfaces) | {
+        _fingerprint("mixed-reading", _reading_key(reading)),
+    }
+
+
 def _text_list(value: object, name: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(s, str) or not s.strip() for s in value):
         raise TrainingError(f"invalid text list: {name}")
@@ -170,13 +176,14 @@ def synthesize(
     denied = set(exclusions["keys"])
     counts = Counter({"queries": 0, "chosen_not_shown": 0, "tied_labels": 0, "no_negatives": 0})
     groups: dict[tuple[str, str, str], list[Example]] = defaultdict(list)
+    m52_overlaps: set[tuple[str, str]] = set()
     for query in sorted(queries, key=lambda item: field(item, "id")):
         counts["queries"] += 1
         batch = indexed.pop(field(query, "id"), None)
         if batch is None or not isinstance(batch.get("candidates"), list):
             raise TrainingError("a query is missing its unique candidate batch")
         work = field(query, "work")
-        context = field(query, "left_context", allow_empty=True)
+        context = normalize(field(query, "left_context", allow_empty=True))
         reading = field(query, "input")
         chosen = field(query, "chosen")
         shown: dict[str, tuple[float, ...]] = {}
@@ -188,9 +195,9 @@ def synthesize(
             surface = field(candidate, "surface")
             vector = feature_vector(candidate.get("features"), surface)
             shown.setdefault(surface, vector)
-        if (_fingerprint("mixed-reading", _reading_key(reading)) in denied
-            or denied & exclusion_keys(context, [reading], [chosen, *shown])):
-            raise TrainingError("overlap with M52 evaluation data")
+        if denied & _opportunity_keys(context, reading, [chosen, *shown]):
+            m52_overlaps.add((context, reading))
+            continue
         if chosen not in shown:
             counts["chosen_not_shown"] += 1
             continue
@@ -201,30 +208,40 @@ def synthesize(
         for surface, label, weight in [
             (chosen, 1, 1.0), *((surface, 0, 1.0 / len(negatives)) for surface in negatives),
         ]:
-            key = (normalize(context), reading, surface)
+            key = (context, reading, surface)
             groups[key].append(Example(work, shown[surface], label, weight))
     if indexed:
         raise TrainingError("candidate batches contain ids without a query")
 
+    counts["m52_overlaps"] = len(m52_overlaps)
+    groups = {key: rows for key, rows in groups.items() if key[:2] not in m52_overlaps}
     works = sorted({row.work for rows in groups.values() for row in rows}, key=lambda work: (
         _fingerprint("work-split", work), work,
     ))
     if len(works) < 2:
         raise TrainingError("synthesis needs usable exposures from at least two works")
     holdout = set(works[:max(1, len(works) // 5)])
-    split_for_query: dict[tuple[str, str], str] = {}
+    splits_by_opportunity: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for (context, reading, _), examples in groups.items():
+        splits_by_opportunity[(context, reading)].update(
+            "holdout" if row.work in holdout else "train" for row in examples
+        )
+    counts["cross_split_opportunities"] = sum(len(splits) > 1 for splits in splits_by_opportunity.values())
+
     labels: list[Label] = []
-    for (context, reading, _), rows in sorted(groups.items()):
-        splits = {"holdout" if row.work in holdout else "train" for row in rows}
+    for (context, reading, surface), rows in sorted(groups.items()):
+        splits = splits_by_opportunity[(context, reading)]
+        if len(splits) > 1:
+            continue
         split = next(iter(splits))
-        if len(splits) != 1 or split_for_query.setdefault((context, reading), split) != split:
-            raise TrainingError("duplicate conversion opportunity spans train and holdout works")
         votes = sum(row.label for row in rows)
         if votes * 2 == len(rows):
             counts["tied_labels"] += 1
             continue
         label = int(votes * 2 > len(rows))
         agreed = [row for row in rows if row.label == label]
+        if denied & _opportunity_keys(context, reading, (surface,)):
+            raise TrainingError("M52 overlap remains in final dataset")
         labels.append({
             "features": list(agreed[0].features), "label": label, "split": split,
             "weight": math.fsum(row.weight for row in agreed) / len(agreed), "occurrences": len(rows),

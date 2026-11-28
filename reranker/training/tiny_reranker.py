@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -56,9 +58,8 @@ def prepare(manifest: Path, cache: Path, output: Path) -> None:
     works, dictionary = load_manifest(manifest)
     if not works:
         raise TrainingError("source manifest has no approved corpus assets")
-    with tempfile.TemporaryDirectory(dir=output) as temporary:
-        read = sudachi_reader(dictionary, cache, Path(temporary))
-        write_jsonl(output / "queries.jsonl", (row for work in works for row in read_work(work, cache, read)))
+    read = sudachi_reader(dictionary, cache)
+    write_jsonl(output / "queries.jsonl", (row for work in works for row in read_work(work, cache, read)))
 
 
 def make_labels(queries: Path, candidates: Path, m52: Path, output: Path) -> None:
@@ -79,11 +80,16 @@ def make_labels(queries: Path, candidates: Path, m52: Path, output: Path) -> Non
 
 
 def check_reproducibility(dataset: Path, output: Path) -> None:
-    from training_models import train, verify
+    from training_models import verify
 
-    for name in ("first", "second"):
-        (output / name).mkdir()
-        train(dataset, output / name)
+    for name, hash_seed in (("first", "1"), ("second", "2")):
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "train",
+             "--dataset-dir", str(dataset), "--output-dir", str(output / name)],
+            env={**os.environ, "PYTHONHASHSEED": hash_seed}, check=False,
+        )
+        if result.returncode != 0:
+            raise TrainingError(f"training with PYTHONHASHSEED={hash_seed} failed (exit {result.returncode})")
     first, second = (verify(output / name) for name in ("first", "second"))
     if first != second:
         raise TrainingError("retraining changed model SHA256: " + ", ".join(
@@ -104,12 +110,12 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--cache-dir", type=Path, default=BUILD / "sources")
     fetch.add_argument("--download", action="store_true")
     fixture = commands.add_parser("fixture", help="write artificial queries and candidate features")
-    synth = commands.add_parser("synthesize", help="reject M52 overlap and label shown candidates")
+    synth = commands.add_parser("synthesize", help="drop M52 overlap and label shown candidates")
     synth.add_argument("--queries", type=Path, required=True)
     synth.add_argument("--candidates", type=Path, required=True)
     synth.add_argument("--m52-dir", type=Path, default=ROOT / "bench" / "data")
     train_cmd = commands.add_parser("train", help="train and verify both ONNX variants")
-    repro = commands.add_parser("check-reproducibility", help="train twice and compare SHA256")
+    repro = commands.add_parser("check-reproducibility", help="train in two processes and compare SHA256")
     for command in (train_cmd, repro):
         command.add_argument("--dataset-dir", type=Path, required=True)
     for command in (prepare_cmd, fixture, synth, train_cmd, repro):

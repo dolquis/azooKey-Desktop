@@ -2,8 +2,10 @@
 
 #include <Windows.h>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -49,6 +51,14 @@ class CandidateWindow {
   }
   void Hide();
   bool IsVisible() const;
+
+  struct NativeCandidateExposure {
+    uint64_t shown_at_ms;
+    int first_row;
+    int row_count;
+  };
+  std::optional<NativeCandidateExposure> GetNativeCandidateExposure() const;
+  void InvalidateNativeCandidateExposure() { native_candidate_exposure_.reset(); }
 
   // Prediction mode (native-ui-spec §4.2): the same window shows up to
   // kMaxPredictions predictions, with a key hint column instead of numbers and
@@ -264,6 +274,8 @@ class CandidateWindow {
   enum class RenderFailureForTest { None, Initialize, Draw };
   // Makes RenderingEngine initialization, or every frame, fail until reset.
   static void SetRenderFailureForTest(RenderFailureForTest failure);
+  // Overrides the wall clock for exposure timestamps. Zero restores the system clock.
+  static void SetExposureTimeForTest(uint64_t shown_at_ms);
   int render_init_failures_for_test() const { return render_init_failures_; }
   // Draws through the production path (RenderingEngine and the DComp surface)
   // at the client size; true when the frame was committed.
@@ -346,6 +358,7 @@ class CandidateWindow {
   // Row slots of one page (native-ui-spec §4.1); fewer than the page holds, or a
   // second page, adds the position row.
   int visible_rows_{0};
+  std::optional<NativeCandidateExposure> native_candidate_exposure_;
   Mode mode_{Mode::Candidate};
   std::vector<std::wstring> predictions_;
   int hint_column_width_{0};  // Prediction mode: the key hint column.
@@ -412,6 +425,7 @@ class CandidateWindow {
   void UpdateModeProperty(bool on_screen);
   // Places, draws and shows the window at this size; shared by both modes.
   void PresentAt(POINT pt, RECT work_area, int width, int height, int flip_gap);
+  void RecordNativeCandidateExposure();
   bool RenderDetails();
   void DrawDetails(ID2D1DeviceContext* context, int width, int height) const;
   bool Fail(const char* stage, HRESULT hr);

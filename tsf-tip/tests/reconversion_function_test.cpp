@@ -1587,6 +1587,7 @@ TEST(ReconversionFunctionTest, ChoosingAnotherCandidateSendsReconvertCorrection)
       ASSERT_TRUE(corrections[0].selected_surface.has_value());
       EXPECT_EQ(*corrections[0].selected_surface, "あした");
       EXPECT_FALSE(corrections[0].observation_id.empty());
+      EXPECT_FALSE(corrections[0].target_observation_id);
     } else {
       EXPECT_EQ(*text, L"明日");
       EXPECT_TRUE(corrections.empty());

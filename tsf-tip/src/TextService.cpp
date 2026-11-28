@@ -282,7 +282,8 @@ std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
     const std::string& reading, std::vector<azookey::ipc::CandidateField> candidates,
     bool number_rewriter_enabled, bool katakana_rewriter_enabled,
     bool symbol_rewriter_enabled = false,
-    const std::vector<azookey::core::Candidate>& dynamic_candidates = {}) {
+    const std::vector<azookey::core::Candidate>& dynamic_candidates = {},
+    std::shared_ptr<const azookey::tsf::CandidateExposureOrigin> exposure_origin = {}) {
   if (IsStandalonePunctuation(reading)) {
     auto local = StandalonePunctuationCandidates(reading);
     return {{std::move(local[0]), "", true}, {std::move(local[1]), "半角", true}};
@@ -291,7 +292,8 @@ std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
   result.reserve(candidates.size() + dynamic_candidates.size() + 8);
   for (auto& candidate : candidates) {
     auto description = candidate.description;
-    result.push_back({std::move(candidate), std::move(description), false});
+    result.push_back({std::move(candidate), std::move(description), false, exposure_origin,
+                      static_cast<uint32_t>(result.size())});
   }
 
   auto is_duplicate = [&](const azookey::core::Candidate& item) {
@@ -1824,6 +1826,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 STDMETHODIMP TextService::Deactivate() try {
   AZOOKEY_ASSERT_UI_THREAD();
   ++activation_epoch_;
+  InvalidateCandidateExposure();
   ResetTypoTracking();
   // The forget record never crosses a focus or activation (legacy-parity-spec §7.2),
   // nor does the commit undo (commit-undo-spec §4.2, §7).
@@ -2918,6 +2921,7 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) try {
 // next key there asks. The candidate window and the composition stay.
 STDMETHODIMP TextService::OnKillThreadFocus() try {
   AZOOKEY_ASSERT_UI_THREAD();
+  InvalidateCandidateExposure();
   if (!std::exchange(thread_focus_lost_, true))
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "thread_focus_changed",
                {{"focus", SafeLogText("lost")}});
@@ -4966,6 +4970,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
   // left there is committed; an IME that is off now restores nothing.
   std::optional<bool> restore_alnum;
   if (document_changed) {
+    InvalidateCandidateExposure();
     if (keyboard_open_) restore_alnum = input_scope_field_.restore_alnum;
     input_scope_field_ = {};
   }
@@ -5060,6 +5065,7 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
   if (testing::ConsumeComBoundaryAllocationFailureForTest()) throw std::bad_alloc();
 #endif
   LogKeyPathContext("push", pic);
+  InvalidateCandidateExposure();
   ClearReconversionState();
   last_learned_commit_pairs_.clear();
   // commit-undo-spec §4.2: a context push or pop drops the commit undo.
@@ -5079,6 +5085,7 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
   AZOOKEY_ASSERT_UI_THREAD();
   LogKeyPathContext("pop", pic);
+  InvalidateCandidateExposure();
   // commit-undo-spec §4.2, whichever context leaves.
   commit_undo_target_.reset();
   pending_undo_correction_.reset();
@@ -6031,7 +6038,51 @@ void TextService::ClearCommitContext() {
   }
 }
 
-void TextService::PostPendingCommitObservation() {
+void TextService::InvalidateCandidateExposure() {
+  exposure_generation_.fetch_add(1, std::memory_order_relaxed);
+  candidate_ui_.InvalidateNativeCandidateExposure();
+  reconversion_exposure_target_.reset();
+  last_commit_exposure_id_.reset();
+  if (undo_target_) undo_target_->exposure_observation_id.reset();
+  if (commit_undo_target_) commit_undo_target_->exposure_observation_id.reset();
+  if (pending_undo_correction_) pending_undo_correction_->exposure_observation_id.reset();
+}
+
+std::optional<TextService::CommitExposure> TextService::CaptureCommitExposure(
+    size_t chosen_index) const noexcept {
+  const auto drawn = candidate_ui_.GetNativeCandidateExposure();
+  if (!drawn || drawn->first_row < 0 || drawn->row_count <= 0 || thread_focus_lost_ ||
+      !shown_batch_segments_.empty() || chosen_index >= shown_candidates_.size())
+    return std::nullopt;
+  const auto begin = static_cast<size_t>(drawn->first_row);
+  const auto count = static_cast<size_t>(drawn->row_count);
+  if (begin > shown_candidates_.size() || count > shown_candidates_.size() - begin ||
+      chosen_index < begin || chosen_index >= begin + count)
+    return std::nullopt;
+
+  const auto& chosen = shown_candidates_[chosen_index];
+  const auto& origin = chosen.exposure_origin;
+  if (!origin || origin->generation != exposure_generation_.load(std::memory_order_relaxed) ||
+      chosen.field.tag == kEnglishCandidateTag || UsableCandidateSegments(chosen.field))
+    return std::nullopt;
+
+  try {
+    CommitExposure exposure{origin, drawn->shown_at_ms, {}};
+    exposure.positions.reserve(count);
+    for (size_t i = begin; i < begin + count; ++i) {
+      const auto& row = shown_candidates_[i];
+      if (row.exposure_origin == origin && row.field.tag != kEnglishCandidateTag)
+        exposure.positions.push_back(row.response_index);
+    }
+    return exposure;
+  } catch (const std::bad_alloc&) {
+    return std::nullopt;
+  }
+}
+
+void TextService::PostPendingCommitObservation(ITfContext* context,
+                                               std::optional<TfEditCookie> edit_cookie,
+                                               ITfRange* committed_range) {
   if (!pending_commit_observation_) return;
   auto pending = std::move(*pending_commit_observation_);
   pending_commit_observation_.reset();
@@ -6052,6 +6103,8 @@ void TextService::PostPendingCommitObservation() {
   last_learned_commit_pairs_.clear();
   undo_target_.reset();
   last_commit_undo_pair_.reset();
+  last_commit_exposure_id_.reset();
+  reconversion_exposure_target_.reset();
   if (!pending.learning_allowed) return;
   // PostIpcSend drops observations while the context is secure.
   const bool sendable = !pending.secure && !secure_input_.load(std::memory_order_relaxed);
@@ -6063,14 +6116,34 @@ void TextService::PostPendingCommitObservation() {
     last_learned_commit_pairs_.emplace_back(observation.reading, observation.chosen.surface);
   };
   try {
+    std::optional<std::string> exposure_observation_id;
 #ifdef AZOOKEY_TSF_TESTING
     if (testing::ConsumePendingCommitObservationFailureForTest()) {
       throw std::bad_alloc();
     }
 #endif
     if (pending.segments.empty()) {
-      PostCommitObservation(pending.reading, pending.chosen, pending.shown, pending.secure,
-                            pending.learning_allowed);
+      auto exposure = std::move(pending.exposure);
+      if (exposure) {
+        try {
+          if (!context || !sendable ||
+              exposure->origin->generation !=
+                  exposure_generation_.load(std::memory_order_relaxed)) {
+            exposure.reset();
+          } else {
+            const auto privacy = EvaluatePrivacy(context, false, edit_cookie);
+            if (privacy.secure || !privacy.learning_allowed) {
+              InvalidateCandidateExposure();
+              exposure.reset();
+            }
+          }
+        } catch (...) {
+          exposure.reset();
+        }
+      }
+      exposure_observation_id =
+          PostCommitObservation(pending.reading, pending.chosen, pending.shown, pending.secure,
+                                pending.learning_allowed, std::move(exposure));
       record(pending);
     } else if (ipc_host_commit_segments_.load(std::memory_order_relaxed)) {
       ipc::CommitSegmentsObservationRequest request;
@@ -6107,9 +6180,11 @@ void TextService::PostPendingCommitObservation() {
         committed_context == ComIdentity(text_edit_context_) &&
         !last_learned_commit_pairs_.empty() &&
         last.chosen.tag != static_cast<uint8_t>(core::CandidateTag::English) &&
-        last_learned_commit_pairs_.back() == std::pair{last.reading, last.chosen.surface})
+        last_learned_commit_pairs_.back() == std::pair{last.reading, last.chosen.surface}) {
       undo_target_ = UndoTarget{last.reading, last.chosen.surface, committed_context,
                                 std::chrono::steady_clock::now()};
+      undo_target_->exposure_observation_id = exposure_observation_id;
+    }
     // commit-undo-spec §7: an undo of this commit names its last learned pair,
     // the automatic punctuation left out; an English or unsent last pair names
     // none, and neither do the sections of a mixed-English commit.
@@ -6121,8 +6196,14 @@ void TextService::PostPendingCommitObservation() {
     }
     if (named && !pending.per_section_mixed_english && !last_learned_commit_pairs_.empty() &&
         named->chosen.tag != static_cast<uint8_t>(core::CandidateTag::English) &&
-        last_learned_commit_pairs_.back() == std::pair{named->reading, named->chosen.surface})
+        last_learned_commit_pairs_.back() == std::pair{named->reading, named->chosen.surface}) {
       last_commit_undo_pair_ = last_learned_commit_pairs_.back();
+      last_commit_exposure_id_ = exposure_observation_id;
+    }
+    // Only a watched context can tell us that an editor changed the committed span.
+    if (exposure_observation_id && committed_range && SameComIdentity(context, text_edit_context_))
+      reconversion_exposure_target_ = ReconversionExposureTarget{
+          committed_range, std::move(*exposure_observation_id), pending.chosen.surface};
   } catch (...) {
     // The document commit has already succeeded by the time pending commit
     // observations are posted. Drop best-effort learning telemetry rather than
@@ -6191,13 +6272,15 @@ void TextService::TrackUndoKey(ITfContext* context, WPARAM key) {
       std::chrono::steady_clock::now() - target.armed_at > kUndoWindow)
     return;
   PostCommitCorrection(context, ipc::kCorrectionKindUndo, std::move(target.reading),
-                       std::move(target.surface), std::nullopt);
+                       std::move(target.surface), std::nullopt, std::nullopt,
+                       std::move(target.exposure_observation_id));
 }
 
 void TextService::PostCommitCorrection(ITfContext* context, std::string_view kind,
                                        std::string reading, std::string rejected_surface,
                                        std::optional<std::string> selected_surface,
-                                       std::optional<TfEditCookie> edit_cookie) {
+                                       std::optional<TfEditCookie> edit_cookie,
+                                       std::optional<std::string> target_observation_id) {
   if (!ipc_host_commit_correction_.load(std::memory_order_relaxed) || !context || reading.empty() ||
       rejected_surface.empty())
     return;
@@ -6218,6 +6301,8 @@ void TextService::PostCommitCorrection(ITfContext* context, std::string_view kin
     // A fresh id per correction: reusing the commit's id would make the Host
     // drop the correction as a resend of that commit.
     request.observation_id = NextCommitObservationId();
+    if (!request.observation_id.empty())
+      request.target_observation_id = std::move(target_observation_id);
     request.secure = false;
     request.learning_allowed = true;
     PostIpcSend(ipc::MessageType::CommitCorrection, ipc::BuildCommitCorrectionRequest(request),
@@ -6495,6 +6580,7 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context,
 void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
                                           LifecycleCleanupFailurePolicy failure_policy,
                                           bool keep_unshown_input) {
+  InvalidateCandidateExposure();
   ResetTypoTracking();
   // Taken before the candidate state and the final punctuation hold are
   // cleared below; spec §4.3 commits what the composition shows.
@@ -6757,6 +6843,9 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       selected_candidate_idx_ < static_cast<int>(shown_candidates_.size())) {
     chosen = shown_candidates_[selected_candidate_idx_];
   }
+  auto exposure = multi_segment || secure || !privacy.learning_allowed || selected_candidate_idx_ < 0
+                      ? std::nullopt
+                      : CaptureCommitExposure(static_cast<size_t>(selected_candidate_idx_));
   shown_candidates_.clear();
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
@@ -6838,6 +6927,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
                                                              {},
                                                              secure,
                                                              learning};
+      if (learning) pending_commit_observation_->exposure = std::move(exposure);
     }
   } else {
     pending_commit_observation_.reset();
@@ -8036,6 +8126,7 @@ void TextService::ServeConnection() {
     std::chrono::steady_clock::time_point trace_start;
     uint64_t req_id = 0;
     uint64_t query_token = 0;
+    uint64_t exposure_generation = 0;
     bool has_qc = false;
     bool is_batch = false;
     bool is_live_conversion = false;
@@ -8096,6 +8187,7 @@ void TextService::ServeConnection() {
         trace_start = ipc_pending_trace_start_;
         req_id = ipc_pending_id_;
         query_token = ipc_pending_query_token_;
+        exposure_generation = ipc_pending_exposure_generation_;
         is_batch = ipc_pending_is_batch_;
         is_live_conversion = ipc_pending_is_live_conversion_;
         apply_live_preview = ipc_pending_apply_live_preview_;
@@ -8513,6 +8605,7 @@ void TextService::ServeConnection() {
     }
     if (query_deadline_expired_for_test) query_deadline_expire_for_test_.store(false);
     std::vector<CandidateField> response_candidates;
+    std::shared_ptr<const CandidateExposureOrigin> exposure_origin;
     if (cancel_inflight && cancel_inflight_out_of_band && !qres) {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_query_cancelled_out_of_band",
                  {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
@@ -8649,6 +8742,16 @@ void TextService::ServeConnection() {
         continue;
       }
       response_candidates = std::move(qpayload->candidates);
+      if (qpayload->exposure_id && !secure && learning_allowed &&
+          remaining_reading.empty() && emoji_trigger.empty() &&
+          exposure_generation == exposure_generation_.load(std::memory_order_relaxed)) {
+        try {
+          exposure_origin = std::make_shared<CandidateExposureOrigin>(
+              CandidateExposureOrigin{std::move(*qpayload->exposure_id), exposure_generation});
+        } catch (const std::bad_alloc&) {
+          // The optional observation must not prevent the candidate list from arriving.
+        }
+      }
       // Kept only for an ordinary context: a secure context never reuses
       // ranking made with its context or learning (privacy spec section 5). An
       // auto-replaced answer belongs to the corrected reading, not this one.
@@ -8688,7 +8791,8 @@ void TextService::ServeConnection() {
         !is_batch && katakana_rewriter_.load(std::memory_order_relaxed),
         !is_batch && !live && emoji_trigger.empty() &&
             symbol_rewriter_.load(std::memory_order_relaxed),
-        is_batch ? std::vector<core::Candidate>{} : DynamicCandidates(candidates_reading));
+        is_batch ? std::vector<core::Candidate>{} : DynamicCandidates(candidates_reading),
+        std::move(exposure_origin));
 
     // M10: discard stale responses.
     // Conditions for freshness:
@@ -8785,6 +8889,7 @@ void TextService::AdviseTextEditSink(ITfContext* context) {
 }
 
 void TextService::UnadviseTextEditSink() {
+  reconversion_exposure_target_.reset();
   if (!text_edit_context_) return;
   ITfSource* source = nullptr;
   if (SUCCEEDED(
@@ -8825,8 +8930,19 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
   // The same for the commit undo (commit-undo-spec §4.2 item 5). The commit's
   // edit may end before or after its target is recorded, so the mark is set
   // inside that edit session.
-  if (!std::exchange(commit_end_edit_pending_, false) && (!selection_status_read || changed))
+  const bool commit_edit = std::exchange(commit_end_edit_pending_, false);
+  if (!commit_edit && (!selection_status_read || changed))
     commit_undo_target_.reset();
+  if (!(commit_edit && after_tip_session) && reconversion_exposure_target_) {
+    // A selection-only edit can select the exact committed range for reconversion.
+    // A text edit (or an uninspectable edit) can replace it with unrelated text.
+    Microsoft::WRL::ComPtr<IEnumTfRanges> updates;
+    Microsoft::WRL::ComPtr<ITfRange> changed_range;
+    ULONG fetched = 0;
+    if (FAILED(record->GetTextAndPropertyUpdates(TF_GTP_INCL_TEXT, nullptr, 0, &updates)) ||
+        !updates || updates->Next(1, &changed_range, &fetched) != S_FALSE || fetched != 0)
+      reconversion_exposure_target_.reset();
+  }
   if (!selection_status_read || !changed) return S_OK;
   reconversion_prefetch_pending_ = false;
   reconversion_prefetch_surface_.clear();
@@ -9348,6 +9464,7 @@ std::string TextService::PostQueryCandidates(ITfContext* context, const std::str
   ipc_pending_raw_keys_ = std::move(raw_keys);
   ipc_pending_remaining_reading_ = remaining_reading;
   ipc_pending_query_token_ = ++ipc_query_token_seq_;
+  ipc_pending_exposure_generation_ = exposure_generation_.load(std::memory_order_relaxed);
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -9447,6 +9564,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   LogInputGateOnChange(gate, decision.secure);
   secure_input_.store(decision.secure, std::memory_order_relaxed);
   typo_learning_allowed_.store(decision.learning_allowed, std::memory_order_relaxed);
+  if (decision.secure || !decision.learning_allowed) InvalidateCandidateExposure();
   if (!decision.learning_allowed) ResetTypoTracking();
   if (decision.secure) {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
@@ -10139,7 +10257,8 @@ void TextService::UnregisterProofreadPreservedKey() {
 }
 
 HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAction& action,
-                                       bool& preedit_update_needed, bool& commit_pending) {
+                                        bool& preedit_update_needed, bool& commit_pending,
+                                        std::optional<CommitExposure>* exposure) {
   if (const auto* replace = std::get_if<core::ReplaceMarkedText>(&action)) {
     core_marked_surface_ = replace->text;
     preedit_update_needed = true;
@@ -10256,6 +10375,8 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
                                      {},
                                      privacy.secure,
                                      privacy.learning_allowed && batch_learning_allowed_};
+        if (!privacy.secure && pending_commit_observation_->learning_allowed && exposure)
+          pending_commit_observation_->exposure = std::move(*exposure);
       }
     } else if (shown_candidates_.empty()) {
       // Spec §3.5.1: a punctuation mark committed the first candidate without a window.
@@ -10283,6 +10404,14 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
   auto previous_shown = shown_candidates_;
   const int previous_selected = selected_candidate_idx_;
   const bool was_showing = candidate_ui_.IsShowing();
+  std::optional<CommitExposure> exposure;
+  if (std::any_of(result.actions.begin(), result.actions.end(), [](const auto& action) {
+        return std::holds_alternative<core::ObserveCommit>(action);
+      })) {
+    const auto index = core_commit_selected_index_.value_or(
+        selected_candidate_idx_ >= 0 ? static_cast<size_t>(selected_candidate_idx_) : 0);
+    exposure = CaptureCommitExposure(index);
+  }
   const bool was_resizing =
       previous_state.kind() == core::InputStateKind::Selecting && previous_state.resizing_segment();
   bool preedit_was_updated = false;
@@ -10383,7 +10512,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     HRESULT hr = S_OK;
     for (const auto& action : result.actions) {
       if (std::holds_alternative<core::QueryCandidates>(action)) continue;
-      hr = ApplyClientAction(context, action, preedit_update_needed, commit_pending);
+      hr = ApplyClientAction(context, action, preedit_update_needed, commit_pending, &exposure);
       if (FAILED(hr)) break;
     }
     if (SUCCEEDED(hr) && preedit_update_needed && !commit_pending) {
@@ -12237,6 +12366,8 @@ HRESULT TextService::CompleteReconversionSelection(size_t index, bool click,
     restore();
     return E_INVALIDARG;
   }
+  const uint64_t generation = reconversion_generation_;
+  Microsoft::WRL::ComPtr<ITfRange> range(reconversion_range_);
   // The session may run later, after the state below has changed, so what
   // the replacement and the correction need is copied first. The correction
   // copy is best effort: an allocation failure loses only the correction.
@@ -12260,14 +12391,23 @@ HRESULT TextService::CompleteReconversionSelection(size_t index, bool click,
     if (learnable && !replacement.empty() && replacement != original) {
       correction = ReconversionCorrection{reconversion_shown_reading_, WideToUtf8(original),
                                           WideToUtf8(replacement)};
-      (void)reconversion_range_->GetContext(&context);
+      (void)range->GetContext(&context);
     }
   } catch (...) {
     correction.reset();
   }
+  if (correction && context) {
+    try {
+      correction->target_observation_id =
+          FindReconversionExposureId(context.Get(), range.Get(), correction->rejected);
+    } catch (...) {
+      // Range provenance is optional. Keep the original correction on failure.
+    }
+  }
+  if (!reconversion_list_ || generation != reconversion_generation_ ||
+      range.Get() != reconversion_range_)
+    return S_FALSE;
   const bool unchanged = replacement == original;
-  const uint64_t generation = reconversion_generation_;
-  Microsoft::WRL::ComPtr<ITfRange> range(reconversion_range_);
   // Built before the choice is marked pending: an allocation failure here
   // leaves no pending state that would turn every later choice into busy.
   CandidateReplacementGuard still_wanted;
@@ -12337,12 +12477,17 @@ void TextService::FinishReconversionSelection(
   commit_undo_target_.reset();
   if (correction && correction_context) {
     try {
+      std::optional<std::string> target;
+      if (reconversion_exposure_target_ &&
+          correction->target_observation_id == reconversion_exposure_target_->observation_id)
+        target = correction->target_observation_id;
       // This runs inside the replacement session: privacy is read with its cookie.
       PostCommitCorrection(correction_context, ipc::kCorrectionKindReconvert, correction->reading,
-                           correction->rejected, correction->selected, cookie);
+                            correction->rejected, correction->selected, cookie, std::move(target));
     } catch (...) {
     }
   }
+  if (!unchanged) reconversion_exposure_target_.reset();
   ClearReconversionState();
 }
 
@@ -12563,18 +12708,28 @@ bool TextService::candidate_window_show_pending_for_test() {
   return candidate_window_show_pending_;
 }
 
-void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates) {
+void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates,
+                                                std::optional<std::string> exposure_id) {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
-  candidates_ = BuildTipCandidates({}, std::move(candidates), false, false);
+  auto origin = exposure_id ? std::make_shared<CandidateExposureOrigin>(CandidateExposureOrigin{
+                                  std::move(*exposure_id), exposure_generation_.load()})
+                            : nullptr;
+  candidates_ = BuildTipCandidates({}, std::move(candidates), false, false, false, {},
+                                   std::move(origin));
 }
 
 void TextService::set_rewritten_cached_candidates_for_test(
-    const std::string& reading, std::vector<ipc::CandidateField> candidates) {
+    const std::string& reading, std::vector<ipc::CandidateField> candidates,
+    std::optional<std::string> exposure_id) {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
+  auto origin = exposure_id ? std::make_shared<CandidateExposureOrigin>(CandidateExposureOrigin{
+                                  std::move(*exposure_id), exposure_generation_.load()})
+                            : nullptr;
   candidates_ = BuildTipCandidates(
       reading, std::move(candidates), number_rewriter_.load(std::memory_order_relaxed),
       katakana_rewriter_.load(std::memory_order_relaxed),
-      symbol_rewriter_.load(std::memory_order_relaxed), DynamicCandidates(reading));
+      symbol_rewriter_.load(std::memory_order_relaxed), DynamicCandidates(reading),
+      std::move(origin));
 }
 
 std::vector<ipc::CandidateField> TextService::cached_candidates_for_test() {
@@ -12856,10 +13011,10 @@ void TextService::ClearBatchState() {
   batch_query_in_progress_ = false;
 }
 
-void TextService::PostCommitObservation(const std::string& reading,
-                                        const ipc::CandidateField& chosen,
-                                        const std::vector<ipc::CandidateField>& shown, bool secure,
-                                        bool learning_allowed) {
+std::optional<std::string> TextService::PostCommitObservation(
+    const std::string& reading, const ipc::CandidateField& chosen,
+    const std::vector<ipc::CandidateField>& shown, bool secure, bool learning_allowed,
+    std::optional<CommitExposure> exposure) {
   using namespace std::chrono;
   const uint64_t now_ms = static_cast<uint64_t>(
       duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
@@ -12874,7 +13029,23 @@ void TextService::PostCommitObservation(const std::string& reading,
   req.secure = secure;
   req.learning_allowed = learning_allowed;
 
+  if (exposure && !req.secure && req.learning_allowed && !req.observation_id.empty() &&
+      exposure->origin->generation == exposure_generation_.load(std::memory_order_relaxed) &&
+      exposure->shown_at_ms != 0 && exposure->shown_at_ms <= now_ms) {
+    req.exposure_id = exposure->origin->id;
+    req.shown_at_ms = exposure->shown_at_ms;
+    req.shown_candidate_indices = std::move(exposure->positions);
+    auto payload = ipc::BuildCommitObservationRequest(req);
+    if (payload.size() < ipc::kMaxFrameSize - 1024) {
+      PostIpcSend(ipc::MessageType::CommitObservation, std::move(payload), true);
+      return std::move(req.observation_id);
+    }
+    req.exposure_id.reset();
+    req.shown_at_ms.reset();
+    req.shown_candidate_indices.reset();
+  }
   PostIpcSend(ipc::MessageType::CommitObservation, ipc::BuildCommitObservationRequest(req), true);
+  return std::nullopt;
 }
 
 void TextService::PostCancel(uint64_t target_request_id) {
@@ -13315,13 +13486,19 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         service_->pending_commit_observation_ = pending_commit_observation;
         service_->pending_typo_commit_ = std::move(pending_typo_commit);
       };
+      Microsoft::WRL::ComPtr<ITfRange> exposure_range;
+      const auto capture_exposure_range = [&](ITfRange* range) {
+        if (pending_commit_observation && pending_commit_observation->exposure &&
+            SameComIdentity(context_, service_->text_edit_context_))
+          (void)range->Clone(exposure_range.GetAddressOf());
+      };
       const auto post_pending_commit_observation = [&]() {
         if (!pending_commit_observation) {
           service_->pending_commit_observation_.reset();
           return;
         }
         service_->pending_commit_observation_ = pending_commit_observation;
-        service_->PostPendingCommitObservation();
+        service_->PostPendingCommitObservation(context_, ec, exposure_range.Get());
       };
 
       if (!service_->terminated_composition_surface_.empty()) {
@@ -13457,6 +13634,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         core::EtwLogger::LogCompositionEnd(surface.size(), true);
         committed_from_composition = true;
         if (committed_range) {
+          capture_exposure_range(committed_range);
           TF_SELECTION sel{};
           sel.range = committed_range;
           if (SUCCEEDED(committed_range->Collapse(ec, TF_ANCHOR_END))) {
@@ -13473,8 +13651,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         if (SUCCEEDED(context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &fetched)) &&
             fetched > 0 && sel.range) {
           text_hr = sel.range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
-          if (SUCCEEDED(text_hr) && SUCCEEDED(sel.range->Collapse(ec, TF_ANCHOR_END))) {
-            context_->SetSelection(ec, 1, &sel);
+          if (SUCCEEDED(text_hr)) {
+            capture_exposure_range(sel.range);
+            if (SUCCEEDED(sel.range->Collapse(ec, TF_ANCHOR_END)))
+              context_->SetSelection(ec, 1, &sel);
           }
           sel.range->Release();
         }
@@ -13488,6 +13668,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       // a learning observation posted below makes it forgettable.
       service_->last_learned_commit_pairs_.clear();
       service_->last_commit_undo_pair_.reset();
+      service_->last_commit_exposure_id_.reset();
+      service_->reconversion_exposure_target_.reset();
       // commit-undo-spec §4.2 item 5: the OnEndEdit of this session is the
       // commit's own selection change.
       service_->commit_end_edit_pending_ = true;
@@ -13774,10 +13956,41 @@ HRESULT FindCommitBeforeCaret(ITfContext* context, TfEditCookie ec, ITfRange* ex
 
 }  // namespace
 
+std::optional<std::string> TextService::FindReconversionExposureId(ITfContext* context,
+                                                                 ITfRange* range,
+                                                                 std::string_view surface) {
+  if (!range || !reconversion_exposure_target_ || surface != reconversion_exposure_target_->surface ||
+      !SameComIdentity(context, text_edit_context_))
+    return std::nullopt;
+  const Microsoft::WRL::ComPtr<ITfRange> selection(range);
+  const auto original_range = reconversion_exposure_target_->range;
+  bool ran = false;
+  const HRESULT hr = RunCommitUndoSession(
+      context, client_id_, TF_ES_READ,
+      [&](TfEditCookie cookie) {
+        BOOL start_matches = FALSE;
+        BOOL end_matches = FALSE;
+        const bool matches =
+            SUCCEEDED(selection->IsEqualStart(cookie, original_range.Get(), TF_ANCHOR_START,
+                                              &start_matches)) &&
+            start_matches &&
+            SUCCEEDED(selection->IsEqualEnd(cookie, original_range.Get(), TF_ANCHOR_END,
+                                            &end_matches)) &&
+            end_matches;
+        return matches ? S_OK : S_FALSE;
+      },
+      ran);
+  if (hr != S_OK || !reconversion_exposure_target_ ||
+      reconversion_exposure_target_->range.Get() != original_range.Get())
+    return std::nullopt;
+  return reconversion_exposure_target_->observation_id;
+}
+
 void TextService::RecordCommitUndoTarget(ITfContext* context, std::string reading,
                                          const std::string& surface, std::string raw_romaji) {
   commit_undo_target_.reset();
   auto observed = std::exchange(last_commit_undo_pair_, std::nullopt);
+  auto exposure_id = std::exchange(last_commit_exposure_id_, std::nullopt);
   // §4.2 item 5: only the context the text edit sink watches reports a caret
   // move after the commit. A commit that left input behind is no target.
   if (!context || reading.empty() || surface.empty() || committing_ || composition_ ||
@@ -13802,6 +14015,7 @@ void TextService::RecordCommitUndoTarget(ITfContext* context, std::string readin
     target.reading = std::move(reading);
     target.raw_romaji = std::move(raw_romaji);
     target.observed = std::move(observed);
+    if (target.observed) target.exposure_observation_id = std::move(exposure_id);
     commit_undo_target_ = std::move(target);
   } catch (...) {
     // Without a target, Ctrl+Backspace stays the app's.
@@ -13988,7 +14202,7 @@ HRESULT TextService::UndoLastCommit(ITfContext* context, uint32_t modifiers, BOO
   if (target.observed)
     pending_undo_correction_ =
         PendingUndoCorrection{std::move(target.observed->first), std::move(target.observed->second),
-                              composition_generation_};
+                              composition_generation_, std::move(target.exposure_observation_id)};
   return apply_hr;
 }
 
@@ -14005,7 +14219,8 @@ void TextService::SendPendingUndoCorrection(ITfContext* context, bool committed_
   if (same_reading == last_learned_commit_pairs_.end() || same_reading->second == pending->surface)
     return;
   PostCommitCorrection(context, ipc::kCorrectionKindUndo, std::move(pending->reading),
-                       std::move(pending->surface), std::nullopt, edit_cookie);
+                        std::move(pending->surface), std::nullopt, edit_cookie,
+                        std::move(pending->exposure_observation_id));
 }
 
 }  // namespace azookey::tsf

@@ -190,10 +190,17 @@ CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect,
 
 class EditSession;
 
+struct CandidateExposureOrigin {
+  std::string id;
+  uint64_t generation{};
+};
+
 struct TipCandidate {
   ipc::CandidateField field;
   std::string description;
   bool local{false};
+  std::shared_ptr<const CandidateExposureOrigin> exposure_origin{};
+  uint32_t response_index{};
 };
 
 class TextService final : public ITfTextInputProcessorEx,
@@ -517,9 +524,11 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_foreground_app_for_test(core::ForegroundApp app) {
     foreground_app_.SetForTest(std::move(app));
   }
-  void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates);
+  void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates,
+                                      std::optional<std::string> exposure_id = std::nullopt);
   void set_rewritten_cached_candidates_for_test(const std::string& reading,
-                                                std::vector<ipc::CandidateField> candidates);
+                                                std::vector<ipc::CandidateField> candidates,
+                                                std::optional<std::string> exposure_id = std::nullopt);
   std::vector<ipc::CandidateField> cached_candidates_for_test();
   std::vector<ipc::CandidateField> shown_candidates_for_test() const;
   const core::InputState& input_state_for_test() const { return input_state_; }
@@ -1305,6 +1314,13 @@ class TextService final : public ITfTextInputProcessorEx,
   std::wstring shown_batch_notice_;  // UI thread only; fixed text, never Host body.
   std::vector<size_t> batch_segment_selections_;
   size_t batch_segment_cursor_{0};
+  struct CommitExposure {
+    std::shared_ptr<const CandidateExposureOrigin> origin;
+    uint64_t shown_at_ms;
+    std::vector<uint32_t> positions;
+  };
+  // IPC results and the native display are scoped to the same privacy/focus epoch.
+  std::atomic<uint64_t> exposure_generation_{0};
   struct PendingCommitObservation {
     std::string reading;
     ipc::CandidateField chosen;
@@ -1322,6 +1338,7 @@ class TextService final : public ITfTextInputProcessorEx,
     // do not follow the reading, so the commit undo learns nothing from them
     // (commit-undo-spec §7).
     bool per_section_mixed_english{false};
+    std::optional<CommitExposure> exposure{};
   };
   std::optional<PendingCommitObservation> pending_commit_observation_;
   // (reading, surface) pairs of the last learning observation actually sent,
@@ -1345,6 +1362,7 @@ class TextService final : public ITfTextInputProcessorEx,
     // The commit's own edit has not reached OnEndEdit yet; that one
     // selection change is ours and keeps the window open.
     bool awaiting_commit_edit{true};
+    std::optional<std::string> exposure_observation_id{};
   };
   std::optional<UndoTarget> undo_target_;
 
@@ -1364,11 +1382,19 @@ class TextService final : public ITfTextInputProcessorEx,
     // §7: the last learned (reading, surface) the commit sent, without the
     // automatic punctuation. Absent when it sent none that undo can name.
     std::optional<std::pair<std::string, std::string>> observed;
+    std::optional<std::string> exposure_observation_id{};
   };
   std::optional<CommitUndoTarget> commit_undo_target_;
   // The undo-nameable pair of the commit whose edit session just finished;
   // taken by the CommitUndoTarget recorded after it.
   std::optional<std::pair<std::string, std::string>> last_commit_undo_pair_;
+  std::optional<std::string> last_commit_exposure_id_;
+  struct ReconversionExposureTarget {
+    Microsoft::WRL::ComPtr<ITfRange> range;
+    std::string observation_id;
+    std::string surface;
+  };
+  std::optional<ReconversionExposureTarget> reconversion_exposure_target_;
   // §7: after an undo, the observation it put back. The first commit of that
   // composition sends "undo" for it when it learns a different surface for
   // the same reading. composition_generation_ tells the composition apart.
@@ -1376,6 +1402,7 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string reading;
     std::string surface;
     uint64_t composition_generation{0};
+    std::optional<std::string> exposure_observation_id{};
   };
   std::optional<PendingUndoCorrection> pending_undo_correction_;
   // Counts the compositions this TIP started.
@@ -1513,6 +1540,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // ipc_mtx_; names the pending query for as long as it stands. Unlike
   // ipc_pending_id_, a Host generation change that reissues it keeps it.
   uint64_t ipc_pending_query_token_{0};
+  uint64_t ipc_pending_exposure_generation_{0};
   uint64_t ipc_query_token_seq_{0};  // ipc_mtx_
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
@@ -1913,7 +1941,10 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string reading;
     std::string rejected;
     std::string selected;
+    std::optional<std::string> target_observation_id{};
   };
+  std::optional<std::string> FindReconversionExposureId(ITfContext* context, ITfRange* range,
+                                                        std::string_view surface);
   void FinishReconversionSelection(uint64_t generation, ITfRange* range, bool click, size_t index,
                                    int restore_selection, bool unchanged, HRESULT hr,
                                    const std::optional<ReconversionCorrection>& correction,
@@ -1959,7 +1990,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void AdviseTextEditSink(ITfContext* context);
   void UnadviseTextEditSink();
   HRESULT ApplyClientAction(ITfContext* context, const core::ClientAction& action,
-                            bool& preedit_update_needed, bool& commit_pending);
+                            bool& preedit_update_needed, bool& commit_pending,
+                            std::optional<CommitExposure>* exposure = nullptr);
   HRESULT ApplyInputStateResult(ITfContext* context, core::HandleResult result);
   std::vector<core::Candidate> CoreCandidatesFromCache();
   // M62-E dynamic candidates for `reading` (spec §20.8). Reads the clock at
@@ -2041,7 +2073,11 @@ class TextService final : public ITfTextInputProcessorEx,
   void CancelPendingQueriesForLifecycle();
   void SetCommitContext(ITfContext* context);
   void ClearCommitContext();
-  void PostPendingCommitObservation();
+  std::optional<CommitExposure> CaptureCommitExposure(size_t chosen_index) const noexcept;
+  void InvalidateCandidateExposure();
+  void PostPendingCommitObservation(ITfContext* context = nullptr,
+                                    std::optional<TfEditCookie> edit_cookie = std::nullopt,
+                                    ITfRange* committed_range = nullptr);
   void TrackTypoKey(ITfContext* context, WPARAM key);
   // Consumes the one-key undo window; a plain Backspace in it sends "undo".
   void TrackUndoKey(ITfContext* context, WPARAM key);
@@ -2050,7 +2086,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostCommitCorrection(ITfContext* context, std::string_view kind, std::string reading,
                             std::string rejected_surface,
                             std::optional<std::string> selected_surface,
-                            std::optional<TfEditCookie> edit_cookie = std::nullopt);
+                            std::optional<TfEditCookie> edit_cookie = std::nullopt,
+                            std::optional<std::string> target_observation_id = std::nullopt);
   void PrepareTypoCommit(const std::string& reading);
   void CompleteTypoCommit(std::optional<PendingTypoCommit> pending, bool committed) noexcept;
   void ResetTypoTracking();
@@ -2176,9 +2213,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void DropCarriedInput();
 
   // M6: enqueue a CommitObservation to the IPC worker.
-  void PostCommitObservation(const std::string& reading, const ipc::CandidateField& chosen,
-                             const std::vector<ipc::CandidateField>& shown, bool secure,
-                             bool learning_allowed);
+  std::optional<std::string> PostCommitObservation(
+      const std::string& reading, const ipc::CandidateField& chosen,
+      const std::vector<ipc::CandidateField>& shown, bool secure, bool learning_allowed,
+      std::optional<CommitExposure> exposure = std::nullopt);
   // M10: enqueue a Cancel message to the IPC worker.
   void PostCancel(uint64_t target_request_id);
   // Internal: push an item onto ipc_send_queue_ and notify the worker.

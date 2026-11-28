@@ -985,6 +985,12 @@ BOOL PressSpaceAndDeliver(Harness& h, Deliver&& deliver) {
   return eaten;
 }
 
+struct ResetCandidateExposureTime {
+  ~ResetCandidateExposureTime() {
+    azookey::tsf::CandidateWindow::SetExposureTimeForTest(0);
+  }
+};
+
 class FakeCompositionAttachment {
  public:
   explicit FakeCompositionAttachment(TextServiceHarness& harness) : harness_(harness) {
@@ -1126,6 +1132,13 @@ class DocumentRange final : public FakeRange {
     if (!other || !equal) return E_INVALIDARG;
     const auto* range = static_cast<const DocumentRange*>(other);
     *equal = start == (anchor == TF_ANCHOR_START ? range->start : range->end) ? TRUE : FALSE;
+    return S_OK;
+  }
+  STDMETHODIMP IsEqualEnd(TfEditCookie, ITfRange* other, TfAnchor anchor, BOOL* equal) override {
+    if (!other || !equal) return E_INVALIDARG;
+    const auto* range = static_cast<const DocumentRange*>(other);
+    const LONG endpoint = anchor == TF_ANCHOR_START ? range->start : range->end;
+    *equal = document == range->document && end == endpoint ? TRUE : FALSE;
     return S_OK;
   }
   STDMETHODIMP GetContext(ITfContext** out) override {
@@ -5369,10 +5382,17 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
   std::mutex observed_mtx;
   std::string first_observation_id;
   std::string second_observation_id;
+  std::string first_payload;
+  std::string second_payload;
   std::atomic<bool> first_commit_received{false};
   std::atomic<bool> second_commit_received{false};
 
   TextServiceHarness h;
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(101);
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
   h.service.set_ipc_pipe_name_for_test(pipe_name);
   ASSERT_FALSE(h.service.ipc_client_id_for_test().empty());
 
@@ -5384,7 +5404,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
   host_candidates[0].reading = "かな";
   host_candidates[0].source = "test";
   ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
-    h.service.set_rewritten_cached_candidates_for_test("かな", std::move(host_candidates));
+    h.service.set_rewritten_cached_candidates_for_test("かな", std::move(host_candidates),
+                                                       "resend-exposure");
   }));
   h.service.set_selected_candidate_index_for_test(0);
   {
@@ -5394,6 +5415,11 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
   const auto queued = h.service.last_queued_commit_observation_for_test();
   ASSERT_TRUE(queued.has_value());
   ASSERT_FALSE(queued->observation_id.empty());
+  EXPECT_EQ(queued->shown_at_ms, 101u);
+  EXPECT_EQ(queued->exposure_id, "resend-exposure");
+  ASSERT_TRUE(queued->shown_candidate_indices);
+  EXPECT_EQ(*queued->shown_candidate_indices, std::vector<uint32_t>{0});
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(202);
 
   // First host: accepts the handshake, receives the observation, then dies
   // without replying (kill-before-ACK).
@@ -5417,6 +5443,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
           if (const auto payload = azookey::ipc::ParseCommitObservationRequest(req.payload_json)) {
             std::lock_guard<std::mutex> lock(observed_mtx);
             first_observation_id = payload->observation_id;
+            first_payload = req.payload_json;
             EXPECT_FALSE(payload->secure);
             EXPECT_TRUE(payload->learning_allowed);
           }
@@ -5454,6 +5481,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
           if (const auto payload = azookey::ipc::ParseCommitObservationRequest(req.payload_json)) {
             std::lock_guard<std::mutex> lock(observed_mtx);
             second_observation_id = payload->observation_id;
+            second_payload = req.payload_json;
             EXPECT_FALSE(payload->secure);
             EXPECT_TRUE(payload->learning_allowed);
           }
@@ -5477,6 +5505,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
     // The same key on both connections is what lets the host apply the commit
     // exactly once across the restart.
     EXPECT_EQ(second_observation_id, queued->observation_id);
+    EXPECT_EQ(second_payload, first_payload);
   }
 
   h.service.stop_ipc_worker_for_test();
@@ -8428,6 +8457,11 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedPreservesQueuedCommitWhenInlineSe
 TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetrySucceeds) {
   TextServiceHarness h;
   FakeRange range;
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(404);
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
@@ -8439,8 +8473,9 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
   candidate.reading = "か";
   candidate.source = "test";
   candidates.push_back(candidate);
-  EXPECT_TRUE(PressSpaceAndDeliver(
-      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
+  EXPECT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_cached_candidates_for_test(std::move(candidates), "retry-exposure");
+  }));
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
 
   h.context.request_result = TF_E_LOCKED;
@@ -8451,6 +8486,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
   ASSERT_EQ(h.service.commit_surface_, "蚊");
   EXPECT_TRUE(h.service.has_pending_commit_observation_for_test());
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(505);
 
   h.context.request_result = S_OK;
   h.context.request_session_result = S_OK;
@@ -8467,6 +8503,10 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
   EXPECT_EQ(observation->chosen.surface, "蚊");
   ASSERT_EQ(observation->shown.size(), 1u);
   EXPECT_EQ(observation->shown[0].surface, "蚊");
+  EXPECT_EQ(observation->shown_at_ms, 404u);
+  EXPECT_EQ(observation->exposure_id, "retry-exposure");
+  ASSERT_TRUE(observation->shown_candidate_indices);
+  EXPECT_EQ(*observation->shown_candidate_indices, std::vector<uint32_t>{0});
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, SelectedCommitObservationFailureDoesNotRetryCommittedText) {
@@ -8807,14 +8847,15 @@ TEST(TsfTipOnKeyDownPreeditTest, SystemModifiedKeysPassThroughDuringPreedit) {
 namespace {
 // A plain commit with one host candidate: the shortest path that produces a
 // CommitObservation.
-void CommitOneCandidate(TextServiceHarness& h) {
+void CommitOneCandidate(TextServiceHarness& h, std::optional<std::string> exposure_id = {}) {
   h.service.preedit_kana_ = "かな";
   std::vector<azookey::ipc::CandidateField> host_candidates(1);
   host_candidates[0].reading = "かな";
   host_candidates[0].surface = "仮名";
   host_candidates[0].source = "dictionary";
-  ASSERT_TRUE(PressSpaceAndDeliver(
-      h, [&] { h.service.set_cached_candidates_for_test(std::move(host_candidates)); }));
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_cached_candidates_for_test(std::move(host_candidates), std::move(exposure_id));
+  }));
   h.service.set_selected_candidate_index_for_test(0);
   FakeCompositionAttachment attachment(h);
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
@@ -12778,9 +12819,13 @@ void BindHarnessContext(TextServiceHarness& h) {
 TEST(TsfTipCommitCorrectionTest, BackspaceRightAfterCommitSendsUndoOnce) {
   TextServiceHarness h;
   PrepareCorrectionHarness(h);
-  CommitOneCandidate(h);
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(99);
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  CommitOneCandidate(h, "undo-exposure");
   const auto commit = h.service.last_queued_commit_observation_for_test();
   ASSERT_TRUE(commit);
+  ASSERT_EQ(commit->shown_at_ms, 99u);
 
   // TSF calls OnKeyDown only for keys the probe claims; Backspace goes to the app.
   EXPECT_FALSE(h.TestPress(VK_BACK));
@@ -12796,6 +12841,7 @@ TEST(TsfTipCommitCorrectionTest, BackspaceRightAfterCommitSendsUndoOnce) {
   // it as a resend of that commit).
   EXPECT_FALSE(corrections[0].observation_id.empty());
   EXPECT_NE(corrections[0].observation_id, commit->observation_id);
+  EXPECT_EQ(corrections[0].target_observation_id, commit->observation_id);
 
   // The window was the first key only.
   EXPECT_FALSE(h.TestPress(VK_BACK));
@@ -15609,12 +15655,12 @@ void StartWindowWait(DocumentPreeditHarness& h, bool legacy = false) {
 }
 
 // The window answer arrives and its candidates-ready notification runs.
-void AnswerWindow(DocumentPreeditHarness& h) {
+void AnswerWindow(DocumentPreeditHarness& h, std::optional<std::string> exposure_id = {}) {
   std::vector<azookey::ipc::CandidateField> candidates(3);
   candidates[0] = {"蚊", "か", 1.0, "dictionary"};
   candidates[1] = {"下", "か", 0.9, "dictionary"};
   candidates[2] = {"課", "か", 0.8, "dictionary"};
-  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.set_cached_candidates_for_test(std::move(candidates), std::move(exposure_id));
   h.service.process_candidates_ready_for_test();
 }
 
@@ -15686,12 +15732,13 @@ TEST(TsfTipWindowWaitTest, NumpadDigitCommitsThatCandidate) {
 namespace {
 
 // The window answer with `count` candidates 候補0, 候補1, ...
-void AnswerWindowWith(DocumentPreeditHarness& h, int count) {
+void AnswerWindowWith(DocumentPreeditHarness& h, int count,
+                      std::optional<std::string> exposure_id = {}) {
   std::vector<azookey::ipc::CandidateField> candidates(static_cast<size_t>(count));
   for (int i = 0; i < count; ++i)
     candidates[static_cast<size_t>(i)] = {"候補" + std::to_string(i), "か", 1.0 - 0.01 * i,
                                           "dictionary"};
-  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.set_cached_candidates_for_test(std::move(candidates), std::move(exposure_id));
   h.service.process_candidates_ready_for_test();
 }
 
@@ -15811,6 +15858,209 @@ TEST(TsfTipCandidatePageTest, ClickOnTheSecondPageCommitsThatCandidate) {
   }
 }
 
+TEST(TsfTipCandidateExposureTest, CommitKeepsTheDrawnPageBeforeClosingTheWindow) {
+  using azookey::tsf::CandidateWindow;
+  ResetCandidateExposureTime reset_exposure_time;
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ASSERT_TRUE(h.service.create_candidate_window_for_test());
+    StartWindowWait(h, legacy);
+    CandidateWindow::SetExposureTimeForTest(100);
+    AnswerWindowWith(h, 20, "paged-exposure");
+    const auto& window = h.service.candidate_window_for_test();
+    ASSERT_TRUE(window.IsVisible());
+    ASSERT_EQ(window.GetFirstVisibleRow(), 0);
+
+    CandidateWindow::SetExposureTimeForTest(200);
+    ASSERT_TRUE(h.Press(VK_NEXT));
+    const int first = window.GetFirstVisibleRow();
+    const int count = window.GetDrawnRowCount();
+    ASSERT_GE(first, 9);
+    ASSERT_GT(count, 0);
+    const int chosen = legacy ? first : h.service.candidate_selected_for_test();
+    ASSERT_GE(chosen, first);
+    ASSERT_LT(chosen, first + count);
+    std::vector<uint32_t> drawn;
+    for (int row = first; row < first + count; ++row)
+      drawn.push_back(static_cast<uint32_t>(row));
+
+    CandidateWindow::SetExposureTimeForTest(300);
+    if (legacy)
+      h.service.click_candidate_for_test(chosen);
+    else
+      ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_FALSE(window.IsVisible());
+    EXPECT_EQ(h.context.document->text, Numbered(chosen));
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_EQ(observation->shown_at_ms, 200u);
+    EXPECT_EQ(observation->exposure_id, "paged-exposure");
+    ASSERT_TRUE(observation->shown_candidate_indices);
+    EXPECT_EQ(*observation->shown_candidate_indices, drawn);
+    EXPECT_EQ(observation->shown.size(), 20u);
+  }
+}
+
+TEST(TsfTipCandidateExposureTest, LegacyResponseAndRevokedExposureKeepOrdinaryLearning) {
+  enum class Scenario { OlderHost, NoNativeFrame, FocusLoss, LearningDenied, Secure };
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
+  for (const Scenario scenario : {Scenario::OlderHost, Scenario::NoNativeFrame,
+                                 Scenario::FocusLoss, Scenario::LearningDenied, Scenario::Secure}) {
+    SCOPED_TRACE(static_cast<int>(scenario));
+    DocumentPreeditHarness h;
+    if (scenario != Scenario::NoNativeFrame)
+      ASSERT_TRUE(h.service.create_candidate_window_for_test());
+    StartWindowWait(h);
+    AnswerWindow(h, scenario == Scenario::OlderHost ? std::nullopt
+                                                    : std::optional<std::string>("exposure"));
+    ASSERT_EQ(h.service.candidate_window_for_test().IsVisible(),
+              scenario != Scenario::NoNativeFrame);
+    if (scenario == Scenario::FocusLoss) {
+      ASSERT_EQ(h.service.OnKillThreadFocus(), S_OK);
+      ASSERT_EQ(h.service.OnSetThreadFocus(), S_OK);
+    } else if (scenario == Scenario::LearningDenied || scenario == Scenario::Secure) {
+      h.service.set_privacy_settings_for_test(
+          scenario == Scenario::LearningDenied ? R"({"privacy":{"mode":"private"}})"
+                                               : R"({"privacy":{"mode":"secure"}})");
+      ASSERT_FALSE(h.service.resolve_learning_allowed_for_test(&h.context));
+      UseLearningApp(h);
+      ASSERT_TRUE(h.service.resolve_learning_allowed_for_test(&h.context));
+    }
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.context.document->text, L"蚊");
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_FALSE(observation->shown_at_ms);
+    EXPECT_FALSE(observation->exposure_id);
+    EXPECT_FALSE(observation->shown_candidate_indices);
+    EXPECT_EQ(observation->shown.size(), 3u);
+  }
+}
+
+TEST(TsfTipCandidateExposureTest, WindowQueryResponseCarriesExposureThroughTheCommit) {
+  using namespace azookey::ipc;
+  TextServiceHarness token_guard;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-exposure-test-" +
+                                std::to_string(GetCurrentProcessId());
+  std::mutex observation_mutex;
+  std::optional<CommitObservationRequest> observation;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      QueryCandidatesResponse candidates;
+      if (const auto query = ParseQueryCandidatesRequest(request.payload_json);
+          query && !query->live && query->reading == "か") {
+        candidates.candidates = {{"蚊", "か", 1.0, "dictionary"},
+                                 {"課", "か", 0.8, "dictionary"}};
+        candidates.exposure_id = "wire-exposure";
+      }
+      response.payload_json = BuildQueryCandidatesResponse(candidates);
+      return response;
+    }
+    if (request.type == MessageType::CommitObservation) {
+      const std::lock_guard<std::mutex> lock(observation_mutex);
+      observation = ParseCommitObservationRequest(request.payload_json);
+      response.payload_json = BuildCommitObservationResponse({true});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(123);
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.service.create_candidate_window_for_test());
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  StartWindowWait(h);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        h.service.process_candidates_ready_for_test();
+        return h.service.candidate_window_for_test().IsVisible();
+      },
+      std::chrono::seconds(5)));
+  const int count = h.service.candidate_window_for_test().GetDrawnRowCount();
+  ASSERT_GE(count, 1);
+  ASSERT_LE(count, 2);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        const std::lock_guard<std::mutex> lock(observation_mutex);
+        return observation.has_value();
+      },
+      std::chrono::seconds(5)));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->chosen.surface, "蚊");
+  EXPECT_EQ(observation->shown_at_ms, 123u);
+  EXPECT_EQ(observation->exposure_id, "wire-exposure");
+  ASSERT_TRUE(observation->shown_candidate_indices);
+  std::vector<uint32_t> drawn{0};
+  if (count == 2) drawn.push_back(1);
+  EXPECT_EQ(*observation->shown_candidate_indices, drawn);
+}
+
+TEST(TsfTipCandidateExposureTest, ReconversionNamesOnlyTheExactCommittedRange) {
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
+  for (const bool same_range : {true, false}) {
+    SCOPED_TRACE(same_range);
+    DocumentPreeditHarness h;
+    ASSERT_TRUE(h.service.create_candidate_window_for_test());
+    h.service.set_text_edit_context_for_test(&h.context);
+    h.service.set_commit_correction_supported_for_test(true);
+    // The earlier identical text must not acquire the observation of the new commit.
+    h.context.document->text = L"蚊";
+    h.context.document->start = 1;
+    h.context.document->end = 1;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    AnswerWindow(h, "reconversion-exposure");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.context.document->text, L"蚊蚊");
+    const auto commit = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(commit);
+    ASSERT_EQ(commit->exposure_id, "reconversion-exposure");
+
+    const LONG start = same_range ? 1 : 0;
+    h.context.document->start = start;
+    h.context.document->end = start + 1;
+    Microsoft::WRL::ComPtr<ITfRange> range;
+    range.Attach(new DocumentRange(h.context.document, start, start + 1, &h.context));
+    h.service.set_reconversion_cache_for_test(&h.context, L"蚊", {L"蚊", L"課"}, "か");
+    Microsoft::WRL::ComPtr<IUnknown> function;
+    ASSERT_EQ(h.service.GetFunction(GUID_NULL, IID_ITfFnReconversion, function.GetAddressOf()), S_OK);
+    Microsoft::WRL::ComPtr<ITfFnReconversion> reconversion;
+    ASSERT_EQ(function.As(&reconversion), S_OK);
+    ASSERT_EQ(reconversion->Reconvert(range.Get()), S_OK);
+    ASSERT_TRUE(h.service.has_reconversion_ui_for_test());
+    ASSERT_TRUE(h.Press(VK_DOWN));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+
+    const auto corrections = h.service.queued_corrections_for_test();
+    ASSERT_EQ(corrections.size(), 1u);
+    EXPECT_EQ(corrections[0].kind, "reconvert");
+    EXPECT_EQ(corrections[0].rejected_surface, "蚊");
+    EXPECT_EQ(corrections[0].selected_surface, "課");
+    if (same_range)
+      EXPECT_EQ(corrections[0].target_observation_id, commit->observation_id);
+    else
+      EXPECT_FALSE(corrections[0].target_observation_id);
+  }
+}
+
 namespace {
 
 // 96 DPI, and a work area too short below the anchor for the window.
@@ -15844,6 +16094,42 @@ RECT OpenWindowAndMeasure(DocumentPreeditHarness& h, bool legacy) {
 }
 
 }  // namespace
+
+TEST(TsfTipCandidateExposureTest, LocalRowsDoNotChangeHostResponseIndices) {
+  using azookey::tsf::CandidateWindow;
+  const ScopedFlipGeometry geometry({0, 0, 1920, 1080});
+  ResetCandidateExposureTime reset_exposure_time;
+  CandidateWindow::SetExposureTimeForTest(100);
+  for (const bool choose_local : {false, true}) {
+    SCOPED_TRACE(choose_local);
+    TextServiceHarness h;
+    ASSERT_TRUE(h.service.create_candidate_window_for_test());
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    h.service.preedit_kana_ = "きょう";
+    h.service.set_local_time_for_test(kDynamicCandidateTime);
+    h.service.set_date_time_rewriter_enabled_for_test(true);
+    ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+      h.service.set_rewritten_cached_candidates_for_test("きょう", KyouHostCandidates(),
+                                                         "local-row-exposure");
+    }));
+    ASSERT_TRUE(h.service.candidate_window_for_test().IsVisible());
+    ASSERT_EQ(h.service.candidate_window_for_test().GetDrawnRowCount(), 8);
+    h.service.set_selected_candidate_index_for_test(choose_local ? 1 : 7);
+    FakeCompositionAttachment attachment(h);
+    ASSERT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    if (choose_local) {
+      EXPECT_FALSE(observation);
+    } else {
+      ASSERT_TRUE(observation);
+      EXPECT_EQ(observation->chosen.surface, "京");
+      EXPECT_EQ(observation->exposure_id, "local-row-exposure");
+      ASSERT_TRUE(observation->shown_candidate_indices);
+      EXPECT_EQ(*observation->shown_candidate_indices, (std::vector<uint32_t>{0, 1}));
+    }
+  }
+}
 
 // DEV-2104 (native-ui-spec §4.1): flipped above a composition line taller than
 // caret_gap, the candidate window's bottom meets the composition's top, as the
@@ -20133,18 +20419,20 @@ std::vector<azookey::ipc::CandidateField> KanaCandidates() {
 // Space and the window's answer, on the core path and on the legacy one (where
 // Space keeps the per-key query, so PressSpaceAndDeliver's check does not hold).
 void OpenCandidateWindow(DocumentPreeditHarness& h,
-                         std::vector<azookey::ipc::CandidateField> candidates) {
+                         std::vector<azookey::ipc::CandidateField> candidates,
+                         std::optional<std::string> exposure_id = {}) {
   ASSERT_TRUE(h.Press(VK_SPACE));
-  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.set_cached_candidates_for_test(std::move(candidates), std::move(exposure_id));
   h.service.show_candidate_window_from_cache_for_test();
   ASSERT_TRUE(h.service.candidate_window_showing_for_test());
 }
 
 // Types かな, opens the window and commits its candidate `index` with Enter.
-void CommitKanaCandidate(DocumentPreeditHarness& h, int index = 0) {
+void CommitKanaCandidate(DocumentPreeditHarness& h, int index = 0,
+                         std::optional<std::string> exposure_id = {}) {
   TypeTypoRomaji(h, "KANA");
   ASSERT_EQ(h.service.preedit_kana_, "かな");
-  OpenCandidateWindow(h, KanaCandidates());
+  OpenCandidateWindow(h, KanaCandidates(), std::move(exposure_id));
   for (int i = 0; i < index; ++i) ASSERT_TRUE(h.Press(VK_DOWN));
   ASSERT_TRUE(h.Press(VK_RETURN));
   ASSERT_TRUE(h.service.preedit_kana_.empty());
@@ -20511,11 +20799,17 @@ TEST(TsfTipCommitUndoTest, TypedRomajiComesBack) {
 // §7: a different surface for the same reading, chosen as the first commit of
 // the put-back input, sends "undo" for the commit taken back, once.
 TEST(TsfTipCommitUndoTest, ChoosingAnotherSurfaceSendsUndoForTheCommitTakenBack) {
+  ResetCandidateExposureTime reset_exposure_time;
+  azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
   for (const bool notify : {false, true}) {
     SCOPED_TRACE(notify);
     DocumentPreeditHarness h;
     ConfigureUndoHarness(h, /*legacy=*/false, notify);
-    CommitKanaCandidate(h);
+    ASSERT_TRUE(h.service.create_candidate_window_for_test());
+    CommitKanaCandidate(h, 0, "restored-commit-exposure");
+    const auto commit = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(commit);
+    ASSERT_EQ(commit->exposure_id, "restored-commit-exposure");
     ASSERT_TRUE(PressCtrlBackspace(h));
     ASSERT_TRUE(h.service.pending_undo_correction_for_test());
     ASSERT_EQ(QueuedCorrections(h), 0u);
@@ -20528,6 +20822,7 @@ TEST(TsfTipCommitUndoTest, ChoosingAnotherSurfaceSendsUndoForTheCommitTakenBack)
     EXPECT_EQ(corrections[0].kind, "undo");
     EXPECT_EQ(corrections[0].reading, "かな");
     EXPECT_EQ(corrections[0].rejected_surface, "仮名");
+    EXPECT_EQ(corrections[0].target_observation_id, commit->observation_id);
     EXPECT_FALSE(corrections[0].selected_surface.has_value());
     // The commit itself is observed as usual.
     const auto observation = h.service.last_queued_commit_observation_for_test();

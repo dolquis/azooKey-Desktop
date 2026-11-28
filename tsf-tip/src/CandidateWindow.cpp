@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <iterator>
@@ -111,6 +112,7 @@ HMODULE GetTipModuleHandle() {
 UINT g_monitor_dpi_for_test = 0;
 CandidateWindow::RenderFailureForTest g_render_failure_for_test =
     CandidateWindow::RenderFailureForTest::None;
+uint64_t g_exposure_time_for_test = 0;
 int g_client_area_animation_for_test = -1;
 POINT g_last_monitor_point_for_test{0, 0};
 RECT g_work_area_for_test{0, 0, 0, 0};
@@ -460,6 +462,10 @@ void CandidateWindow::SetRenderFailureForTest(RenderFailureForTest failure) {
   g_render_failure_for_test = failure;
 }
 
+void CandidateWindow::SetExposureTimeForTest(uint64_t shown_at_ms) {
+  g_exposure_time_for_test = shown_at_ms;
+}
+
 bool CandidateWindow::RenderForTest() {
   RECT client_rc{};
   return hwnd_ && GetClientRect(hwnd_, &client_rc) && Render(client_rc.right, client_rc.bottom);
@@ -639,6 +645,17 @@ void CandidateWindow::Show(RECT anchor, const std::vector<CandidateViewItem>& it
   // The window draws one mode at a time (native-ui-spec §4.1).
   mode_ = Mode::Candidate;
   predictions_.clear();
+  if (native_candidate_exposure_ && &items != &items_) {
+    const int first = native_candidate_exposure_->first_row;
+    const int end = first + native_candidate_exposure_->row_count;
+    if (static_cast<std::size_t>(end) > items.size() ||
+        !std::equal(items_.begin() + first, items_.begin() + end, items.begin() + first,
+                    [](const CandidateViewItem& left, const CandidateViewItem& right) {
+                      return left.surface == right.surface && left.description == right.description;
+                    })) {
+      InvalidateNativeCandidateExposure();
+    }
+  }
   items_ = items;
   notice_ = std::move(notice);
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
@@ -727,6 +744,7 @@ void CandidateWindow::ShowPredictions(RECT anchor, const std::vector<std::wstrin
   // The window draws one mode at a time (native-ui-spec §4.1); the candidate
   // rows are dropped so no key or click can reach them while predictions show.
   mode_ = Mode::Prediction;
+  InvalidateNativeCandidateExposure();
   items_.clear();
   selected_idx_ = 0;
   first_visible_ = 0;
@@ -762,6 +780,7 @@ void CandidateWindow::PresentAt(POINT pt, RECT work_area, int width, int height,
   const int placed_width = placement.right - placement.left;
   const int placed_height = placement.bottom - placement.top;
   const bool appearing = !IsWindowVisible(hwnd_);
+  if (appearing) InvalidateNativeCandidateExposure();
   showing_ = true;
   // Without a committed frame the window would be invisible yet still take
   // clicks, so it stays hidden until a later Show or state change draws one.
@@ -770,10 +789,15 @@ void CandidateWindow::PresentAt(POINT pt, RECT work_area, int width, int height,
     if (appearing) StartAppearance();
     // Marked before it shows, so an observer never sees it visible without a mode.
     UpdateModeProperty(true);
-    SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width, placed_height,
-                 SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    if (SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width, placed_height,
+                     SWP_SHOWWINDOW | SWP_NOACTIVATE)) {
+      RecordNativeCandidateExposure();
+    } else {
+      InvalidateNativeCandidateExposure();
+    }
   } else {
     render_failed_ = true;
+    InvalidateNativeCandidateExposure();
     HideDetails();
     ShowWindow(hwnd_, SW_HIDE);
     UpdateModeProperty(false);
@@ -783,6 +807,7 @@ void CandidateWindow::PresentAt(POINT pt, RECT work_area, int width, int height,
 }
 
 void CandidateWindow::Hide() {
+  InvalidateNativeCandidateExposure();
   HideDetails();
   render_failed_ = false;
   if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
@@ -1096,6 +1121,40 @@ void CandidateWindow::CancelScheduledCandidatesReady() {
 
 bool CandidateWindow::IsVisible() const { return hwnd_ && IsWindowVisible(hwnd_); }
 
+std::optional<CandidateWindow::NativeCandidateExposure>
+CandidateWindow::GetNativeCandidateExposure() const {
+  if (mode_ != Mode::Candidate || !IsVisible()) return std::nullopt;
+  return native_candidate_exposure_;
+}
+
+void CandidateWindow::RecordNativeCandidateExposure() {
+  const int row_count = DrawnRowCount();
+  if (mode_ != Mode::Candidate || !IsVisible() || row_count <= 0) {
+    InvalidateNativeCandidateExposure();
+    return;
+  }
+  if (native_candidate_exposure_ && native_candidate_exposure_->first_row == first_visible_ &&
+      native_candidate_exposure_->row_count == row_count) {
+    return;
+  }
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_exposure_time_for_test != 0) {
+    native_candidate_exposure_ =
+        NativeCandidateExposure{g_exposure_time_for_test, first_visible_, row_count};
+    return;
+  }
+#endif
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  if (now <= 0) {
+    InvalidateNativeCandidateExposure();
+    return;
+  }
+  native_candidate_exposure_ =
+      NativeCandidateExposure{static_cast<uint64_t>(now), first_visible_, row_count};
+}
+
 void CandidateWindow::MoveSelection(int delta) {
   if (items_.empty()) return;
   int n = static_cast<int>(items_.size());
@@ -1119,14 +1178,19 @@ void CandidateWindow::Repaint() {
     return;
   }
   RECT client_rc{};
-  if (!IsVisible() || !GetClientRect(hwnd_, &client_rc)) return;
+  if (!IsVisible() || !GetClientRect(hwnd_, &client_rc)) {
+    InvalidateNativeCandidateExposure();
+    return;
+  }
   if (Render(client_rc.right, client_rc.bottom)) {
+    RecordNativeCandidateExposure();
     if (on_render_result_) on_render_result_(true, on_render_result_context_);
     return;
   }
   // The surface keeps the previous frame, which no longer matches the click
   // regions; hide the window instead of taking clicks against it.
   render_failed_ = true;
+  InvalidateNativeCandidateExposure();
   HideDetails();
   ShowWindow(hwnd_, SW_HIDE);
   UpdateModeProperty(false);
@@ -1541,6 +1605,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       return 0;
 
     case WM_DESTROY:
+      InvalidateNativeCandidateExposure();
       HideDetails();
       UpdateModeProperty(false);
       // The device stack is bound to this HWND; a later Create makes a new one.

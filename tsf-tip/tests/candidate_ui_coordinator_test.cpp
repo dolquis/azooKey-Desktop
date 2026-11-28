@@ -885,6 +885,21 @@ std::vector<azookey::tsf::CandidateViewItem> NumberedItems(int count) {
   return items;
 }
 
+class ScopedNativeExposureTestEnvironment {
+ public:
+  ScopedNativeExposureTestEnvironment() {
+    azookey::tsf::CandidateWindow::SetMonitorDpiForTest(96);
+    azookey::tsf::CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 1080});
+  }
+  ~ScopedNativeExposureTestEnvironment() {
+    azookey::tsf::CandidateWindow::SetRenderFailureForTest(
+        azookey::tsf::CandidateWindow::RenderFailureForTest::None);
+    azookey::tsf::CandidateWindow::SetExposureTimeForTest(0);
+    azookey::tsf::CandidateWindow::SetWorkAreaForTest({});
+    azookey::tsf::CandidateWindow::SetMonitorDpiForTest(0);
+  }
+};
+
 std::vector<UINT> PageIndex(ITfCandidateListUIElement* candidates) {
   UINT pages = 0;
   if (FAILED(candidates->GetPageIndex(nullptr, 0, &pages))) return {};
@@ -907,6 +922,99 @@ DWORD UpdatedFlags(ITfCandidateListUIElement* candidates) {
 }
 
 }  // namespace
+
+TEST(TsfTipCandidateUiCoordinatorTest, NativeExposureUsesFirstDrawForEachVisibleRange) {
+  using azookey::tsf::CandidateWindow;
+  const ScopedNativeExposureTestEnvironment environment;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = TRUE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const POINT anchor{10, 20};
+  auto items = NumberedItems(12);
+
+  CandidateWindow::SetExposureTimeForTest(100);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, anchor, items, 0), S_OK);
+  auto exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 100u);
+  EXPECT_EQ(exposure->first_row, 0);
+  EXPECT_EQ(exposure->row_count, 9);
+
+  CandidateWindow::SetExposureTimeForTest(200);
+  ASSERT_EQ(coordinator.SetSelection(1), S_OK);
+  exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 100u);
+
+  // Changing an undrawn row and repainting does not break exposure.
+  items[10].surface = L"次ページの候補";
+  ASSERT_EQ(coordinator.UpdateUI(items, 1), S_OK);
+  exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 100u);
+
+  ASSERT_EQ(coordinator.SetSelection(9), S_OK);
+  exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 200u);
+  EXPECT_EQ(exposure->first_row, 9);
+  EXPECT_EQ(exposure->row_count, 3);
+
+  CandidateWindow::SetExposureTimeForTest(300);
+  items[10].surface = L"更新した候補";
+  ASSERT_EQ(coordinator.UpdateUI(items, 9), S_OK);
+  exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 300u);
+
+  ASSERT_EQ(coordinator.EndUI(), S_OK);
+  EXPECT_FALSE(coordinator.GetNativeCandidateExposure());
+  CandidateWindow::SetExposureTimeForTest(400);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, anchor, items, 9), S_OK);
+  exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 400u);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, NativeExposureRequiresAVisibleNativeCandidateFrame) {
+  using azookey::tsf::CandidateWindow;
+  const ScopedNativeExposureTestEnvironment environment;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const POINT anchor{10, 20};
+  const auto items = SampleItems();
+
+  CandidateWindow::SetExposureTimeForTest(100);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, anchor, items, 0), S_OK);
+  ASSERT_NE(thread_mgr.element, nullptr);
+  EXPECT_FALSE(coordinator.GetNativeCandidateExposure());
+  ASSERT_EQ(thread_mgr.element->Show(TRUE), S_OK);
+  ASSERT_TRUE(coordinator.GetNativeCandidateExposure());
+  ASSERT_EQ(thread_mgr.element->Show(FALSE), S_OK);
+  EXPECT_FALSE(coordinator.GetNativeCandidateExposure());
+
+  CandidateWindow::SetExposureTimeForTest(200);
+  ASSERT_EQ(thread_mgr.element->Show(TRUE), S_OK);
+  CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::Draw);
+  ASSERT_EQ(coordinator.SetSelection(1), S_OK);
+  EXPECT_FALSE(coordinator.GetNativeCandidateExposure());
+  CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::None);
+  CandidateWindow::SetExposureTimeForTest(300);
+  ASSERT_EQ(coordinator.SetSelection(0), S_OK);
+  const auto exposure = coordinator.GetNativeCandidateExposure();
+  ASSERT_TRUE(exposure);
+  EXPECT_EQ(exposure->shown_at_ms, 300u);
+  coordinator.InvalidateNativeCandidateExposure();
+  EXPECT_FALSE(coordinator.GetNativeCandidateExposure());
+
+  ASSERT_EQ(coordinator.EndUI(), S_OK);
+  ASSERT_TRUE(coordinator.ShowPredictions(RECT{10, 20, 10, 20}, {L"予測"}));
+  ASSERT_TRUE(coordinator.IsShowingPredictions());
+  EXPECT_FALSE(coordinator.GetNativeCandidateExposure());
+}
 
 // M68 (tsf-deep-integration-spec §2.3): nine candidates to a page.
 TEST(TsfTipCandidateUiCoordinatorTest, UiElementPagesAreNineCandidatesAndFollowTheSelection) {

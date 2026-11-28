@@ -3803,6 +3803,58 @@ TEST_F(DispatcherTest, CommitCorrectionReconvertRecordsBothAndDeduplicatesResend
   EXPECT_EQ(rejected->at("").reject_count, 1u);
 }
 
+TEST_F(DispatcherTest, ExposureMetadataPreservesCommitAndCorrectionLearning) {
+  EnableEventPrivacy(dispatcher);
+  // Exercise the wire contract directly so the same payloads can be read by an older Host.
+  const auto acknowledged = [&](uint64_t request_id, ipc::MessageType type,
+                                const std::string& payload) {
+    const auto response = dispatcher.Dispatch(MakeReq(request_id, type, payload));
+    EXPECT_TRUE(response.has_value());
+    if (!response) return false;
+    const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+    EXPECT_TRUE(parsed.has_value());
+    return parsed && parsed->ok;
+  };
+  const std::string commit = R"({
+    "reading":"かんじ","chosen":{"reading":"かんじ","surface":"幹事"},
+    "shown":[{"reading":"かんじ","surface":"幹事"},{"reading":"かんじ","surface":"漢字"}],
+    "observation_id":"tip-1:9","timestamp_ms":1700000000500,
+    "secure":false,"learning_allowed":true,
+    "exposure_id":"response-42","shown_at_ms":1700000000000,"shown_candidate_indices":[0,1]
+  })";
+  EXPECT_TRUE(acknowledged(51, ipc::MessageType::CommitObservation, commit));
+  EXPECT_TRUE(acknowledged(52, ipc::MessageType::CommitObservation, commit));
+  const auto* committed = store.Rows("かんじ", "幹事");
+  ASSERT_NE(committed, nullptr);
+  ASSERT_EQ(committed->count(""), 1u);
+  EXPECT_EQ(committed->at("").commit_count, 1u);
+
+  const std::string correction = R"({
+    "kind":"reconvert","reading":"かんじ","rejected_surface":"幹事","selected_surface":"漢字",
+    "observation_id":"tip-1:10","target_observation_id":"tip-1:9",
+    "secure":false,"learning_allowed":true
+  })";
+  EXPECT_TRUE(acknowledged(53, ipc::MessageType::CommitCorrection, correction));
+  EXPECT_TRUE(acknowledged(54, ipc::MessageType::CommitCorrection, correction));
+  const auto* rejected = store.Rows("かんじ", "幹事");
+  const auto* accepted = store.Rows("かんじ", "漢字");
+  ASSERT_NE(rejected, nullptr);
+  ASSERT_NE(accepted, nullptr);
+  ASSERT_EQ(rejected->count(""), 1u);
+  ASSERT_EQ(accepted->count(""), 1u);
+  EXPECT_EQ(rejected->at("").reject_count, 1u);
+  EXPECT_EQ(accepted->at("").accept_count, 1u);
+
+  EXPECT_FALSE(acknowledged(55, ipc::MessageType::CommitObservation, R"({
+    "reading":"にほん","chosen":{"reading":"にほん","surface":"日本"},
+    "shown":[{"reading":"にほん","surface":"日本"}],
+    "observation_id":"tip-1:11","timestamp_ms":1700000000500,
+    "secure":true,"learning_allowed":true,
+    "exposure_id":"response-43","shown_at_ms":1700000000000,"shown_candidate_indices":[0]
+  })"));
+  EXPECT_EQ(store.Rows("にほん", "日本"), nullptr);
+}
+
 TEST_F(DispatcherTest, CommitCorrectionIsDeniedWithoutEventPrivacyOrWithAMismatchedKind) {
   ipc::CommitCorrectionRequest request;
   request.kind = std::string(ipc::kCorrectionKindUndo);

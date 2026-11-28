@@ -24,7 +24,8 @@ def result():
         "n_best": 5, "max_new_tokens": 0, "prompt_template_version": 0,
         "thread_count": 1, "batch_size": 1, "typo_correction_mode": "off",
         "learning_state": "empty", "dictionary_bundle_sha256": "none", "lattice": "off",
-        "nll": "off", "eval_source": "bundled", "profile_sha256": "none",
+        "lattice_with_model": "off", "nll": "off", "nll_breaker": "product",
+        "first_clause_probe": "off", "eval_source": "bundled", "profile_sha256": "none",
         "category_filter": "all",
         "eval_dataset_sha256": "dataset-hash", "build_id": "current-commit",
     }, "summary": {key: 0.5 for key in QUALITY.METRICS},
@@ -88,6 +89,22 @@ class QualityBenchTests(unittest.TestCase):
     def test_result_without_source_or_profile_is_bundled_without_profile(self):
         # Spec section 14.1: results kept before M74 are bundled-data runs without a profile.
         for key, other in (("eval_source", "personal"), ("profile_sha256", "a" * 64)):
+            with self.subTest(key=key):
+                current = result()
+                baseline = copy.deepcopy(current)
+                del baseline["config"][key]
+                self.write_baseline(baseline)
+                self.assertEqual(QUALITY.baseline_status(current, self.baseline)[0],
+                                 "compatible")
+                current["config"][key] = other
+                state, reason, _ = QUALITY.baseline_status(current, self.baseline)
+                self.assertEqual((state, reason), ("incompatible", f"config differs: {key}"))
+
+    def test_result_without_stage_two_or_probe_keys_takes_their_defaults(self):
+        # Spec section 14.1: results kept before DEV-2102 ran without lattice stage 2 and the
+        # first-clause probe, and with the product NLL breaker.
+        for key, other in (("lattice_with_model", "k=2;band=best"),
+                           ("nll_breaker", "per_request"), ("first_clause_probe", "on")):
             with self.subTest(key=key):
                 current = result()
                 baseline = copy.deepcopy(current)

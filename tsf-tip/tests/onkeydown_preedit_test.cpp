@@ -986,9 +986,7 @@ BOOL PressSpaceAndDeliver(Harness& h, Deliver&& deliver) {
 }
 
 struct ResetCandidateExposureTime {
-  ~ResetCandidateExposureTime() {
-    azookey::tsf::CandidateWindow::SetExposureTimeForTest(0);
-  }
+  ~ResetCandidateExposureTime() { azookey::tsf::CandidateWindow::SetExposureTimeForTest(0); }
 };
 
 class FakeCompositionAttachment {
@@ -15882,8 +15880,7 @@ TEST(TsfTipCandidateExposureTest, CommitKeepsTheDrawnPageBeforeClosingTheWindow)
     ASSERT_GE(chosen, first);
     ASSERT_LT(chosen, first + count);
     std::vector<uint32_t> drawn;
-    for (int row = first; row < first + count; ++row)
-      drawn.push_back(static_cast<uint32_t>(row));
+    for (int row = first; row < first + count; ++row) drawn.push_back(static_cast<uint32_t>(row));
 
     CandidateWindow::SetExposureTimeForTest(300);
     if (legacy)
@@ -15906,24 +15903,24 @@ TEST(TsfTipCandidateExposureTest, LegacyResponseAndRevokedExposureKeepOrdinaryLe
   enum class Scenario { OlderHost, NoNativeFrame, FocusLoss, LearningDenied, Secure };
   ResetCandidateExposureTime reset_exposure_time;
   azookey::tsf::CandidateWindow::SetExposureTimeForTest(100);
-  for (const Scenario scenario : {Scenario::OlderHost, Scenario::NoNativeFrame,
-                                 Scenario::FocusLoss, Scenario::LearningDenied, Scenario::Secure}) {
+  for (const Scenario scenario : {Scenario::OlderHost, Scenario::NoNativeFrame, Scenario::FocusLoss,
+                                  Scenario::LearningDenied, Scenario::Secure}) {
     SCOPED_TRACE(static_cast<int>(scenario));
     DocumentPreeditHarness h;
     if (scenario != Scenario::NoNativeFrame)
       ASSERT_TRUE(h.service.create_candidate_window_for_test());
     StartWindowWait(h);
-    AnswerWindow(h, scenario == Scenario::OlderHost ? std::nullopt
-                                                    : std::optional<std::string>("exposure"));
+    AnswerWindow(
+        h, scenario == Scenario::OlderHost ? std::nullopt : std::optional<std::string>("exposure"));
     ASSERT_EQ(h.service.candidate_window_for_test().IsVisible(),
               scenario != Scenario::NoNativeFrame);
     if (scenario == Scenario::FocusLoss) {
       ASSERT_EQ(h.service.OnKillThreadFocus(), S_OK);
       ASSERT_EQ(h.service.OnSetThreadFocus(), S_OK);
     } else if (scenario == Scenario::LearningDenied || scenario == Scenario::Secure) {
-      h.service.set_privacy_settings_for_test(
-          scenario == Scenario::LearningDenied ? R"({"privacy":{"mode":"private"}})"
-                                               : R"({"privacy":{"mode":"secure"}})");
+      h.service.set_privacy_settings_for_test(scenario == Scenario::LearningDenied
+                                                  ? R"({"privacy":{"mode":"private"}})"
+                                                  : R"({"privacy":{"mode":"secure"}})");
       ASSERT_FALSE(h.service.resolve_learning_allowed_for_test(&h.context));
       UseLearningApp(h);
       ASSERT_TRUE(h.service.resolve_learning_allowed_for_test(&h.context));
@@ -15942,8 +15939,8 @@ TEST(TsfTipCandidateExposureTest, LegacyResponseAndRevokedExposureKeepOrdinaryLe
 TEST(TsfTipCandidateExposureTest, WindowQueryResponseCarriesExposureThroughTheCommit) {
   using namespace azookey::ipc;
   TextServiceHarness token_guard;
-  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-exposure-test-" +
-                                std::to_string(GetCurrentProcessId());
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-exposure-test-" + std::to_string(GetCurrentProcessId());
   std::mutex observation_mutex;
   std::optional<CommitObservationRequest> observation;
   NamedPipeServer server;
@@ -15959,8 +15956,7 @@ TEST(TsfTipCandidateExposureTest, WindowQueryResponseCarriesExposureThroughTheCo
       QueryCandidatesResponse candidates;
       if (const auto query = ParseQueryCandidatesRequest(request.payload_json);
           query && !query->live && query->reading == "か") {
-        candidates.candidates = {{"蚊", "か", 1.0, "dictionary"},
-                                 {"課", "か", 0.8, "dictionary"}};
+        candidates.candidates = {{"蚊", "か", 1.0, "dictionary"}, {"課", "か", 0.8, "dictionary"}};
         candidates.exposure_id = "wire-exposure";
       }
       response.payload_json = BuildQueryCandidatesResponse(candidates);
@@ -16041,7 +16037,8 @@ TEST(TsfTipCandidateExposureTest, ReconversionNamesOnlyTheExactCommittedRange) {
     range.Attach(new DocumentRange(h.context.document, start, start + 1, &h.context));
     h.service.set_reconversion_cache_for_test(&h.context, L"蚊", {L"蚊", L"課"}, "か");
     Microsoft::WRL::ComPtr<IUnknown> function;
-    ASSERT_EQ(h.service.GetFunction(GUID_NULL, IID_ITfFnReconversion, function.GetAddressOf()), S_OK);
+    ASSERT_EQ(h.service.GetFunction(GUID_NULL, IID_ITfFnReconversion, function.GetAddressOf()),
+              S_OK);
     Microsoft::WRL::ComPtr<ITfFnReconversion> reconversion;
     ASSERT_EQ(function.As(&reconversion), S_OK);
     ASSERT_EQ(reconversion->Reconvert(range.Get()), S_OK);

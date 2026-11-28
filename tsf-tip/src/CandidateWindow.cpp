@@ -789,8 +789,8 @@ void CandidateWindow::PresentAt(POINT pt, RECT work_area, int width, int height,
     if (appearing) StartAppearance();
     // Marked before it shows, so an observer never sees it visible without a mode.
     UpdateModeProperty(true);
-    if (SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width, placed_height,
-                     SWP_SHOWWINDOW | SWP_NOACTIVATE)) {
+    if (SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width,
+                     placed_height, SWP_SHOWWINDOW | SWP_NOACTIVATE)) {
       RecordNativeCandidateExposure();
     } else {
       InvalidateNativeCandidateExposure();

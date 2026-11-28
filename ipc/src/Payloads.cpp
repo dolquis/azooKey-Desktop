@@ -125,8 +125,7 @@ std::optional<std::vector<uint32_t>> ParseShownCandidateIndices(
   std::unordered_set<uint32_t> seen;
   for (const auto& item : *array) {
     const auto index = ParseUnsignedToken<uint32_t>(item);
-    if (!index || (candidate_count && *index >= *candidate_count) ||
-        !seen.insert(*index).second) {
+    if (!index || (candidate_count && *index >= *candidate_count) || !seen.insert(*index).second) {
       return std::nullopt;
     }
     indices.push_back(*index);

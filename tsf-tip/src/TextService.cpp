@@ -6843,9 +6843,10 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       selected_candidate_idx_ < static_cast<int>(shown_candidates_.size())) {
     chosen = shown_candidates_[selected_candidate_idx_];
   }
-  auto exposure = multi_segment || secure || !privacy.learning_allowed || selected_candidate_idx_ < 0
-                      ? std::nullopt
-                      : CaptureCommitExposure(static_cast<size_t>(selected_candidate_idx_));
+  auto exposure =
+      multi_segment || secure || !privacy.learning_allowed || selected_candidate_idx_ < 0
+          ? std::nullopt
+          : CaptureCommitExposure(static_cast<size_t>(selected_candidate_idx_));
   shown_candidates_.clear();
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
@@ -8742,8 +8743,8 @@ void TextService::ServeConnection() {
         continue;
       }
       response_candidates = std::move(qpayload->candidates);
-      if (qpayload->exposure_id && !secure && learning_allowed &&
-          remaining_reading.empty() && emoji_trigger.empty() &&
+      if (qpayload->exposure_id && !secure && learning_allowed && remaining_reading.empty() &&
+          emoji_trigger.empty() &&
           exposure_generation == exposure_generation_.load(std::memory_order_relaxed)) {
         try {
           exposure_origin = std::make_shared<CandidateExposureOrigin>(
@@ -8931,8 +8932,7 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
   // edit may end before or after its target is recorded, so the mark is set
   // inside that edit session.
   const bool commit_edit = std::exchange(commit_end_edit_pending_, false);
-  if (!commit_edit && (!selection_status_read || changed))
-    commit_undo_target_.reset();
+  if (!commit_edit && (!selection_status_read || changed)) commit_undo_target_.reset();
   if (!(commit_edit && after_tip_session) && reconversion_exposure_target_) {
     // A selection-only edit can select the exact committed range for reconversion.
     // A text edit (or an uninspectable edit) can replace it with unrelated text.
@@ -10257,8 +10257,8 @@ void TextService::UnregisterProofreadPreservedKey() {
 }
 
 HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAction& action,
-                                        bool& preedit_update_needed, bool& commit_pending,
-                                        std::optional<CommitExposure>* exposure) {
+                                       bool& preedit_update_needed, bool& commit_pending,
+                                       std::optional<CommitExposure>* exposure) {
   if (const auto* replace = std::get_if<core::ReplaceMarkedText>(&action)) {
     core_marked_surface_ = replace->text;
     preedit_update_needed = true;
@@ -12483,7 +12483,7 @@ void TextService::FinishReconversionSelection(
         target = correction->target_observation_id;
       // This runs inside the replacement session: privacy is read with its cookie.
       PostCommitCorrection(correction_context, ipc::kCorrectionKindReconvert, correction->reading,
-                            correction->rejected, correction->selected, cookie, std::move(target));
+                           correction->rejected, correction->selected, cookie, std::move(target));
     } catch (...) {
     }
   }
@@ -12709,13 +12709,13 @@ bool TextService::candidate_window_show_pending_for_test() {
 }
 
 void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates,
-                                                std::optional<std::string> exposure_id) {
+                                                 std::optional<std::string> exposure_id) {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
   auto origin = exposure_id ? std::make_shared<CandidateExposureOrigin>(CandidateExposureOrigin{
                                   std::move(*exposure_id), exposure_generation_.load()})
                             : nullptr;
-  candidates_ = BuildTipCandidates({}, std::move(candidates), false, false, false, {},
-                                   std::move(origin));
+  candidates_ =
+      BuildTipCandidates({}, std::move(candidates), false, false, false, {}, std::move(origin));
 }
 
 void TextService::set_rewritten_cached_candidates_for_test(
@@ -12725,11 +12725,11 @@ void TextService::set_rewritten_cached_candidates_for_test(
   auto origin = exposure_id ? std::make_shared<CandidateExposureOrigin>(CandidateExposureOrigin{
                                   std::move(*exposure_id), exposure_generation_.load()})
                             : nullptr;
-  candidates_ = BuildTipCandidates(
-      reading, std::move(candidates), number_rewriter_.load(std::memory_order_relaxed),
-      katakana_rewriter_.load(std::memory_order_relaxed),
-      symbol_rewriter_.load(std::memory_order_relaxed), DynamicCandidates(reading),
-      std::move(origin));
+  candidates_ = BuildTipCandidates(reading, std::move(candidates),
+                                   number_rewriter_.load(std::memory_order_relaxed),
+                                   katakana_rewriter_.load(std::memory_order_relaxed),
+                                   symbol_rewriter_.load(std::memory_order_relaxed),
+                                   DynamicCandidates(reading), std::move(origin));
 }
 
 std::vector<ipc::CandidateField> TextService::cached_candidates_for_test() {
@@ -13957,9 +13957,10 @@ HRESULT FindCommitBeforeCaret(ITfContext* context, TfEditCookie ec, ITfRange* ex
 }  // namespace
 
 std::optional<std::string> TextService::FindReconversionExposureId(ITfContext* context,
-                                                                 ITfRange* range,
-                                                                 std::string_view surface) {
-  if (!range || !reconversion_exposure_target_ || surface != reconversion_exposure_target_->surface ||
+                                                                   ITfRange* range,
+                                                                   std::string_view surface) {
+  if (!range || !reconversion_exposure_target_ ||
+      surface != reconversion_exposure_target_->surface ||
       !SameComIdentity(context, text_edit_context_))
     return std::nullopt;
   const Microsoft::WRL::ComPtr<ITfRange> selection(range);
@@ -13970,13 +13971,12 @@ std::optional<std::string> TextService::FindReconversionExposureId(ITfContext* c
       [&](TfEditCookie cookie) {
         BOOL start_matches = FALSE;
         BOOL end_matches = FALSE;
-        const bool matches =
-            SUCCEEDED(selection->IsEqualStart(cookie, original_range.Get(), TF_ANCHOR_START,
-                                              &start_matches)) &&
-            start_matches &&
-            SUCCEEDED(selection->IsEqualEnd(cookie, original_range.Get(), TF_ANCHOR_END,
-                                            &end_matches)) &&
-            end_matches;
+        const bool matches = SUCCEEDED(selection->IsEqualStart(cookie, original_range.Get(),
+                                                               TF_ANCHOR_START, &start_matches)) &&
+                             start_matches &&
+                             SUCCEEDED(selection->IsEqualEnd(cookie, original_range.Get(),
+                                                             TF_ANCHOR_END, &end_matches)) &&
+                             end_matches;
         return matches ? S_OK : S_FALSE;
       },
       ran);
@@ -14219,8 +14219,8 @@ void TextService::SendPendingUndoCorrection(ITfContext* context, bool committed_
   if (same_reading == last_learned_commit_pairs_.end() || same_reading->second == pending->surface)
     return;
   PostCommitCorrection(context, ipc::kCorrectionKindUndo, std::move(pending->reading),
-                        std::move(pending->surface), std::nullopt, edit_cookie,
-                        std::move(pending->exposure_observation_id));
+                       std::move(pending->surface), std::nullopt, edit_cookie,
+                       std::move(pending->exposure_observation_id));
 }
 
 }  // namespace azookey::tsf

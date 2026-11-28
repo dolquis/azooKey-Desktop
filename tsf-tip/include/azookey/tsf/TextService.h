@@ -526,9 +526,9 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates,
                                       std::optional<std::string> exposure_id = std::nullopt);
-  void set_rewritten_cached_candidates_for_test(const std::string& reading,
-                                                std::vector<ipc::CandidateField> candidates,
-                                                std::optional<std::string> exposure_id = std::nullopt);
+  void set_rewritten_cached_candidates_for_test(
+      const std::string& reading, std::vector<ipc::CandidateField> candidates,
+      std::optional<std::string> exposure_id = std::nullopt);
   std::vector<ipc::CandidateField> cached_candidates_for_test();
   std::vector<ipc::CandidateField> shown_candidates_for_test() const;
   const core::InputState& input_state_for_test() const { return input_state_; }

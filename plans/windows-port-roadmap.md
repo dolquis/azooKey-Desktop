@@ -2708,7 +2708,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   欠けると acceptance を満たせない。
   学習データ収集（§6）は M54 / M55 の出力を使い、効果は M52 ベンチで固定した baseline と比べる。
 - **変更対象**: `reranker/`（新規ディレクトリ）、
-  `reranker/TinyReranker.h`、`reranker/TinyRerankerOnnx.cpp`、
+  `reranker/include/azookey/reranker/TinyReranker.h`、`reranker/src/TinyRerankerOnnx.cpp`、
   `models/tiny_reranker.onnx`（新規アセット）、
   ONNX Runtime の取り込み（`CMakeLists.txt` の取得と pin、MSI への `onnxruntime.dll` の同梱、
   `THIRD_PARTY_LICENSES`。方式は `docs/neural-reranker-spec.md` §7.3）、
@@ -2733,8 +2733,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   M24（R2 の GPU / NPU の EP）。CPU EP が `docs/modernbert-ja-scoring-spec.md` §6.3 の計測ゲートに
   合格した場合は、M24 を待たずに CPU EP で成り立つ。根拠は
   [`docs/decisions/2026-11-20-onnx-runtime-for-reranker.md`](../docs/decisions/2026-11-20-onnx-runtime-for-reranker.md)。
-- **変更対象**: `reranker/ModernBertScorer.h`、
-  `reranker/ModernBertScorerOnnx.cpp`、
+- **変更対象**: `reranker/include/azookey/reranker/ModernBertScorer.h`、
+  `reranker/src/ModernBertScorerOnnx.cpp`、
   `models/modernbert-ja-70m/`（新規アセット。repo と MSI には置かず、既定パスへダウンロードする。spec §6）、
   `inference-host/src/Dispatcher.cpp`（ambiguity 判定で起動制御）、
   `docs/modernbert-ja-scoring-spec.md`。

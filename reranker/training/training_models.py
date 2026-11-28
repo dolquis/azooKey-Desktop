@@ -27,8 +27,9 @@ from training_data import FEATURES, feature_vector, read_jsonl
 MODEL_NAMES = {"v0": "tiny_reranker_v0.onnx", "v1": "tiny_reranker.onnx"}
 INPUT = "features_v1"
 OUTPUT = "rerank_score"
+LIGHTGBM_TARGET_OPSET = 15
 MODEL_OPSETS = {
-    "v0": {"ai.onnx": 15, "ai.onnx.ml": 1},
+    "v0": {"ai.onnx": 9, "ai.onnx.ml": 1},
     "v1": {"ai.onnx": 20},
 }
 IR_VERSION = 9
@@ -42,10 +43,10 @@ torch.set_num_interop_threads(1)
 torch.use_deterministic_algorithms(True)
 
 
-def _meta(model_version: str, dataset_hash: str) -> dict[str, str]:
+def _meta(model_version: str, dataset_hash: str, opsets: dict[str, int]) -> dict[str, str]:
     metadata = {"model_version": model_version, "feature_schema": INPUT, "dataset_sha256": dataset_hash}
     if model_version == "v0":
-        metadata["opsets"] = json.dumps(MODEL_OPSETS[model_version], sort_keys=True)
+        metadata["opsets"] = json.dumps(opsets, sort_keys=True)
     return metadata
 
 
@@ -55,7 +56,7 @@ def _opsets(model: onnx.ModelProto) -> dict[str, int]:
 
 def _graph(
     variant: str, dataset_hash: str, mean: Array, scale: Array, nodes: list[onnx.NodeProto],
-    initializers: list[onnx.TensorProto],
+    initializers: list[onnx.TensorProto], *, opsets: dict[str, int],
 ) -> onnx.ModelProto:
     preprocessing = [
         helper.make_node("Sub", [INPUT, "feature_mean"], ["centered"]),
@@ -70,11 +71,11 @@ def _graph(
     )
     imports = [
         helper.make_opsetid("" if domain == "ai.onnx" else domain, version)
-        for domain, version in MODEL_OPSETS[variant].items()
+        for domain, version in opsets.items()
     ]
     model = helper.make_model(graph, producer_name="azooKey M56", opset_imports=imports,
                               ir_version=IR_VERSION)
-    helper.set_model_props(model, _meta(variant, dataset_hash))
+    helper.set_model_props(model, _meta(variant, dataset_hash, _opsets(model)))
     return model
 
 
@@ -88,22 +89,24 @@ def _v0(
     estimator.fit(x, y.astype(np.int32), sample_weight=weights)
     converted = onnxmltools.convert_lightgbm(
         estimator, name="tiny_lightgbm", initial_types=[("normalized", FloatTensorType([None, WIDTH]))],
-        target_opset=MODEL_OPSETS["v0"]["ai.onnx"], zipmap=False,
+        target_opset=LIGHTGBM_TARGET_OPSET, zipmap=False,
     )
     if [value.name for value in converted.graph.input] != ["normalized"] or len(converted.graph.output) != 2:
         raise TrainingError("unexpected LightGBM converter interface")
-    if any(node.op_type not in {"Identity", "Mul", "TreeEnsembleClassifier"}
+    if any(node.op_type not in {"Cast", "Identity", "Mul", "TreeEnsembleClassifier"}
            for node in converted.graph.node):
         raise TrainingError("unexpected LightGBM converter operator")
     if converted.functions or converted.graph.sparse_initializer:
         raise TrainingError("unexpected LightGBM converter graph")
-    if _opsets(converted).get("ai.onnx.ml") != MODEL_OPSETS["v0"]["ai.onnx.ml"]:
-        raise TrainingError("unexpected LightGBM converter ML opset")
+    opsets = _opsets(converted)
+    if opsets != MODEL_OPSETS["v0"]:
+        raise TrainingError(f"unexpected LightGBM converter opsets: {opsets}")
     probabilities = converted.graph.output[1].name
     model = _graph(
         "v0", dataset_hash, mean, scale,
         [*converted.graph.node, helper.make_node("Gather", [probabilities, "positive_class"], [OUTPUT], axis=1)],
         [*converted.graph.initializer, numpy_helper.from_array(np.array([1], dtype=np.int64), "positive_class")],
+        opsets=opsets,
     )
     expected = np.asarray(estimator.predict_proba(probe)[:, 1:2], dtype=np.float32)
     return model, expected
@@ -142,14 +145,16 @@ def _v1(
             nodes.append(helper.make_node("Gelu", [previous], [output], approximate="none"))
         previous = output
     nodes.append(helper.make_node("Sigmoid", [previous], [OUTPUT]))
-    return _graph("v1", dataset_hash, mean, scale, nodes, tensors), cast(Array, expected)
+    model = _graph("v1", dataset_hash, mean, scale, nodes, tensors, opsets=MODEL_OPSETS["v1"])
+    return model, cast(Array, expected)
 
 
 def _session(path: Path, variant: str, dataset_hash: str) -> ort.InferenceSession:
     if ort.__version__ != ORT_VERSION:
         raise TrainingError(f"verification requires ONNX Runtime {ORT_VERSION}")
     model = onnx.load(path, load_external_data=False)
-    if model.ir_version != IR_VERSION or _opsets(model) != MODEL_OPSETS[variant]:
+    opsets = _opsets(model)
+    if model.ir_version != IR_VERSION or opsets != MODEL_OPSETS[variant]:
         raise TrainingError(f"unexpected {variant} ONNX IR or opsets")
     if any(tensor.data_location == TensorProto.EXTERNAL for tensor in model.graph.initializer):
         raise TrainingError("external ONNX weights are unsupported")
@@ -162,7 +167,7 @@ def _session(path: Path, variant: str, dataset_hash: str) -> ort.InferenceSessio
     outputs = [(item.name, item.type, item.shape) for item in session.get_outputs()]
     if inputs != [(INPUT, "tensor(float)", ["batch", WIDTH])] or outputs != [
         (OUTPUT, "tensor(float)", ["batch", 1])
-    ] or session.get_modelmeta().custom_metadata_map != _meta(variant, dataset_hash):
+    ] or session.get_modelmeta().custom_metadata_map != _meta(variant, dataset_hash, opsets):
         raise TrainingError("ONNX feature schema, output, or metadata mismatch")
     return session
 

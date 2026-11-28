@@ -202,12 +202,14 @@ class ModelTests(TemporaryCase):
         self.assertEqual(hashes, json.loads((output / "reproducibility.json").read_bytes())["models"])
         receipt = json.loads((output / "first" / "receipt.json").read_bytes())
         self.assertEqual(receipt["opsets"], {
-            "tiny_reranker_v0.onnx": {"ai.onnx": 15, "ai.onnx.ml": 1},
+            "tiny_reranker_v0.onnx": {"ai.onnx": 9, "ai.onnx.ml": 1},
             "tiny_reranker.onnx": {"ai.onnx": 20},
         })
         v0 = onnx.load(output / "first" / "tiny_reranker_v0.onnx")
+        opsets = {item.domain or "ai.onnx": item.version for item in v0.opset_import}
         metadata = {item.key: item.value for item in v0.metadata_props}
-        self.assertEqual(json.loads(metadata["opsets"]), receipt["opsets"]["tiny_reranker_v0.onnx"])
+        self.assertEqual(opsets, receipt["opsets"]["tiny_reranker_v0.onnx"])
+        self.assertEqual(json.loads(metadata["opsets"]), opsets)
         (output / "first" / "tiny_reranker.onnx").write_bytes(b"wrong")
         with self.assertRaisesRegex(TrainingError, "SHA256 mismatch"):
             verify(output / "first")

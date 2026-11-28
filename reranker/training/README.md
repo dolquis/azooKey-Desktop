@@ -25,8 +25,9 @@ holdout は作品単位で固定し、同じ変換機会が分割をまたぐと
 標準化は学習分割の先頭 6 特徴から推定し、ONNX 内で実行する。
 両モデルの入出力は fp32 の `features_v1` [batch, 12] と `rerank_score` [batch, 1]。
 メタ情報には `model_version`、`feature_schema`、学習入力の `dataset_sha256` を持たせる。
-比較用の v0 `tiny_reranker_v0.onnx` は、固定した onnxmltools に合わせて標準 opset 15 と
-`ai.onnx.ml` opset 1 を使う。配布候補の v1 `tiny_reranker.onnx` は標準 opset 20 を使う。
+比較用の v0 `tiny_reranker_v0.onnx` には、onnxmltools が実際に出力する標準 opset 9 と
+`ai.onnx.ml` opset 1 を引き継ぐ。変換時に指定する標準 opset 15 は上限である。
+配布候補の v1 `tiny_reranker.onnx` は標準 opset 20 を使う。
 各モデルの SHA256 と domain ごとの opset は `receipt.json` に記録し、v0 のメタ情報にも
 `opsets` を持たせる。`verify` は両モデルを ORT 1.32.0 の CPU EP で検査する。
 実コーパスで学習したモデルと receipt の採用には DEV-2228 の帰属確定を要する。

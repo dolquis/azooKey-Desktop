@@ -184,8 +184,9 @@ lattice_core の読み込みの結果は同梱辞書の読み込みと同じ `st
 - 可変層（`user_dictionary`、`auto_words`、`app_specific_dictionary`）
 - ユーザー辞書の展開形の索引（`docs/user-dictionary-pos-spec.md` §4.6）
 
-M65 の版は、可変層の語として `DictionaryStore` の可変層（ユーザー辞書の語）だけを引く。確定した auto-word の語は
-`AutoWordStore` が持ち、前方一致を持たないので、ノードにする対応は DEV-2167 が受け持つ。
+可変層は `DictionaryStore` の有効な語彙と、有効な `auto_words` の確定語を引く。確定語は `AutoWordStore` の公開済みの表から、
+正規化した読みとその alias キーで前方一致を引く。`Confirmed` だけをノードにし、忘却や却下で `Rejected` になった語は次の変換から除く。
+語コストと連接 ID はそれぞれ §5.3 と §8.3 に従う。
 
 `max_results` は 0（無制限）で呼ぶ。上限に達した `CommonPrefixSearch` は短いキーから埋めて打ち切り、打ち切りを
 知らせない（`docs/azdic-physical-layer-spec.md` §15.4）。ラティスでは長い語ほど落ちるためである。alias キー

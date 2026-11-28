@@ -319,8 +319,8 @@ class RerankerTraceStore::Impl {
     if (durable == commits_.end() && pending == pending_.end()) {
       if (snapshot_ready_) return false;
       // Resolve unknown targets after loading the durable index on the worker.
-      return QueueLocked(TraceRow{std::move(observation_id), std::move(target_id), {}, {},
-                                  std::move(accepted), ts, {}});
+      return QueueLocked(TraceRow{
+          std::move(observation_id), std::move(target_id), {}, {}, std::move(accepted), ts, {}});
     }
     const auto& reading = durable != commits_.end() ? durable->second.first : pending->row->reading;
     const auto& surface =
@@ -461,9 +461,9 @@ class RerankerTraceStore::Impl {
       }
     }
     return std::erase_if(snapshot.rows, [&](const TraceRow& row) {
-      const bool erase = HasTombstone(row.reading, row.surface, std::nullopt) ||
-                         (row.accepted_surface &&
-                          HasTombstone(row.reading, *row.accepted_surface, std::nullopt));
+      const bool erase =
+          HasTombstone(row.reading, row.surface, std::nullopt) ||
+          (row.accepted_surface && HasTombstone(row.reading, *row.accepted_surface, std::nullopt));
       if (erase && found && row.MatchesPair(requested.first, requested.second)) *found = true;
       return erase;
     });
@@ -475,8 +475,8 @@ class RerankerTraceStore::Impl {
     // can match the loaded snapshot only, as pending matches are resolved at enqueue.
     snapshot.rows.reserve(snapshot.rows.size() + batch.size());
     const auto needs_target = [](const QueuedRow& queued) { return queued.row->NeedsTarget(); };
-    const auto commits = std::ranges::any_of(batch, needs_target) ? IndexCommits(snapshot.rows)
-                                                                 : CommitIndex{};
+    const auto commits =
+        std::ranges::any_of(batch, needs_target) ? IndexCommits(snapshot.rows) : CommitIndex{};
     std::unordered_set<std::string> disk_ids;
     disk_ids.reserve(snapshot.rows.size() + batch.size());
     for (const auto& row : snapshot.rows) disk_ids.insert(row.observation_id);

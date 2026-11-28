@@ -318,9 +318,8 @@ TEST_F(RerankerTraceStoreTest, BackgroundSweepsSkipDecryptUntilOldestRecordExpir
   now_.store(kNowMs + 30 * kDayMs + 1);
   {
     std::unique_lock lock(mutex);
-    ASSERT_TRUE(wake.wait_for(lock, 5s, [&] {
-      return store.Stats().records == 0 && crypto.decryptions.load() >= 2;
-    }));
+    ASSERT_TRUE(wake.wait_for(
+        lock, 5s, [&] { return store.Stats().records == 0 && crypto.decryptions.load() >= 2; }));
   }
   EXPECT_EQ(crypto.decryptions.load(), 2);
   EXPECT_FALSE(fs::exists(path_));

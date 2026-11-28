@@ -27,7 +27,10 @@ from training_data import FEATURES, feature_vector, read_jsonl
 MODEL_NAMES = {"v0": "tiny_reranker_v0.onnx", "v1": "tiny_reranker.onnx"}
 INPUT = "features_v1"
 OUTPUT = "rerank_score"
-OPSET = 20
+MODEL_OPSETS = {
+    "v0": {"ai.onnx": 15, "ai.onnx.ml": 1},
+    "v1": {"ai.onnx": 20},
+}
 IR_VERSION = 9
 ORT_VERSION = "1.32.0"
 SEED = 2153
@@ -40,12 +43,19 @@ torch.use_deterministic_algorithms(True)
 
 
 def _meta(model_version: str, dataset_hash: str) -> dict[str, str]:
-    return {"model_version": model_version, "feature_schema": INPUT, "dataset_sha256": dataset_hash}
+    metadata = {"model_version": model_version, "feature_schema": INPUT, "dataset_sha256": dataset_hash}
+    if model_version == "v0":
+        metadata["opsets"] = json.dumps(MODEL_OPSETS[model_version], sort_keys=True)
+    return metadata
+
+
+def _opsets(model: onnx.ModelProto) -> dict[str, int]:
+    return {item.domain or "ai.onnx": item.version for item in model.opset_import}
 
 
 def _graph(
     variant: str, dataset_hash: str, mean: Array, scale: Array, nodes: list[onnx.NodeProto],
-    initializers: list[onnx.TensorProto], ml_opset: int | None = None,
+    initializers: list[onnx.TensorProto],
 ) -> onnx.ModelProto:
     preprocessing = [
         helper.make_node("Sub", [INPUT, "feature_mean"], ["centered"]),
@@ -58,9 +68,10 @@ def _graph(
         [numpy_helper.from_array(mean, "feature_mean"),
          numpy_helper.from_array(scale, "feature_scale"), *initializers],
     )
-    imports = [helper.make_opsetid("", OPSET)]
-    if ml_opset is not None:
-        imports.append(helper.make_opsetid("ai.onnx.ml", ml_opset))
+    imports = [
+        helper.make_opsetid("" if domain == "ai.onnx" else domain, version)
+        for domain, version in MODEL_OPSETS[variant].items()
+    ]
     model = helper.make_model(graph, producer_name="azooKey M56", opset_imports=imports,
                               ir_version=IR_VERSION)
     helper.set_model_props(model, _meta(variant, dataset_hash))
@@ -77,7 +88,7 @@ def _v0(
     estimator.fit(x, y.astype(np.int32), sample_weight=weights)
     converted = onnxmltools.convert_lightgbm(
         estimator, name="tiny_lightgbm", initial_types=[("normalized", FloatTensorType([None, WIDTH]))],
-        target_opset=OPSET, zipmap=False,
+        target_opset=MODEL_OPSETS["v0"]["ai.onnx"], zipmap=False,
     )
     if [value.name for value in converted.graph.input] != ["normalized"] or len(converted.graph.output) != 2:
         raise TrainingError("unexpected LightGBM converter interface")
@@ -86,13 +97,13 @@ def _v0(
         raise TrainingError("unexpected LightGBM converter operator")
     if converted.functions or converted.graph.sparse_initializer:
         raise TrainingError("unexpected LightGBM converter graph")
+    if _opsets(converted).get("ai.onnx.ml") != MODEL_OPSETS["v0"]["ai.onnx.ml"]:
+        raise TrainingError("unexpected LightGBM converter ML opset")
     probabilities = converted.graph.output[1].name
-    ml_opset = next(item.version for item in converted.opset_import if item.domain == "ai.onnx.ml")
     model = _graph(
         "v0", dataset_hash, mean, scale,
         [*converted.graph.node, helper.make_node("Gather", [probabilities, "positive_class"], [OUTPUT], axis=1)],
         [*converted.graph.initializer, numpy_helper.from_array(np.array([1], dtype=np.int64), "positive_class")],
-        ml_opset,
     )
     expected = np.asarray(estimator.predict_proba(probe)[:, 1:2], dtype=np.float32)
     return model, expected
@@ -138,8 +149,8 @@ def _session(path: Path, variant: str, dataset_hash: str) -> ort.InferenceSessio
     if ort.__version__ != ORT_VERSION:
         raise TrainingError(f"verification requires ONNX Runtime {ORT_VERSION}")
     model = onnx.load(path, load_external_data=False)
-    if model.ir_version != IR_VERSION or {item.domain: item.version for item in model.opset_import}.get("") != OPSET:
-        raise TrainingError("unexpected ONNX IR or standard opset")
+    if model.ir_version != IR_VERSION or _opsets(model) != MODEL_OPSETS[variant]:
+        raise TrainingError(f"unexpected {variant} ONNX IR or opsets")
     if any(tensor.data_location == TensorProto.EXTERNAL for tensor in model.graph.initializer):
         raise TrainingError("external ONNX weights are unsupported")
     onnx.checker.check_model(model)
@@ -205,6 +216,7 @@ def train(dataset: Path, output: Path) -> None:
     probe = (holdout - mean) / scale
 
     model_hashes = {}
+    model_opsets = {}
     for variant, fit in (("v0", _v0), ("v1", _v1)):
         model, expected = fit(normalized, labels, weights, probe, mean, scale, dataset_hash)
         path = output / MODEL_NAMES[variant]
@@ -216,11 +228,12 @@ def train(dataset: Path, output: Path) -> None:
         if not np.allclose(actual, expected, rtol=2e-5, atol=2e-5):
             raise TrainingError(f"{variant} ONNX predictions differ from the trained model")
         model_hashes[path.name] = sha256_file(path)
+        model_opsets[path.name] = _opsets(model)
     receipt = {
         "schema": 1, "dataset_sha256": dataset_hash,
         "synthesis_sha256": sha256_file(dataset / "synthesis.json"),
         "lock_sha256": sha256_file(Path(__file__).with_name("tiny_reranker.py.lock")),
-        "models": model_hashes, "opset": OPSET, "ir": IR_VERSION, "seed": SEED,
+        "models": model_hashes, "opsets": model_opsets, "ir": IR_VERSION, "seed": SEED,
         "train_rows": len(raw), "holdout_rows": len(holdout),
         "normalization": {"mean": mean.tolist(), "scale": scale.tolist()},
         "python": platform.python_version(), "platform": platform.platform(),
@@ -236,6 +249,8 @@ def verify(directory: Path) -> dict[str, str]:
     expected_files = set(MODEL_NAMES.values())
     if receipt.get("schema") != 1 or set(receipt.get("models", ())) != expected_files:
         raise TrainingError("invalid model receipt")
+    if receipt.get("opsets") != {name: MODEL_OPSETS[variant] for variant, name in MODEL_NAMES.items()}:
+        raise TrainingError("model receipt opsets mismatch")
     hashes: dict[str, str] = {}
     for variant, name in MODEL_NAMES.items():
         path = directory / name

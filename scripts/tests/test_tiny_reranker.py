@@ -186,6 +186,8 @@ class ModelTests(TemporaryCase):
         missing = [package for package in packages if importlib.util.find_spec(package) is None]
         if missing:
             self.skipTest("missing locked training dependencies: " + ", ".join(missing))
+        import onnx
+
         from training_models import verify
 
         fixture, dataset, output = (self.root / name for name in ("fixture", "dataset", "models"))
@@ -198,6 +200,14 @@ class ModelTests(TemporaryCase):
         self.assertEqual(set(hashes), {"tiny_reranker_v0.onnx", "tiny_reranker.onnx"})
         self.assertEqual(hashes, verify(output / "second"))
         self.assertEqual(hashes, json.loads((output / "reproducibility.json").read_bytes())["models"])
+        receipt = json.loads((output / "first" / "receipt.json").read_bytes())
+        self.assertEqual(receipt["opsets"], {
+            "tiny_reranker_v0.onnx": {"ai.onnx": 15, "ai.onnx.ml": 1},
+            "tiny_reranker.onnx": {"ai.onnx": 20},
+        })
+        v0 = onnx.load(output / "first" / "tiny_reranker_v0.onnx")
+        metadata = {item.key: item.value for item in v0.metadata_props}
+        self.assertEqual(json.loads(metadata["opsets"]), receipt["opsets"]["tiny_reranker_v0.onnx"])
         (output / "first" / "tiny_reranker.onnx").write_bytes(b"wrong")
         with self.assertRaisesRegex(TrainingError, "SHA256 mismatch"):
             verify(output / "first")

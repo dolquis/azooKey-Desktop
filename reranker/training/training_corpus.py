@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 import hashlib
+from http.client import HTTPMessage
 import json
 from pathlib import Path, PurePosixPath
 import re
 import shutil
 import tempfile
-from typing import BinaryIO, Protocol, cast
+from typing import IO, BinaryIO, Protocol, cast
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -85,12 +86,12 @@ def load_manifest(path: Path) -> tuple[list[Asset], Asset]:
 
 class _HttpsOnly(urllib.request.HTTPRedirectHandler):
     def redirect_request(
-        self, req: urllib.request.Request, fp: BinaryIO, code: int, msg: str,
-        headers: object, newurl: str,
+        self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str,
+        headers: HTTPMessage, newurl: str,
     ) -> urllib.request.Request | None:
         if urllib.parse.urlsplit(newurl).scheme != "https":
             raise TrainingError("source download redirected outside HTTPS")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)  # type: ignore[arg-type]
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _open_url(url: str) -> BinaryIO:

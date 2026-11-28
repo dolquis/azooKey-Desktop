@@ -162,11 +162,11 @@ def synthesize(
     queries: Iterable[dict[str, object]], batches: Iterable[dict[str, object]], exclusions: Exclusions,
 ) -> tuple[list[Label], dict[str, int]]:
     indexed: dict[str, dict[str, object]] = {}
-    for batch in batches:
-        query_id = field(batch, "id")
+    for candidate_batch in batches:
+        query_id = field(candidate_batch, "id")
         if query_id in indexed:
             raise TrainingError("duplicate candidate batch id")
-        indexed[query_id] = batch
+        indexed[query_id] = candidate_batch
     denied = set(exclusions["keys"])
     counts = Counter({"queries": 0, "chosen_not_shown": 0, "tied_labels": 0, "no_negatives": 0})
     groups: dict[tuple[str, str, str], list[Example]] = defaultdict(list)
